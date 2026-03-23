@@ -23,6 +23,46 @@ from backend.swarm.template_loader import LoadedTemplate
 logger = logging.getLogger(__name__)
 
 
+def _approve_all(*_args: Any, **_kwargs: Any) -> Any:
+    """Auto-approve every permission request."""
+    # Returns an object with kind="approved" for the real SDK,
+    # or True for mocks — both are accepted.
+    try:
+        from copilot.session import PermissionRequestResult
+        return PermissionRequestResult(kind="approved")
+    except ImportError:
+        return True
+
+
+async def _create_sdk_session(client: Any, system_prompt: str) -> Any:
+    """Create a session using the real SDK API or mock-compatible API.
+
+    The real SDK uses system_message={"mode": "replace", "content": ...}
+    and requires on_permission_request. Leader/synthesis sessions get
+    available_tools=[] to prevent the agent from using coding tools
+    (it should only return text/JSON).
+    """
+    try:
+        return await client.create_session(
+            on_permission_request=_approve_all,
+            system_message={
+                "mode": "customize",
+                "sections": {
+                    "identity": {"action": "replace", "content": system_prompt},
+                    "custom_instructions": {"action": "replace", "content": "You MUST respond ONLY with valid JSON. No prose, no markdown, no explanation."},
+                },
+                "content": "",
+            },
+            excluded_tools=["bash", "edit", "write", "create", "view", "grep", "glob"],
+        )
+    except TypeError:
+        # Fallback for mocks that don't accept SDK kwargs
+        try:
+            return await client.create_session(system_prompt=system_prompt)
+        except TypeError:
+            return await client.create_session()
+
+
 class SwarmOrchestrator:
     """Orchestrates the full swarm lifecycle: plan -> spawn -> execute -> synthesize."""
 
@@ -78,17 +118,44 @@ class SwarmOrchestrator:
         Retries once on malformed JSON. Raises ValueError after two failures.
         """
         leader_prompt = self.template.leader_prompt if self.template else LEADER_SYSTEM_PROMPT
-        session = await self.client.create_session(system_prompt=leader_prompt)
+        session = await _create_sdk_session(self.client, leader_prompt)
         max_attempts = 2
 
         plan: dict[str, Any] | None = None
         for attempt in range(max_attempts):
-            event = await session.send_and_wait(goal)
-            raw = event.content
+            event = await session.send_and_wait(goal, timeout=120)
+            # Real SDK: event.data.content; Mocks: event.content
+            data = getattr(event, "data", None)
+            raw = getattr(data, "content", None) or getattr(event, "content", "") or ""
+            logger.info("Leader response (attempt %d, %d chars): %s", attempt + 1, len(raw), raw[:500])
+
+            # Strip markdown fences if present
+            cleaned = raw.strip()
+            if "```" in cleaned:
+                import re
+                match = re.search(r"```(?:json)?\s*\n?(.*?)```", cleaned, re.DOTALL)
+                if match:
+                    cleaned = match.group(1).strip()
+            # Extract JSON object if embedded in text
+            if cleaned and not cleaned.startswith("{"):
+                start = cleaned.find("{")
+                if start >= 0:
+                    cleaned = cleaned[start:]
+                    depth = 0
+                    for i, c in enumerate(cleaned):
+                        if c == "{":
+                            depth += 1
+                        elif c == "}":
+                            depth -= 1
+                            if depth == 0:
+                                cleaned = cleaned[: i + 1]
+                                break
+
             try:
-                plan = json.loads(raw)
+                plan = json.loads(cleaned)
                 break
             except (json.JSONDecodeError, TypeError):
+                logger.warning("JSON parse failed for cleaned (%d chars): %s", len(cleaned), cleaned[:200])
                 if attempt == max_attempts - 1:
                     raise ValueError(
                         f"Leader returned invalid JSON after {max_attempts} attempts"
@@ -239,8 +306,10 @@ class SwarmOrchestrator:
             goal=goal,
         )
 
-        session = await self.client.create_session(system_prompt="You are a synthesis agent.")
-        event = await session.send_and_wait(synthesis_prompt)
+        synthesis_system = self.template.leader_prompt if self.template else "You are a synthesis agent."
+        session = await _create_sdk_session(self.client, synthesis_system)
+        event = await session.send_and_wait(synthesis_prompt, timeout=120)
 
         await self.event_bus.emit("swarm.synthesis_complete", {})
-        return event.content
+        data = getattr(event, "data", None)
+        return getattr(data, "content", None) or getattr(event, "content", "") or ""

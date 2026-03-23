@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { SwarmEvent } from '../types/swarm';
 
-const WS_BASE = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000';
+const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${typeof window !== 'undefined' ? window.location.host : 'localhost:5173'}`;
 const MAX_RECONNECT_DELAY = 30_000;
 const INITIAL_RECONNECT_DELAY = 1_000;
 

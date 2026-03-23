@@ -121,8 +121,19 @@ class MockCopilotClient:
             fail = agent_name in self._worker_fail_names
             return MockWorkerSession(fail=fail)
 
-        # Synthesis session
+        # Extract system prompt from any kwarg format (mock, replace, customize)
         system_prompt = kwargs.get("system_prompt", "")
+        system_message = kwargs.get("system_message")
+        if isinstance(system_message, dict):
+            # mode: "replace" puts content at top level
+            system_prompt = system_message.get("content", system_prompt)
+            # mode: "customize" puts content in sections.identity.content
+            sections = system_message.get("sections", {})
+            identity = sections.get("identity", {})
+            if isinstance(identity, dict) and "content" in identity:
+                system_prompt = identity["content"]
+
+        # Synthesis session
         if "synthesis" in system_prompt.lower():
             return MockLeaderSession([self._synthesis_response])
 
