@@ -47,6 +47,7 @@ class Tool:
     handler: Callable[[ToolInvocation], Awaitable[ToolResult]]
     parameters: dict[str, Any] | None = None
     skip_permission: bool = False
+    overrides_built_in_tool: bool = False
 
 
 # ---------------------------------------------------------------------------
