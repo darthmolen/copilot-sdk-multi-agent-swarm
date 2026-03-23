@@ -15,7 +15,7 @@ from backend.main import app
 from backend.swarm.orchestrator import SwarmOrchestrator
 
 # Re-use mock infrastructure from test_orchestrator
-from tests.test_orchestrator import (
+from tests.unit.test_orchestrator import (
     VALID_PLAN,
     VALID_PLAN_JSON,
     MockCopilotClient,
