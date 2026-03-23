@@ -89,12 +89,13 @@ def bridge_sdk_event(agent_name: str, event: SessionEvent) -> dict[str, Any] | N
         }
 
     if t is SessionEventType.ASSISTANT_MESSAGE:
-        if d.tool_requests:
-            return {
-                "type": "agent.message_finalize",
-                "data": {"agent_name": agent_name, "message_id": d.message_id},
-            }
-        return {"type": "agent.message", "data": {"agent_name": agent_name, "content": d.content}}
+        has_tool_requests = bool(d.tool_requests)
+        has_content = bool(d.content and d.content.strip())
+        if has_content and not has_tool_requests:
+            return {"type": "agent.message", "data": {"agent_name": agent_name, "content": d.content}}
+        if has_tool_requests:
+            return {"type": "agent.message_finalize", "data": {"agent_name": agent_name, "message_id": d.message_id}}
+        return None  # No content and no tool_requests — suppress
 
     if t is SessionEventType.TOOL_EXECUTION_START:
         return {
@@ -124,7 +125,9 @@ def bridge_sdk_event(agent_name: str, event: SessionEvent) -> dict[str, Any] | N
         return {"type": "agent.error", "data": {"name": agent_name, "error": d.error}}
 
     if t is SessionEventType.ASSISTANT_USAGE:
-        return {"type": "agent.usage", "data": {"agent_name": agent_name, "tokens": d}}
+        return {"type": "agent.usage", "data": {"agent_name": agent_name, "usage": {
+            k: v for k, v in vars(d).items() if v is not None
+        }}}
 
     if t is SessionEventType.SESSION_ERROR:
         return {"type": "agent.error", "data": {"name": agent_name, "error": d.error}}

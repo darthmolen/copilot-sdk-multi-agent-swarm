@@ -6,6 +6,7 @@ and a factory that creates closure-bound tools for task and inbox operations.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -71,7 +72,7 @@ def create_swarm_tools(
         task = await task_board.update_status(task_id, status, result)
 
         if event_callback is not None:
-            event_callback(
+            cb_result = event_callback(
                 {
                     "event": "task_update",
                     "agent": agent_name,
@@ -80,6 +81,8 @@ def create_swarm_tools(
                     "result": result,
                 }
             )
+            if asyncio.iscoroutine(cb_result):
+                await cb_result
 
         return ToolResult(
             text_result_for_llm=json.dumps({"ok": True, "task_id": task_id}),

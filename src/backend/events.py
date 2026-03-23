@@ -59,5 +59,5 @@ class EventBus:
         Uses the running event loop to schedule an ``emit`` coroutine so that
         subscribers are called on the next iteration of the loop.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.call_soon_threadsafe(asyncio.ensure_future, self.emit(event_type, data))
