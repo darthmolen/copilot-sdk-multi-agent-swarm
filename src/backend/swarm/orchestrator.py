@@ -285,7 +285,8 @@ class SwarmOrchestrator:
             session = await self.client.create_session()
 
         try:
-            response = await session.send_and_wait(synthesis_prompt, timeout=120)
+            synthesis_timeout = self.config.get("timeout", 300)
+            response = await session.send_and_wait(synthesis_prompt, timeout=synthesis_timeout)
             data = getattr(response, "data", None)
             report = getattr(data, "content", None) or getattr(response, "content", "") or ""
         except (TimeoutError, asyncio.TimeoutError):
