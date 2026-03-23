@@ -8,7 +8,7 @@ from typing import Any, Callable
 from backend.events import EventBus
 from backend.swarm.event_bridge import SessionEvent, SessionEventType
 from backend.swarm.inbox_system import InboxSystem
-from backend.swarm.models import Task
+from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.tools import create_swarm_tools
@@ -93,19 +93,36 @@ class SwarmAgent:
 
         done: asyncio.Event = asyncio.Event()
         error_holder: list[str] = []
+        text_content: list[str] = []  # Capture assistant text as fallback result
 
         def _handler(event: Any) -> None:
-            event_type = str(getattr(event, "type", "")).lower()
-            if "turn_end" in event_type:
+            raw = getattr(event, "type", "")
+            # Use .value (dot notation like "assistant.turn_end") if available,
+            # otherwise fall back to str() (like "SessionEventType.ASSISTANT_TURN_END")
+            et = getattr(raw, "value", str(raw)).lower()
+
+            if "turn_end" in et:
                 done.set()
-            elif "idle" in event_type:
+            elif "idle" in et:
                 done.set()
-            elif "session" in event_type and "error" in event_type:
+            elif "session" in et and "error" in et:
                 data = getattr(event, "data", None)
                 error_holder.append(
                     getattr(data, "error", None) or getattr(data, "message", "unknown error")
                 )
                 done.set()
+            # Capture ALL assistant text (even mid-thought with tool_requests)
+            if "assistant.message" in et and "delta" not in et:
+                data = getattr(event, "data", None)
+                content = getattr(data, "content", None)
+                if content and str(content).strip():
+                    text_content.append(str(content))
+            # Also capture reasoning as context
+            elif "assistant.reasoning" in et and "delta" not in et:
+                data = getattr(event, "data", None)
+                content = getattr(data, "content", None)
+                if content and str(content).strip():
+                    text_content.append(str(content))
 
         unsubscribe: Callable[[], None] = self.session.on(_handler)
 
@@ -122,6 +139,12 @@ class SwarmAgent:
                 await self.task_board.update_status(task.id, "failed")
                 return
 
-            await self.task_board.update_status(task.id, "completed")
+            # Check if agent already completed via task_update tool
+            current_tasks = await self.task_board.get_tasks()
+            current = next((t for t in current_tasks if t.id == task.id), None)
+            if current and current.status == TaskStatus.IN_PROGRESS:
+                # Agent didn't call task_update — use captured text as result
+                result = "\n".join(text_content) if text_content else ""
+                await self.task_board.update_status(task.id, "completed", result)
         finally:
             unsubscribe()

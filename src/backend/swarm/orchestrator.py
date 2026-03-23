@@ -115,7 +115,8 @@ class SwarmOrchestrator:
         done = asyncio.Event()
 
         def _on_event(event: Any) -> None:
-            event_type = str(getattr(event, "type", "")).lower()
+            raw = getattr(event, "type", "")
+            event_type = getattr(raw, "value", str(raw)).lower()
             if "turn_end" in event_type:
                 done.set()
             elif "session" in event_type and "error" in event_type:
@@ -258,7 +259,7 @@ class SwarmOrchestrator:
     # ------------------------------------------------------------------
 
     async def _synthesize(self, goal: str) -> str:
-        """Leader calls submit_report tool to submit the final report."""
+        """Synthesize final report from task results using send_and_wait."""
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
             f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}"
@@ -271,54 +272,27 @@ class SwarmOrchestrator:
             goal=goal,
         )
 
-        report_holder: list[str] = []
-        report_tool = create_report_tool(report_holder)
-
         synthesis_system = (
             self.template.leader_prompt if self.template
-            else "You are a synthesis agent. After analyzing the task results, you MUST call the submit_report tool with your complete report."
-        )
-        session = await _create_session_with_tools(
-            self.client, synthesis_system, [report_tool],
+            else "You are a synthesis agent. Provide a comprehensive report."
         )
 
-        done = asyncio.Event()
-        text_content: list[str] = []  # Fallback: capture text response
-
-        def _on_event(event: Any) -> None:
-            event_type = str(getattr(event, "type", "")).lower()
-            if "turn_end" in event_type:
-                done.set()
-            elif "session" in event_type and "error" in event_type:
-                done.set()
-            elif "idle" in event_type:
-                done.set()
-            # Capture assistant text as fallback
-            elif "assistant.message" in event_type and "delta" not in event_type:
-                data = getattr(event, "data", None)
-                content = getattr(data, "content", None)
-                if content and content.strip():
-                    text_content.append(content)
-
-        unsubscribe = session.on(_on_event)
-        timeout = self.config.get("timeout", 300)
+        # Use send_and_wait for synthesis — simpler than tool-based approach.
+        # The report IS the text response; no need for a submit_report tool.
+        try:
+            session = await _create_session_with_tools(self.client, synthesis_system, [])
+        except TypeError:
+            session = await self.client.create_session()
 
         try:
-            await session.send(synthesis_prompt)
-            await asyncio.wait_for(done.wait(), timeout=timeout)
+            response = await session.send_and_wait(synthesis_prompt, timeout=120)
+            data = getattr(response, "data", None)
+            report = getattr(data, "content", None) or getattr(response, "content", "") or ""
         except (TimeoutError, asyncio.TimeoutError):
-            pass
-        finally:
-            unsubscribe()
-
-        # Prefer tool-captured report; fall back to text response
-        if report_holder:
-            report = report_holder[0]
-        elif text_content:
-            log.info("synthesis_text_fallback", chars=sum(len(t) for t in text_content))
-            report = "\n".join(text_content)
-        else:
-            report = "(Synthesis failed: leader did not submit a report)"
+            report = "(Synthesis timed out)"
+        except Exception as exc:
+            log.error("synthesis_failed", error=str(exc))
+            report = f"(Synthesis failed: {exc})"
 
         await self.event_bus.emit("swarm.synthesis_complete", {})
         return report

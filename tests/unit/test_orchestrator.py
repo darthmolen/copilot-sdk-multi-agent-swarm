@@ -45,17 +45,29 @@ VALID_PLAN = {
 # ---------------------------------------------------------------------------
 
 
+class MockEvent:
+    """Mimics an SDK event with .content and .data.content."""
+
+    def __init__(self, content: str = "") -> None:
+        self.content = content
+
+
 class MockToolCallingSession:
     """Simulates SDK behavior: on send(), invokes the registered tool handler
     with preconfigured args, then fires ASSISTANT_TURN_END.
 
-    This matches real SDK flow: LLM decides to call tool → SDK invokes handler
-    → LLM receives result → turn ends.
+    Also supports send_and_wait() for synthesis (returns text directly).
     """
 
-    def __init__(self, tool_call_args: dict[str, Any] | None = None, tool_name: str = "") -> None:
+    def __init__(
+        self,
+        tool_call_args: dict[str, Any] | None = None,
+        tool_name: str = "",
+        send_and_wait_response: str = "",
+    ) -> None:
         self._tool_call_args = tool_call_args
         self._tool_name = tool_name
+        self._send_and_wait_response = send_and_wait_response
         self._handlers: list[Any] = []
         self._tools: list[Tool] = []
         self.sent_messages: list[str] = []
@@ -89,6 +101,11 @@ class MockToolCallingSession:
                 data=SessionEventData(turn_id="turn-1"),
             ))
         return "msg-1"
+
+    async def send_and_wait(self, prompt: str, **kwargs: Any) -> MockEvent:
+        """For synthesis — returns text directly."""
+        self.sent_messages.append(prompt)
+        return MockEvent(content=self._send_and_wait_response)
 
 
 class MockWorkerSession:
@@ -160,11 +177,11 @@ class MockCopilotClient:
             session._tools = tools
             return session
 
-        # Synthesis session: has submit_report tool
-        if "submit_report" in tool_names:
+        # Synthesis session: no tools (uses send_and_wait)
+        # Falls through to here after leader plan session is already created
+        if not tool_names or "create_plan" not in tool_names:
             session = MockToolCallingSession(
-                tool_call_args={"report": self._synthesis_report},
-                tool_name="submit_report",
+                send_and_wait_response=self._synthesis_report,
             )
             session._tools = tools
             return session
