@@ -9,3 +9,6 @@ build/
 *.egg
 logs/
 node_modules/
+.venv/
+venv/
+.env
