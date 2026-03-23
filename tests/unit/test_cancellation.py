@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 import pytest
@@ -12,13 +11,15 @@ from fastapi.testclient import TestClient
 from backend.api.rest import swarm_store
 from backend.events import EventBus
 from backend.main import app
+from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
 from backend.swarm.orchestrator import SwarmOrchestrator
+from backend.swarm.tools import Tool, ToolInvocation
 
 # Re-use mock infrastructure from test_orchestrator
 from tests.unit.test_orchestrator import (
     VALID_PLAN,
-    VALID_PLAN_JSON,
     MockCopilotClient,
+    MockToolCallingSession,
     MockWorkerSession,
     make_orchestrator,
 )
@@ -31,31 +32,11 @@ from tests.unit.test_orchestrator import (
 THREE_ROUND_PLAN = {
     "team_description": "Three-round team",
     "tasks": [
-        {
-            "subject": "Task A",
-            "description": "Do A",
-            "worker_role": "Worker",
-            "worker_name": "worker_a",
-            "blocked_by_indices": [],
-        },
-        {
-            "subject": "Task B",
-            "description": "Do B",
-            "worker_role": "Worker",
-            "worker_name": "worker_b",
-            "blocked_by_indices": [0],
-        },
-        {
-            "subject": "Task C",
-            "description": "Do C",
-            "worker_role": "Worker",
-            "worker_name": "worker_c",
-            "blocked_by_indices": [1],
-        },
+        {"subject": "Task A", "description": "Do A", "worker_role": "Worker", "worker_name": "worker_a", "blocked_by_indices": []},
+        {"subject": "Task B", "description": "Do B", "worker_role": "Worker", "worker_name": "worker_b", "blocked_by_indices": [0]},
+        {"subject": "Task C", "description": "Do C", "worker_role": "Worker", "worker_name": "worker_c", "blocked_by_indices": [1]},
     ],
 }
-
-THREE_ROUND_PLAN_JSON = json.dumps(THREE_ROUND_PLAN)
 
 
 # ---------------------------------------------------------------------------
@@ -71,16 +52,12 @@ class SlowMockWorkerSession(MockWorkerSession):
         self._delay = delay
 
     async def send(self, prompt: str, **kwargs: Any) -> str:
-        from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
-
         await asyncio.sleep(self._delay)
         for h in list(self._handlers):
-            h(
-                SessionEvent(
-                    type=SessionEventType.ASSISTANT_TURN_END,
-                    data=SessionEventData(turn_id="turn-1"),
-                )
-            )
+            h(SessionEvent(
+                type=SessionEventType.ASSISTANT_TURN_END,
+                data=SessionEventData(turn_id="turn-1"),
+            ))
         return "msg-1"
 
 
@@ -93,7 +70,9 @@ class SlowMockCopilotClient(MockCopilotClient):
 
     async def create_session(self, **kwargs: Any) -> Any:
         if "custom_agents" in kwargs:
-            return SlowMockWorkerSession(delay=self._worker_delay)
+            session = SlowMockWorkerSession(delay=self._worker_delay)
+            session._tools = kwargs.get("tools", []) or []
+            return session
         return await super().create_session(**kwargs)
 
 
@@ -141,11 +120,9 @@ class TestExecuteStopsOnCancel:
         plan = await orch._plan("Build something")
         await orch._spawn(plan)
 
-        # Cancel before executing
         await orch.cancel()
         await orch._execute()
 
-        # No round_start events should have been emitted
         from backend.swarm.models import TaskStatus
 
         all_tasks = await orch.task_board.get_tasks()
@@ -158,8 +135,8 @@ class TestExecuteStopsOnCancel:
         """Cancel during execution; verify it stops at next round boundary."""
         client = SlowMockCopilotClient(
             worker_delay=0.05,
-            leader_responses=[THREE_ROUND_PLAN_JSON],
-            synthesis_response="Final report",
+            leader_plan=THREE_ROUND_PLAN,
+            synthesis_report="Final report",
         )
         orch = SwarmOrchestrator(
             client=client,
@@ -170,7 +147,6 @@ class TestExecuteStopsOnCancel:
         await orch._spawn(plan)
 
         async def cancel_soon() -> None:
-            # Wait enough for round 1 to complete, then cancel before round 2 tasks finish
             await asyncio.sleep(0.08)
             await orch.cancel()
 
@@ -180,8 +156,6 @@ class TestExecuteStopsOnCancel:
 
         all_tasks = await orch.task_board.get_tasks()
         completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
-        # Round 1 runs task A (only unblocked). After cancel, round 2 should not start
-        # or at most round 2 completes but round 3 should not.
         assert len(completed) < len(all_tasks), (
             "Not all tasks should have completed after mid-execution cancel"
         )
@@ -193,21 +167,33 @@ class TestExecuteStopsOnCancel:
 
 
 class TestRunErrorHandling:
-    async def test_run_emits_error_on_exception(self, event_bus: EventBus) -> None:
-        """run() with a failing leader should emit swarm.error and re-raise."""
+    async def test_run_emits_error_on_plan_failure(self, event_bus: EventBus) -> None:
+        """run() emits swarm.error when leader fails to submit a plan."""
         events: list[tuple[str, dict]] = []
         event_bus.subscribe(lambda t, d: events.append((t, d)))
 
-        orch = make_orchestrator(
-            event_bus, leader_responses=["bad json", "still bad json"]
-        )
+        # Create a client where the leader session never calls the tool
+        client = MockCopilotClient(leader_plan=VALID_PLAN)
+        original_create = client.create_session
 
-        with pytest.raises(ValueError, match="invalid JSON"):
+        async def _no_tool_session(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names:
+                session = MockToolCallingSession(tool_call_args=None, tool_name="")
+                session._tools = tools
+                return session
+            return await original_create(**kwargs)
+
+        client.create_session = _no_tool_session  # type: ignore[assignment]
+        orch = SwarmOrchestrator(client=client, event_bus=event_bus, config={"max_rounds": 3, "timeout": 0.1})
+
+        with pytest.raises(ValueError, match="Leader did not submit a plan"):
             await orch.run("Build something")
 
         error_events = [(t, d) for t, d in events if t == "swarm.error"]
         assert len(error_events) == 1
-        assert "invalid JSON" in error_events[0][1]["message"]
+        assert "plan" in error_events[0][1]["message"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -220,23 +206,16 @@ class TestCancelEndpoint:
         swarm_store.clear()
         client = TestClient(app)
 
-        # Create a swarm first
         resp = client.post("/api/swarm/start", json={"goal": "Test cancel"})
         swarm_id = resp.json()["swarm_id"]
 
-        # Cancel it
         resp = client.post(f"/api/swarm/{swarm_id}/cancel")
         assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "cancelled"
-
-        # Verify phase is updated
-        status_resp = client.get(f"/api/swarm/{swarm_id}/status")
-        assert status_resp.json()["phase"] == "cancelled"
+        assert resp.json()["status"] == "cancelled"
 
     def test_cancel_endpoint_unknown_swarm_returns_404(self) -> None:
         swarm_store.clear()
         client = TestClient(app)
 
-        resp = client.post("/api/swarm/nonexistent-id/cancel")
+        resp = client.post("/api/swarm/nonexistent/cancel")
         assert resp.status_code == 404

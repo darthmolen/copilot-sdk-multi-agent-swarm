@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from pydantic import BaseModel, Field, ValidationError
+
 from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.task_board import TaskBoard
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -176,3 +181,92 @@ def create_swarm_tools(
             skip_permission=True,
         ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Leader plan / synthesis tools (structured output via function calling)
+# ---------------------------------------------------------------------------
+
+
+class TaskPlan(BaseModel):
+    """Schema for a single task in the leader's plan."""
+
+    subject: str
+    description: str
+    worker_role: str
+    worker_name: str
+    blocked_by_indices: list[int] = Field(default_factory=list)
+
+
+class SwarmPlan(BaseModel):
+    """Schema the leader submits via the create_plan tool."""
+
+    team_description: str
+    tasks: list[TaskPlan]
+
+
+class SwarmReport(BaseModel):
+    """Schema the leader submits via the submit_report tool."""
+
+    report: str
+
+
+def create_plan_tool(plan_holder: list[dict[str, Any]]) -> Tool:
+    """Return a tool the leader calls to submit its decomposed plan.
+
+    The plan is captured in *plan_holder* (mutated in place) so the
+    orchestrator can read it after the leader's turn ends.
+    """
+
+    async def _handler(invocation: ToolInvocation) -> ToolResult:
+        args = invocation.arguments or {}
+        try:
+            plan = SwarmPlan.model_validate(args)
+            plan_holder.append(plan.model_dump())
+            return ToolResult(text_result_for_llm="Plan submitted successfully.")
+        except (ValidationError, Exception) as exc:
+            logger.warning("create_plan tool received invalid args: %s", exc)
+            return ToolResult(
+                text_result_for_llm="Invalid plan format. Please try again.",
+                result_type="failure",
+            )
+
+    return Tool(
+        name="create_plan",
+        description=(
+            "Submit the task decomposition plan. Call this tool with a JSON object "
+            "containing 'team_description' (string) and 'tasks' (array of objects "
+            "with subject, description, worker_role, worker_name, blocked_by_indices)."
+        ),
+        handler=_handler,
+        parameters=SwarmPlan.model_json_schema(),
+        skip_permission=True,
+    )
+
+
+def create_report_tool(report_holder: list[str]) -> Tool:
+    """Return a tool the leader calls to submit the synthesis report.
+
+    The report text is captured in *report_holder*.
+    """
+
+    async def _handler(invocation: ToolInvocation) -> ToolResult:
+        args = invocation.arguments or {}
+        try:
+            report = SwarmReport.model_validate(args)
+            report_holder.append(report.report)
+            return ToolResult(text_result_for_llm="Report submitted successfully.")
+        except (ValidationError, Exception) as exc:
+            logger.warning("submit_report tool received invalid args: %s", exc)
+            return ToolResult(
+                text_result_for_llm="Invalid report format.",
+                result_type="failure",
+            )
+
+    return Tool(
+        name="submit_report",
+        description="Submit the final synthesis report. Call with {'report': 'your report text'}.",
+        handler=_handler,
+        parameters=SwarmReport.model_json_schema(),
+        skip_permission=True,
+    )

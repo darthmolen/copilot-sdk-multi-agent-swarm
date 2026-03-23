@@ -231,3 +231,97 @@ async def test_sender_stamped_from_closure():
     messages = await inbox.receive("victim")
     assert len(messages) == 1
     assert messages[0].sender == "worker_1"  # always from closure, never spoofable
+
+
+# ---------------------------------------------------------------------------
+# Plan / Report tool tests (Step 1+2 of tool-based spike)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_plan_tool_returns_tool_with_correct_shape():
+    """create_plan_tool returns a Tool named 'create_plan' with skip_permission=True."""
+    from backend.swarm.tools import create_plan_tool
+
+    holder: list[dict] = []
+    tool = create_plan_tool(holder)
+
+    assert tool.name == "create_plan"
+    assert tool.skip_permission is True
+    assert tool.parameters is not None  # has a JSON schema
+
+
+async def test_create_report_tool_returns_tool_with_correct_shape():
+    """create_report_tool returns a Tool named 'submit_report' with skip_permission=True."""
+    from backend.swarm.tools import create_report_tool
+
+    holder: list[str] = []
+    tool = create_report_tool(holder)
+
+    assert tool.name == "submit_report"
+    assert tool.skip_permission is True
+    assert tool.parameters is not None
+
+
+async def test_plan_tool_handler_captures_valid_plan():
+    """Invoking create_plan handler with valid args populates plan_holder."""
+    from backend.swarm.tools import create_plan_tool
+
+    holder: list[dict] = []
+    tool = create_plan_tool(holder)
+
+    invocation = ToolInvocation(arguments={
+        "team_description": "Test team",
+        "tasks": [
+            {
+                "subject": "Design",
+                "description": "Design the system",
+                "worker_role": "Architect",
+                "worker_name": "architect",
+                "blocked_by_indices": [],
+            },
+            {
+                "subject": "Implement",
+                "description": "Build it",
+                "worker_role": "Developer",
+                "worker_name": "developer",
+                "blocked_by_indices": [0],
+            },
+        ],
+    })
+    result = await tool.handler(invocation)
+
+    assert result.result_type == "success"
+    assert len(holder) == 1
+    assert holder[0]["team_description"] == "Test team"
+    assert len(holder[0]["tasks"]) == 2
+    assert holder[0]["tasks"][0]["subject"] == "Design"
+    assert holder[0]["tasks"][1]["blocked_by_indices"] == [0]
+
+
+async def test_plan_tool_handler_rejects_invalid_args():
+    """Invoking create_plan with missing required fields returns failure."""
+    from backend.swarm.tools import create_plan_tool
+
+    holder: list[dict] = []
+    tool = create_plan_tool(holder)
+
+    invocation = ToolInvocation(arguments={"bad_field": "oops"})
+    result = await tool.handler(invocation)
+
+    assert result.result_type == "failure"
+    assert len(holder) == 0  # nothing captured
+
+
+async def test_report_tool_handler_captures_report():
+    """Invoking submit_report handler populates report_holder."""
+    from backend.swarm.tools import create_report_tool
+
+    holder: list[str] = []
+    tool = create_report_tool(holder)
+
+    invocation = ToolInvocation(arguments={"report": "The final synthesis report."})
+    result = await tool.handler(invocation)
+
+    assert result.result_type == "success"
+    assert len(holder) == 1
+    assert holder[0] == "The final synthesis report."

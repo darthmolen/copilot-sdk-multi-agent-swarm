@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # --- Copilot client (optional) ----------------------------------------
     copilot_client = None
     try:
-        from copilot import CopilotClient, SubprocessConfig
+        from copilot import CopilotClient, SubprocessConfig  # type: ignore[import-not-found]
 
         cli_path = shutil.which("copilot")
         if cli_path:

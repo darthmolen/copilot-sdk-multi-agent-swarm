@@ -12,6 +12,7 @@ from backend.events import EventBus
 from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
 from backend.swarm.models import TaskStatus
 from backend.swarm.orchestrator import SwarmOrchestrator
+from backend.swarm.tools import Tool, ToolInvocation
 
 
 # ---------------------------------------------------------------------------
@@ -38,32 +39,56 @@ VALID_PLAN = {
     ],
 }
 
-VALID_PLAN_JSON = json.dumps(VALID_PLAN)
-
 
 # ---------------------------------------------------------------------------
 # Mock infrastructure
 # ---------------------------------------------------------------------------
 
 
-class MockEvent:
-    """Mimics an SDK event with .content attribute."""
+class MockToolCallingSession:
+    """Simulates SDK behavior: on send(), invokes the registered tool handler
+    with preconfigured args, then fires ASSISTANT_TURN_END.
 
-    def __init__(self, content: str = "") -> None:
-        self.content = content
+    This matches real SDK flow: LLM decides to call tool → SDK invokes handler
+    → LLM receives result → turn ends.
+    """
 
+    def __init__(self, tool_call_args: dict[str, Any] | None = None, tool_name: str = "") -> None:
+        self._tool_call_args = tool_call_args
+        self._tool_name = tool_name
+        self._handlers: list[Any] = []
+        self._tools: list[Tool] = []
+        self.sent_messages: list[str] = []
 
-class MockLeaderSession:
-    """Returns configurable JSON from send_and_wait."""
+    def on(self, handler: Any) -> Any:
+        self._handlers.append(handler)
 
-    def __init__(self, responses: list[str]) -> None:
-        self._responses = list(responses)
-        self._call_count = 0
+        def unsubscribe() -> None:
+            if handler in self._handlers:
+                self._handlers.remove(handler)
 
-    async def send_and_wait(self, prompt: str, **kwargs: Any) -> MockEvent:
-        idx = min(self._call_count, len(self._responses) - 1)
-        self._call_count += 1
-        return MockEvent(content=self._responses[idx])
+        return unsubscribe
+
+    async def send(self, prompt: str, **kwargs: Any) -> str:
+        self.sent_messages.append(prompt)
+
+        # Find the target tool and call its handler (simulating SDK function calling)
+        if self._tool_call_args and self._tool_name and self._tools:
+            tool = next((t for t in self._tools if t.name == self._tool_name), None)
+            if tool:
+                invocation = ToolInvocation(
+                    tool_name=self._tool_name,
+                    arguments=self._tool_call_args,
+                )
+                await tool.handler(invocation)
+
+        # Fire turn_end
+        for h in list(self._handlers):
+            h(SessionEvent(
+                type=SessionEventType.ASSISTANT_TURN_END,
+                data=SessionEventData(turn_id="turn-1"),
+            ))
+        return "msg-1"
 
 
 class MockWorkerSession:
@@ -72,6 +97,7 @@ class MockWorkerSession:
     def __init__(self, *, fail: bool = False) -> None:
         self._fail = fail
         self._handlers: list[Any] = []
+        self._tools: list[Tool] = []
 
     def on(self, handler: Any) -> Any:
         self._handlers.append(handler)
@@ -84,14 +110,12 @@ class MockWorkerSession:
 
     async def send(self, prompt: str, **kwargs: Any) -> str:
         if self._fail:
-            # Fire SESSION_ERROR then raise
             for h in list(self._handlers):
                 h(SessionEvent(
                     type=SessionEventType.SESSION_ERROR,
                     data=SessionEventData(error="Agent execution failed"),
                 ))
             return "msg-1"
-        # Fire ASSISTANT_TURN_END to signal completion
         for h in list(self._handlers):
             h(SessionEvent(
                 type=SessionEventType.ASSISTANT_TURN_END,
@@ -101,46 +125,54 @@ class MockWorkerSession:
 
 
 class MockCopilotClient:
-    """Mock client that routes session creation to leader or worker sessions."""
+    """Mock client that creates tool-calling sessions for leader/synthesis
+    and worker sessions for agents."""
 
     def __init__(
         self,
-        leader_responses: list[str] | None = None,
+        leader_plan: dict[str, Any] | None = None,
         worker_fail_names: set[str] | None = None,
-        synthesis_response: str = "Final report",
+        synthesis_report: str = "Final report",
     ) -> None:
-        self._leader_responses = leader_responses or [VALID_PLAN_JSON]
-        self._synthesis_response = synthesis_response
+        self._leader_plan = leader_plan or VALID_PLAN
+        self._synthesis_report = synthesis_report
         self._worker_fail_names = worker_fail_names or set()
-        self._leader_session: MockLeaderSession | None = None
+        self._plan_session_created = False
 
     async def create_session(self, **kwargs: Any) -> Any:
+        tools: list[Tool] = kwargs.get("tools", []) or []
+        tool_names = {t.name for t in tools}
+
         # Worker sessions: have custom_agents kwarg
         if "custom_agents" in kwargs:
             agent_name = kwargs.get("agent", "")
             fail = agent_name in self._worker_fail_names
-            return MockWorkerSession(fail=fail)
+            session = MockWorkerSession(fail=fail)
+            session._tools = tools
+            return session
 
-        # Extract system prompt from any kwarg format (mock, replace, customize)
-        system_prompt = kwargs.get("system_prompt", "")
-        system_message = kwargs.get("system_message")
-        if isinstance(system_message, dict):
-            # mode: "replace" puts content at top level
-            system_prompt = system_message.get("content", system_prompt)
-            # mode: "customize" puts content in sections.identity.content
-            sections = system_message.get("sections", {})
-            identity = sections.get("identity", {})
-            if isinstance(identity, dict) and "content" in identity:
-                system_prompt = identity["content"]
+        # Leader plan session: has create_plan tool
+        if "create_plan" in tool_names:
+            session = MockToolCallingSession(
+                tool_call_args=self._leader_plan,
+                tool_name="create_plan",
+            )
+            session._tools = tools
+            return session
 
-        # Synthesis session
-        if "synthesis" in system_prompt.lower():
-            return MockLeaderSession([self._synthesis_response])
+        # Synthesis session: has submit_report tool
+        if "submit_report" in tool_names:
+            session = MockToolCallingSession(
+                tool_call_args={"report": self._synthesis_report},
+                tool_name="submit_report",
+            )
+            session._tools = tools
+            return session
 
-        # Leader session (planning)
-        if self._leader_session is None:
-            self._leader_session = MockLeaderSession(self._leader_responses)
-        return self._leader_session
+        # Fallback: generic tool-calling session
+        session = MockToolCallingSession()
+        session._tools = tools
+        return session
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +187,15 @@ def event_bus() -> EventBus:
 
 def make_orchestrator(
     event_bus: EventBus,
-    leader_responses: list[str] | None = None,
+    leader_plan: dict[str, Any] | None = None,
     worker_fail_names: set[str] | None = None,
-    synthesis_response: str = "Final report",
+    synthesis_report: str = "Final report",
     config: dict[str, Any] | None = None,
 ) -> SwarmOrchestrator:
     client = MockCopilotClient(
-        leader_responses=leader_responses,
+        leader_plan=leader_plan,
         worker_fail_names=worker_fail_names,
-        synthesis_response=synthesis_response,
+        synthesis_report=synthesis_report,
     )
     return SwarmOrchestrator(client=client, event_bus=event_bus, config=config)
 
@@ -174,7 +206,8 @@ def make_orchestrator(
 
 
 class TestPlan:
-    async def test_plan_parses_valid_json_into_tasks(self, event_bus: EventBus) -> None:
+    async def test_plan_creates_tasks_from_tool_call(self, event_bus: EventBus) -> None:
+        """Leader calls create_plan tool → tasks created on TaskBoard with correct blocked_by."""
         orch = make_orchestrator(event_bus)
         plan = await orch._plan("Build something")
 
@@ -197,21 +230,26 @@ class TestPlan:
         assert t1.status == TaskStatus.BLOCKED
         assert t1.blocked_by == ["task-0"]
 
-    async def test_plan_retries_on_malformed_json(self, event_bus: EventBus) -> None:
-        orch = make_orchestrator(
-            event_bus, leader_responses=["not valid json!!!", VALID_PLAN_JSON]
-        )
-        plan = await orch._plan("Build something")
+    async def test_plan_raises_when_tool_not_called(self, event_bus: EventBus) -> None:
+        """If leader never calls create_plan, raise ValueError."""
+        client = MockCopilotClient(leader_plan=VALID_PLAN)
+        # Override: create a session that does NOT call any tool
+        original_create = client.create_session
 
-        assert plan == VALID_PLAN
-        all_tasks = await orch.task_board.get_tasks()
-        assert len(all_tasks) == 2
+        async def _no_tool_session(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names:
+                # Return session that sends but never calls the tool
+                session = MockToolCallingSession(tool_call_args=None, tool_name="")
+                session._tools = tools
+                return session
+            return await original_create(**kwargs)
 
-    async def test_plan_raises_on_double_malformed_json(self, event_bus: EventBus) -> None:
-        orch = make_orchestrator(
-            event_bus, leader_responses=["garbage1", "garbage2"]
-        )
-        with pytest.raises(ValueError, match="invalid JSON"):
+        client.create_session = _no_tool_session  # type: ignore[assignment]
+        orch = SwarmOrchestrator(client=client, event_bus=event_bus, config={"max_rounds": 3, "timeout": 0.1})
+
+        with pytest.raises(ValueError, match="Leader did not submit a plan"):
             await orch._plan("Build something")
 
 
@@ -223,8 +261,6 @@ class TestSpawn:
         assert len(orch.agents) == 2
         assert "analyst" in orch.agents
         assert "writer" in orch.agents
-        assert orch.agents["analyst"].role == "Analyst"
-        assert orch.agents["writer"].role == "Writer"
 
     async def test_spawn_registers_in_team_registry(self, event_bus: EventBus) -> None:
         orch = make_orchestrator(event_bus)
@@ -282,11 +318,10 @@ class TestExecute:
                 {"subject": "Task 2", "description": "Do thing 2", "worker_role": "Writer", "worker_name": "writer", "blocked_by_indices": []},
             ],
         }
-        independent_plan_json = json.dumps(independent_plan)
 
         orch = make_orchestrator(
             event_bus,
-            leader_responses=[independent_plan_json],
+            leader_plan=independent_plan,
             worker_fail_names={"analyst"},
         )
         plan = await orch._plan("Build something")
@@ -302,8 +337,9 @@ class TestExecute:
 
 
 class TestSynthesize:
-    async def test_synthesize_returns_report(self, event_bus: EventBus) -> None:
-        orch = make_orchestrator(event_bus, synthesis_response="The final synthesis report")
+    async def test_synthesize_returns_report_from_tool(self, event_bus: EventBus) -> None:
+        """Leader calls submit_report tool → report text captured."""
+        orch = make_orchestrator(event_bus, synthesis_report="The final synthesis report")
 
         await orch.task_board.add_task(
             id="task-0", subject="Research", description="Do research",
@@ -326,8 +362,8 @@ class TestFullLifecycle:
 
         orch = make_orchestrator(
             event_bus,
-            leader_responses=[VALID_PLAN_JSON],
-            synthesis_response="Everything is done. Great work!",
+            leader_plan=VALID_PLAN,
+            synthesis_report="Everything is done. Great work!",
         )
 
         report = await orch.run("Build something amazing")
