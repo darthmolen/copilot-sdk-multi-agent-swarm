@@ -2,7 +2,11 @@
 name: tester
 displayName: Software Tester
 description: Creates test strategies, writes test cases, and validates implementation quality
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

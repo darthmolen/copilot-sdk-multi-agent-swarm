@@ -173,12 +173,14 @@ class SwarmOrchestrator:
             role = t["worker_role"]
             display_name = name.replace("_", " ").title()
 
-            # Use template-specific agent prompt if available
+            # Use template-specific agent config if available
+            agent_available_tools: list[str] | None = None
             if self.template:
                 agent_def = next((a for a in self.template.agents if a.name == name), None)
                 if agent_def:
                     display_name = agent_def.display_name
                     role = agent_def.description or role
+                    agent_available_tools = agent_def.tools  # None = all, list = whitelist
 
             agent = SwarmAgent(
                 name=name,
@@ -188,6 +190,7 @@ class SwarmOrchestrator:
                 inbox=self.inbox,
                 registry=self.registry,
                 event_bus=self.event_bus,
+                available_tools=agent_available_tools,
             )
             await agent.create_session(self.client)
             self.agents[name] = agent

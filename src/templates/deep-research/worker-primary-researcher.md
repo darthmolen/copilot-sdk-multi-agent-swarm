@@ -2,7 +2,11 @@
 name: primary-researcher
 displayName: Primary Researcher
 description: Conducts primary source research, literature review, and evidence gathering
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

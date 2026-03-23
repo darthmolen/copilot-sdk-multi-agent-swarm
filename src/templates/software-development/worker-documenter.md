@@ -2,7 +2,11 @@
 name: documenter
 displayName: Technical Documenter
 description: Produces API documentation, architecture guides, and usage examples
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

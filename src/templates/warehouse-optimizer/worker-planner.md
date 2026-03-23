@@ -2,7 +2,11 @@
 name: planner
 displayName: Implementation Planner
 description: Creates implementation roadmaps, ROI analysis, change management plans, and phased rollouts
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

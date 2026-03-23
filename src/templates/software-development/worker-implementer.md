@@ -2,7 +2,11 @@
 name: implementer
 displayName: Software Implementer
 description: Writes clean, production-ready code following the architect's design
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

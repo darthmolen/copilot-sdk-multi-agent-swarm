@@ -2,7 +2,11 @@
 name: data-analyst
 displayName: Data Analyst
 description: Performs quantitative analysis, statistical validation, and trend identification
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

@@ -34,6 +34,7 @@ class SwarmAgent:
         inbox: InboxSystem,
         registry: TeamRegistry,
         event_bus: EventBus,
+        available_tools: list[str] | None = None,
     ) -> None:
         self.name = name
         self.role = role
@@ -42,6 +43,7 @@ class SwarmAgent:
         self.inbox = inbox
         self.registry = registry
         self.event_bus = event_bus
+        self.available_tools = available_tools
         self.session: Any = None  # Set by create_session
 
     async def create_session(self, client: Any) -> None:
@@ -65,6 +67,7 @@ class SwarmAgent:
             ],
             agent=self.name,
             tools=tools,
+            available_tools=self.available_tools,
             on_event=self._on_event,
             on_permission_request=_approve_all,
         )

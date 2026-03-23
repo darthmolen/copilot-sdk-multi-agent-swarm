@@ -2,7 +2,11 @@
 name: layout-optimizer
 displayName: Layout Optimizer
 description: Designs warehouse layout improvements, pick path optimization, and zone allocation
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

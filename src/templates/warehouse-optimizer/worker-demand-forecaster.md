@@ -2,7 +2,11 @@
 name: demand-forecaster
 displayName: Demand Forecaster
 description: Analyzes demand patterns, seasonality, forecasting models, and lead time variability
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

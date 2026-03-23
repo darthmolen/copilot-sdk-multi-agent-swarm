@@ -2,7 +2,11 @@
 name: inventory-analyst
 displayName: Inventory Analyst
 description: Analyzes inventory turnover, ABC classification, safety stock, and reorder points
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

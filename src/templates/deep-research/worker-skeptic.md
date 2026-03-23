@@ -2,7 +2,11 @@
 name: skeptic
 displayName: Research Skeptic
 description: Provides contrarian analysis, challenges assumptions, and identifies biases
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 

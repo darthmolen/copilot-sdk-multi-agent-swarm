@@ -298,3 +298,46 @@ async def test_execute_task_unsubscribes_on_completion(
 
     # Handler should have been removed
     assert len(mock_session._handlers) == handlers_before
+
+
+# ---------------------------------------------------------------------------
+# available_tools tests
+# ---------------------------------------------------------------------------
+
+
+async def test_create_session_passes_available_tools(
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+) -> None:
+    """When available_tools is set, it's passed to create_session."""
+    agent = SwarmAgent(
+        name="coder",
+        role="Write code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        available_tools=["task_update", "inbox_send", "inbox_receive", "task_list"],
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs is not None
+    assert kwargs.get("available_tools") == ["task_update", "inbox_send", "inbox_receive", "task_list"]
+
+
+async def test_create_session_no_available_tools_when_none(
+    agent: SwarmAgent,
+    mock_client: MockClient,
+) -> None:
+    """When available_tools is None (default), it's not passed or is None."""
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs is not None
+    # Should be None or not present
+    assert kwargs.get("available_tools") is None

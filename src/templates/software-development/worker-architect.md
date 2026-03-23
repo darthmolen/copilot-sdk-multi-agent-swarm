@@ -2,7 +2,11 @@
 name: architect
 displayName: Software Architect
 description: Designs system architecture, interfaces, and data models
-tools: null
+tools:
+  - task_update
+  - inbox_send
+  - inbox_receive
+  - task_list
 infer: false
 ---
 
