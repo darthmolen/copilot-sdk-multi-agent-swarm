@@ -1,9 +1,0 @@
-pyproject.toml
-src/backend/__init__.py
-src/backend/api/__init__.py
-src/backend/swarm/__init__.py
-src/copilot_sdk_multi_agent_swarm.egg-info/PKG-INFO
-src/copilot_sdk_multi_agent_swarm.egg-info/SOURCES.txt
-src/copilot_sdk_multi_agent_swarm.egg-info/dependency_links.txt
-src/copilot_sdk_multi_agent_swarm.egg-info/requires.txt
-src/copilot_sdk_multi_agent_swarm.egg-info/top_level.txt
