@@ -38,18 +38,32 @@ class SwarmOrchestrator:
         self.registry = TeamRegistry()
         self.agents: dict[str, SwarmAgent] = {}
         self.config = config or {"max_rounds": 3, "timeout": 300}
+        self._cancelled = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
+    async def cancel(self) -> None:
+        """Cancel the swarm execution."""
+        self._cancelled = True
+        await self.event_bus.emit("swarm.cancelled", {})
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
     async def run(self, goal: str) -> str:
         """Full swarm lifecycle. Returns final report."""
-        plan = await self._plan(goal)
-        await self._spawn(plan)
-        await self._execute()
-        report = await self._synthesize(goal)
-        return report
+        try:
+            plan = await self._plan(goal)
+            await self._spawn(plan)
+            await self._execute()
+            report = await self._synthesize(goal)
+            return report
+        except Exception as e:
+            await self.event_bus.emit("swarm.error", {"message": str(e)})
+            raise
 
     # ------------------------------------------------------------------
     # Phase 1: Planning
@@ -145,6 +159,9 @@ class SwarmOrchestrator:
         timeout = self.config.get("timeout", 300)
 
         for round_num in range(1, max_rounds + 1):
+            if self._cancelled:
+                break
+
             runnable = await self.task_board.get_runnable_tasks()
             if not runnable:
                 break
