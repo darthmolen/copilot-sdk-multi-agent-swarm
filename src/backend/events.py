@@ -19,8 +19,9 @@ class EventBus:
     from synchronous code onto the running event loop.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._subscribers: list[Callback] = []
+        self._loop = loop
 
     def subscribe(self, callback: Callback) -> Callable[[], None]:
         """Subscribe *callback* to all future events.
@@ -56,8 +57,15 @@ class EventBus:
     def emit_sync(self, event_type: str, data: dict) -> None:
         """Schedule event delivery from a synchronous context.
 
-        Uses the running event loop to schedule an ``emit`` coroutine so that
-        subscribers are called on the next iteration of the loop.
+        Uses the captured event loop (or falls back to get_running_loop) to
+        schedule an ``emit`` coroutine. Safe for SDK callbacks running in
+        threads or synchronous contexts.
         """
-        loop = asyncio.get_running_loop()
+        loop = self._loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                logger.warning("emit_sync: no event loop available, dropping event %s", event_type)
+                return
         loop.call_soon_threadsafe(asyncio.ensure_future, self.emit(event_type, data))

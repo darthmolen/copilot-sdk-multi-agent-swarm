@@ -33,11 +33,12 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
       return { ...state, agents: [...state.agents, event.data.agent as AgentInfo] };
 
     case 'agent.status_changed': {
-      const { agent_name, status } = event.data as { agent_name: string; status: AgentInfo['status'] };
+      const name = (event.data.name ?? event.data.agent_name) as string;
+      const status = event.data.status as AgentInfo['status'];
       return {
         ...state,
         agents: state.agents.map((a) =>
-          a.name === agent_name ? { ...a, status } : a,
+          a.name === name ? { ...a, status } : a,
         ),
       };
     }
@@ -80,6 +81,7 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
       return { ...state, leaderReport: event.data.content as string };
 
     case 'round.started':
+    case 'swarm.round_start':
       return { ...state, roundNumber: event.data.round as number };
 
     case 'swarm.complete':

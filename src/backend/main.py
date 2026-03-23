@@ -22,11 +22,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup: subscribe event_bus to forward events to WebSocket clients
     def _make_ws_forwarder():  # noqa: ANN202
         async def _forward(event_type: str, data: dict) -> None:
-            swarm_id = data.get("swarm_id", "")
+            swarm_id = data.pop("swarm_id", None)
             if swarm_id:
                 await manager.broadcast(
-                    swarm_id, {"type": event_type, **data}
+                    swarm_id, {"type": event_type, "data": data}
                 )
+            else:
+                # Broadcast to all active swarms if no swarm_id
+                for sid in list(swarm_store.keys()):
+                    await manager.broadcast(
+                        sid, {"type": event_type, "data": data}
+                    )
         return _forward
 
     unsub = event_bus.subscribe(_make_ws_forwarder())

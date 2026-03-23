@@ -14,7 +14,6 @@ from backend.swarm.models import Task, TaskStatus
 from backend.swarm.prompts import (
     LEADER_SYSTEM_PROMPT,
     SYNTHESIS_PROMPT_TEMPLATE,
-    make_worker_prompt,
 )
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry

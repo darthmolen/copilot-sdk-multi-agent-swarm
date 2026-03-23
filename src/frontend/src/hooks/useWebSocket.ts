@@ -13,12 +13,14 @@ export function useWebSocket(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectDelay = useRef(INITIAL_RECONNECT_DELAY);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldReconnect = useRef(true);
   const onEventRef = useRef(onEvent);
 
   // Keep callback ref fresh without triggering reconnects
   onEventRef.current = onEvent;
 
   const disconnect = useCallback(() => {
+    shouldReconnect.current = false;
     if (reconnectTimer.current) {
       clearTimeout(reconnectTimer.current);
       reconnectTimer.current = null;
@@ -60,6 +62,7 @@ export function useWebSocket(
 
       ws.onclose = () => {
         setConnected(false);
+        if (!shouldReconnect.current) return;
         // Reconnect with exponential backoff
         reconnectTimer.current = setTimeout(() => {
           reconnectDelay.current = Math.min(
@@ -75,6 +78,7 @@ export function useWebSocket(
       };
     }
 
+    shouldReconnect.current = true;
     connect();
 
     return () => {

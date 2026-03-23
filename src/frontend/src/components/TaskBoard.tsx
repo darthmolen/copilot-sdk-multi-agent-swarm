@@ -9,6 +9,8 @@ const COLUMNS: { key: TaskStatus; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'in_progress', label: 'In Progress' },
   { key: 'completed', label: 'Completed' },
+  { key: 'failed', label: 'Failed' },
+  { key: 'timeout', label: 'Timeout' },
 ];
 
 function TaskCard({ task }: { task: Task }) {
