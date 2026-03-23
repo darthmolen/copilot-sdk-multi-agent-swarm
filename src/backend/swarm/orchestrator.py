@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from backend.events import EventBus
+from backend.swarm.agent import SwarmAgent
 from backend.swarm.inbox_system import InboxSystem
-from backend.swarm.models import TaskStatus
+from backend.swarm.models import Task, TaskStatus
 from backend.swarm.prompts import (
     LEADER_SYSTEM_PROMPT,
     SYNTHESIS_PROMPT_TEMPLATE,
@@ -17,20 +18,8 @@ from backend.swarm.prompts import (
 )
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
-from backend.swarm.tools import create_swarm_tools
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class SwarmAgent:
-    """Lightweight handle for a worker agent and its session."""
-
-    name: str
-    role: str
-    display_name: str
-    session: Any = None
-    tools: list[Any] = field(default_factory=list)
 
 
 class SwarmOrchestrator:
@@ -74,6 +63,7 @@ class SwarmOrchestrator:
         session = await self.client.create_session(system_prompt=LEADER_SYSTEM_PROMPT)
         max_attempts = 2
 
+        plan: dict[str, Any] | None = None
         for attempt in range(max_attempts):
             event = await session.send_and_wait(goal)
             raw = event.content
@@ -86,8 +76,8 @@ class SwarmOrchestrator:
                         f"Leader returned invalid JSON after {max_attempts} attempts"
                     )
                 logger.warning("Leader returned invalid JSON (attempt %d), retrying", attempt + 1)
-        else:
-            raise ValueError("Leader returned invalid JSON after retries")
+
+        assert plan is not None  # guaranteed by the break/raise above
 
         # Create tasks on the board
         tasks_data = plan.get("tasks", [])
@@ -125,23 +115,17 @@ class SwarmOrchestrator:
 
             role = t["worker_role"]
             display_name = name.replace("_", " ").title()
-            system_prompt = make_worker_prompt(display_name, role)
-
-            tools = create_swarm_tools(
-                agent_name=name,
-                task_board=self.task_board,
-                inbox=self.inbox,
-            )
-
-            session = await self.client.create_session(system_prompt=system_prompt)
 
             agent = SwarmAgent(
                 name=name,
                 role=role,
                 display_name=display_name,
-                session=session,
-                tools=tools,
+                task_board=self.task_board,
+                inbox=self.inbox,
+                registry=self.registry,
+                event_bus=self.event_bus,
             )
+            await agent.create_session(self.client)
             self.agents[name] = agent
 
             await self.registry.register(name, role, display_name)
@@ -158,6 +142,7 @@ class SwarmOrchestrator:
     async def _execute(self) -> None:
         """Round-based execution. One task per worker per round."""
         max_rounds = self.config.get("max_rounds", 3)
+        timeout = self.config.get("timeout", 300)
 
         for round_num in range(1, max_rounds + 1):
             runnable = await self.task_board.get_runnable_tasks()
@@ -170,23 +155,21 @@ class SwarmOrchestrator:
             )
 
             # Assign at most one task per worker this round
-            assigned: dict[str, Any] = {}
+            assigned: dict[str, Task] = {}
             for task in runnable:
                 if task.worker_name not in assigned and task.worker_name in self.agents:
                     assigned[task.worker_name] = task
 
-            # Execute all assigned tasks concurrently
-            import asyncio
-
+            # Execute all assigned tasks concurrently using event-driven SwarmAgent
             results = await asyncio.gather(
                 *[
-                    self._execute_task(self.agents[worker_name], task)
+                    self.agents[worker_name].execute_task(task, timeout=timeout)
                     for worker_name, task in assigned.items()
                 ],
                 return_exceptions=True,
             )
 
-            # Process results
+            # Process failures
             for (worker_name, task), result in zip(assigned.items(), results):
                 if isinstance(result, Exception):
                     logger.error(
@@ -195,41 +178,20 @@ class SwarmOrchestrator:
                         task.id,
                         result,
                     )
-                    await self.task_board.update_status(task.id, "failed", str(result))
+                    # Task may already be marked failed by SwarmAgent.execute_task;
+                    # ensure it's marked in case the exception was unexpected
+                    current_task = next(
+                        (t for t in await self.task_board.get_tasks() if t.id == task.id),
+                        None,
+                    )
+                    if current_task and current_task.status == TaskStatus.IN_PROGRESS:
+                        await self.task_board.update_status(task.id, "failed", str(result))
                     await self.event_bus.emit(
                         "swarm.task_failed",
                         {"task_id": task.id, "agent": worker_name, "error": str(result)},
                     )
 
             await self.event_bus.emit("swarm.round_end", {"round": round_num})
-
-    async def _execute_task(self, agent: SwarmAgent, task: Any) -> None:
-        """Execute a single task with the given agent."""
-        await self.task_board.update_status(task.id, "in_progress")
-        await self.registry.update_status(agent.name, "working")
-
-        prompt = (
-            f"Please complete this task:\n"
-            f"Task ID: {task.id}\n"
-            f"Subject: {task.subject}\n"
-            f"Description: {task.description}\n"
-        )
-
-        try:
-            await agent.session.send(prompt)
-            # After send completes, check if the task was updated by tools.
-            # If not yet completed by tool calls, mark it completed.
-            current = await self.task_board.get_tasks(owner=agent.name)
-            for t in current:
-                if t.id == task.id and t.status == TaskStatus.IN_PROGRESS:
-                    await self.task_board.update_status(
-                        task.id, "completed", "Task completed by agent"
-                    )
-            await self.registry.update_status(agent.name, "idle")
-            await self.registry.increment_tasks_completed(agent.name)
-        except Exception:
-            await self.registry.update_status(agent.name, "failed")
-            raise
 
     # ------------------------------------------------------------------
     # Phase 4: Synthesis
