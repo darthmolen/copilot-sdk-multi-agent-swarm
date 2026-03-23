@@ -166,7 +166,11 @@ def test_list_templates_returns_templates() -> None:
     assert len(templates) == 3
 
     names = {t["name"] for t in templates}
-    assert names == {"research", "coding", "content"}
+    assert names == {
+        "Software Development Team",
+        "Deep Research Team",
+        "Warehouse Optimization Team",
+    }
 
 
 def test_websocket_receives_swarm_events() -> None:
