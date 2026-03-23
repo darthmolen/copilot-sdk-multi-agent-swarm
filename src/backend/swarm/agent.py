@@ -91,12 +91,16 @@ class SwarmAgent:
         done: asyncio.Event = asyncio.Event()
         error_holder: list[str] = []
 
-        def _handler(event: SessionEvent) -> None:
-            if event.type is SessionEventType.ASSISTANT_TURN_END:
+        def _handler(event: Any) -> None:
+            event_type = str(getattr(event, "type", "")).lower()
+            if "turn_end" in event_type:
                 done.set()
-            elif event.type is SessionEventType.SESSION_ERROR:
+            elif "idle" in event_type:
+                done.set()
+            elif "session" in event_type and "error" in event_type:
+                data = getattr(event, "data", None)
                 error_holder.append(
-                    event.data.error if event.data.error else "unknown error"
+                    getattr(data, "error", None) or getattr(data, "message", "unknown error")
                 )
                 done.set()
 

@@ -114,11 +114,12 @@ class SwarmOrchestrator:
         done = asyncio.Event()
 
         def _on_event(event: Any) -> None:
-            from backend.swarm.event_bridge import SessionEventType
-            event_type = getattr(event, "type", None)
-            if event_type is SessionEventType.ASSISTANT_TURN_END:
+            event_type = str(getattr(event, "type", "")).lower()
+            if "turn_end" in event_type:
                 done.set()
-            elif event_type is SessionEventType.SESSION_ERROR:
+            elif "session" in event_type and "error" in event_type:
+                done.set()
+            elif "idle" in event_type:
                 done.set()
 
         unsubscribe = session.on(_on_event)
@@ -269,20 +270,31 @@ class SwarmOrchestrator:
         report_holder: list[str] = []
         report_tool = create_report_tool(report_holder)
 
-        synthesis_system = self.template.leader_prompt if self.template else "You are a synthesis agent."
+        synthesis_system = (
+            self.template.leader_prompt if self.template
+            else "You are a synthesis agent. After analyzing the task results, you MUST call the submit_report tool with your complete report."
+        )
         session = await _create_session_with_tools(
             self.client, synthesis_system, [report_tool],
         )
 
         done = asyncio.Event()
+        text_content: list[str] = []  # Fallback: capture text response
 
         def _on_event(event: Any) -> None:
-            from backend.swarm.event_bridge import SessionEventType
-            event_type = getattr(event, "type", None)
-            if event_type is SessionEventType.ASSISTANT_TURN_END:
+            event_type = str(getattr(event, "type", "")).lower()
+            if "turn_end" in event_type:
                 done.set()
-            elif event_type is SessionEventType.SESSION_ERROR:
+            elif "session" in event_type and "error" in event_type:
                 done.set()
+            elif "idle" in event_type:
+                done.set()
+            # Capture assistant text as fallback
+            elif "assistant.message" in event_type and "delta" not in event_type:
+                data = getattr(event, "data", None)
+                content = getattr(data, "content", None)
+                if content and content.strip():
+                    text_content.append(content)
 
         unsubscribe = session.on(_on_event)
         timeout = self.config.get("timeout", 300)
@@ -295,8 +307,14 @@ class SwarmOrchestrator:
         finally:
             unsubscribe()
 
-        if not report_holder:
-            return "(Synthesis failed: leader did not submit a report)"
+        # Prefer tool-captured report; fall back to text response
+        if report_holder:
+            report = report_holder[0]
+        elif text_content:
+            logger.info("Synthesis: leader responded with text instead of tool (%d chars)", sum(len(t) for t in text_content))
+            report = "\n".join(text_content)
+        else:
+            report = "(Synthesis failed: leader did not submit a report)"
 
         await self.event_bus.emit("swarm.synthesis_complete", {})
-        return report_holder[0]
+        return report

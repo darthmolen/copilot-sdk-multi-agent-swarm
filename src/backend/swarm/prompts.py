@@ -58,12 +58,12 @@ def make_worker_prompt(display_name: str, role: str) -> str:
 
 
 SYNTHESIS_PROMPT_TEMPLATE = """\
-You are the Leader Agent. All worker tasks have completed. Here are the results:
+All worker tasks have completed. Here are the results:
 
 {task_results}
 
 Synthesize these results into a comprehensive final report that addresses the original goal:
 {goal}
 
-Provide a clear, well-structured report combining all worker outputs.
+You MUST call the submit_report tool with your complete report. Provide a clear, well-structured report combining all worker outputs.
 """

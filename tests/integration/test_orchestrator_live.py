@@ -121,3 +121,79 @@ async def test_leader_decomposes_goal_into_tasks(copilot_client: CopilotClient):
 
     finally:
         await session.disconnect()
+
+
+async def test_orchestrator_full_run_deep_research(copilot_client: CopilotClient):
+    """Run the full SwarmOrchestrator lifecycle against real copilot-cli.
+
+    Uses the deep-research template with a real research prompt.
+    Validates: plan tool called, tasks created, workers spawn, execution runs,
+    synthesis report produced.
+    """
+    from pathlib import Path
+
+    from backend.events import EventBus
+    from backend.swarm.orchestrator import SwarmOrchestrator
+    from backend.swarm.template_loader import TemplateLoader
+
+    event_bus = EventBus()
+    events: list[tuple[str, dict]] = []
+    event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+    # Load real template
+    loader = TemplateLoader(Path("src/templates"))
+    template = loader.load("deep-research")
+
+    orch = SwarmOrchestrator(
+        client=copilot_client,
+        event_bus=event_bus,
+        config={"max_rounds": 3, "timeout": 300},
+        template=template,
+    )
+
+    goal = (
+        "Research how RAG, Vector based, and Memory based pre-fill for system prompts work. "
+        "Give a Summary of how each works with diagrams, Give the pros and cons of each, "
+        "and how they could be worked to be useful together."
+    )
+
+    report = await orch.run(goal)
+
+    # --- Debug output (always print, even on failure) ---
+    all_tasks = await orch.task_board.get_tasks()
+    all_agents_info = await orch.registry.get_all()
+
+    print(f"\n{'='*60}")
+    print(f"SWARM DEBUG: {len(all_tasks)} tasks, {len(orch.agents)} agents")
+    print(f"{'='*60}")
+
+    print("\n--- TASKS ---")
+    for t in all_tasks:
+        print(f"  [{t.status.value:12s}] {t.id}: {t.subject} (worker: {t.worker_name})")
+        if t.result:
+            print(f"               Result ({len(t.result)} chars): {t.result[:300]}")
+        else:
+            print(f"               Result: (empty)")
+
+    print("\n--- AGENTS ---")
+    for a in all_agents_info:
+        print(f"  {a.name}: status={a.status.value}, tasks_completed={a.tasks_completed}")
+
+    print("\n--- EVENTS ---")
+    for etype, edata in events:
+        print(f"  {etype}: {str(edata)[:150]}")
+
+    print(f"\n--- REPORT ({len(report)} chars) ---")
+    print(report[:2000])
+    if len(report) > 2000:
+        print(f"\n... ({len(report) - 2000} more chars)")
+    print(f"{'='*60}")
+
+    # --- Assertions ---
+    assert len(all_tasks) >= 2, f"Expected at least 2 tasks, got {len(all_tasks)}"
+    assert len(orch.agents) >= 2, f"Expected at least 2 agents, got {len(orch.agents)}"
+    assert len(report) > 100, f"Report too short ({len(report)} chars): {report[:200]}"
+
+    event_types = [e[0] for e in events]
+    assert "swarm.plan_complete" in event_types, f"Missing plan_complete. Events: {event_types}"
+    assert "swarm.spawn_complete" in event_types, f"Missing spawn_complete. Events: {event_types}"
