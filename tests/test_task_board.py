@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from backend.swarm.models import TaskStatus
+from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
 
 
@@ -18,16 +18,21 @@ def _make_board() -> TaskBoard:
     return TaskBoard()
 
 
-async def _add_simple(board: TaskBoard, id: str = "task-1", **kw) -> None:
+async def _add_simple(
+    board: TaskBoard,
+    id: str = "task-1",
+    blocked_by: list[str] | None = None,
+    **kw: str,
+) -> Task:
     """Shortcut that fills in boilerplate fields."""
-    defaults = dict(
-        subject="do something",
-        description="details",
-        worker_role="coder",
-        worker_name="alice",
+    return await board.add_task(
+        id=id,
+        subject=kw.get("subject", "do something"),
+        description=kw.get("description", "details"),
+        worker_role=kw.get("worker_role", "coder"),
+        worker_name=kw.get("worker_name", "alice"),
+        blocked_by=blocked_by,
     )
-    defaults.update(kw)
-    return await board.add_task(id=id, **defaults)
 
 
 # ---------------------------------------------------------------------------

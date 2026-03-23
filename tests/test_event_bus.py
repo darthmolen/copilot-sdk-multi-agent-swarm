@@ -6,14 +6,14 @@ import asyncio
 
 import pytest
 
-from backend.events import EventBus
+from backend.events import Callback, EventBus
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_collector() -> tuple[list[tuple[str, dict]], "Callback"]:
+def _make_collector() -> tuple[list[tuple[str, dict]], Callback]:
     """Return (collected_events, async_callback)."""
     collected: list[tuple[str, dict]] = []
 

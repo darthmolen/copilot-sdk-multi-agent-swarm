@@ -65,6 +65,7 @@ def test_message_with_tool_requests_emits_finalize():
         ),
     )
     result = bridge_sdk_event(AGENT, event)
+    assert result is not None
     assert result == {
         "type": "agent.message_finalize",
         "data": {"agent_name": AGENT, "message_id": "msg-2"},

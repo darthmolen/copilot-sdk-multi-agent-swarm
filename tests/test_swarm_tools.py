@@ -7,9 +7,9 @@ import json
 import pytest
 
 from backend.swarm.inbox_system import InboxSystem
-from backend.swarm.models import TaskStatus
+from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
-from backend.swarm.tools import ToolInvocation, create_swarm_tools
+from backend.swarm.tools import Tool, ToolInvocation, create_swarm_tools
 
 
 # ---------------------------------------------------------------------------
@@ -19,19 +19,25 @@ from backend.swarm.tools import ToolInvocation, create_swarm_tools
 EXPECTED_TOOL_NAMES = {"task_update", "inbox_send", "inbox_receive", "task_list"}
 
 
-def _find_tool(tools, name):
+def _find_tool(tools: list[Tool], name: str) -> Tool:
     return next(t for t in tools if t.name == name)
 
 
-async def _seed_task(board: TaskBoard, task_id: str = "t1", **kw):
-    defaults = dict(
-        subject="do something",
-        description="details",
-        worker_role="coder",
-        worker_name="alice",
+async def _seed_task(
+    board: TaskBoard,
+    task_id: str = "t1",
+    subject: str = "do something",
+    description: str = "details",
+    worker_role: str = "coder",
+    worker_name: str = "alice",
+) -> Task:
+    return await board.add_task(
+        id=task_id,
+        subject=subject,
+        description=description,
+        worker_role=worker_role,
+        worker_name=worker_name,
     )
-    defaults.update(kw)
-    return await board.add_task(id=task_id, **defaults)
 
 
 # ---------------------------------------------------------------------------
