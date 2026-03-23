@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
+import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.rest import configure, router, swarm_store
 from backend.api.websocket import ConnectionManager
 from backend.events import EventBus
+from backend.logging_config import configure_logging
 from backend.swarm.template_loader import TemplateLoader
 
 # ---------------------------------------------------------------------------
@@ -21,17 +22,8 @@ from backend.swarm.template_loader import TemplateLoader
 # ---------------------------------------------------------------------------
 
 LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_DIR / "backend.log"),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger(__name__)
+configure_logging(json_file=LOG_DIR / "backend.log")
+log = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared singletons
@@ -60,19 +52,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 SubprocessConfig(cli_path=cli_path, use_stdio=True)
             )
             await copilot_client.start()
-            logger.info("Copilot CLI connected: %s", cli_path)
+            log.info("copilot_cli_connected", cli_path=cli_path)
         else:
-            logger.warning("copilot binary not found in PATH — swarms will not execute")
+            log.warning("copilot_binary_not_found")
     except Exception as exc:
-        logger.warning("Failed to start Copilot CLI: %s — swarms will not execute", exc)
+        log.warning("copilot_cli_start_failed", error=str(exc))
 
     # --- Template loader --------------------------------------------------
     templates_dir = Path("src/templates")
     template_loader = TemplateLoader(templates_dir) if templates_dir.is_dir() else None
     if template_loader:
-        logger.info("Loaded templates from %s", templates_dir)
+        log.info("templates_loaded", path=str(templates_dir))
     else:
-        logger.warning("Templates directory not found: %s", templates_dir)
+        log.warning("templates_dir_not_found", path=str(templates_dir))
 
     # --- Wire dependencies ------------------------------------------------
     configure(event_bus, copilot_client, template_loader)
@@ -94,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         return _forward
 
     unsub = event_bus.subscribe(_make_ws_forwarder())
-    logger.info("Backend started — listening on http://0.0.0.0:8000")
+    log.info("backend_started", address="http://0.0.0.0:8000")
 
     yield
 
@@ -102,7 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     unsub()
     if copilot_client:
         await copilot_client.stop()
-        logger.info("Copilot CLI stopped")
+        log.info("copilot_cli_stopped")
 
 
 # ---------------------------------------------------------------------------

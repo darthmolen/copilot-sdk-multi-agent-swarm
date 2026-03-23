@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Awaitable, Callable, Union
 
-logger = logging.getLogger(__name__)
+import structlog
+
+log = structlog.get_logger()
 
 Callback = Callable[[str, dict], Union[Awaitable[None], None]]
 
@@ -50,9 +51,7 @@ class EventBus:
                 if asyncio.iscoroutine(result) or asyncio.isfuture(result):
                     await result
             except Exception:
-                logger.exception(
-                    "Subscriber %r raised on event %s", cb, event_type
-                )
+                log.exception("subscriber_error", subscriber=repr(cb), event_type=event_type)
 
     def emit_sync(self, event_type: str, data: dict) -> None:
         """Schedule event delivery from a synchronous context.
@@ -66,6 +65,6 @@ class EventBus:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                logger.warning("emit_sync: no event loop available, dropping event %s", event_type)
+                log.warning("emit_sync_no_loop", event_type=event_type)
                 return
         loop.call_soon_threadsafe(asyncio.ensure_future, self.emit(event_type, data))

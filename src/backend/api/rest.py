@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
 from typing import Any
+
+import structlog
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
@@ -18,7 +19,7 @@ from backend.swarm.template_loader import TemplateLoader
 from backend.swarm.templates import format_goal
 from backend.swarm.templates import list_templates as _list_templates
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 router = APIRouter()
 
@@ -62,7 +63,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
     from backend.swarm.orchestrator import SwarmOrchestrator
 
     if _event_bus is None:
-        logger.error("EventBus not configured, cannot run swarm")
+        log.error("eventbus_not_configured")
         return
 
     loaded_template = None
@@ -70,7 +71,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         try:
             loaded_template = _template_loader.load(template_key)
         except (FileNotFoundError, ValueError) as e:
-            logger.warning("Failed to load template '%s': %s", template_key, e)
+            log.warning("template_load_failed", template=template_key, error=str(e))
 
     orch = SwarmOrchestrator(client=_copilot_client, event_bus=_event_bus, template=loaded_template)
     swarm_store[swarm_id]["orchestrator"] = orch
@@ -81,7 +82,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         swarm_store[swarm_id]["phase"] = "complete"
         swarm_store[swarm_id]["report"] = report
     except Exception as e:
-        logger.exception("Swarm %s failed: %s", swarm_id, e)
+        log.error("swarm_failed", swarm_id=swarm_id, error=str(e))
         swarm_store[swarm_id]["phase"] = "failed"
 
 

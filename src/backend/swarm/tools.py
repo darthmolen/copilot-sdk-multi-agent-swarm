@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+
+import structlog
 
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.task_board import TaskBoard
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +227,7 @@ def create_plan_tool(plan_holder: list[dict[str, Any]]) -> Tool:
             plan_holder.append(plan.model_dump())
             return ToolResult(text_result_for_llm="Plan submitted successfully.")
         except (ValidationError, Exception) as exc:
-            logger.warning("create_plan tool received invalid args: %s", exc)
+            log.warning("create_plan_invalid_args", error=str(exc))
             return ToolResult(
                 text_result_for_llm="Invalid plan format. Please try again.",
                 result_type="failure",
@@ -258,7 +259,7 @@ def create_report_tool(report_holder: list[str]) -> Tool:
             report_holder.append(report.report)
             return ToolResult(text_result_for_llm="Report submitted successfully.")
         except (ValidationError, Exception) as exc:
-            logger.warning("submit_report tool received invalid args: %s", exc)
+            log.warning("submit_report_invalid_args", error=str(exc))
             return ToolResult(
                 text_result_for_llm="Invalid report format.",
                 result_type="failure",

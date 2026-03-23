@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
+
+import structlog
 
 from backend.events import EventBus
 from backend.swarm.agent import SwarmAgent
@@ -19,7 +20,7 @@ from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.template_loader import LoadedTemplate
 from backend.swarm.tools import create_plan_tool, create_report_tool
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger()
 
 
 def _approve_all(*_args: Any, **_kwargs: Any) -> Any:
@@ -235,7 +236,7 @@ class SwarmOrchestrator:
 
             for (worker_name, task), result in zip(assigned.items(), results):
                 if isinstance(result, Exception):
-                    logger.error("Agent %s failed on task %s: %s", worker_name, task.id, result)
+                    log.error("agent_task_failed", agent=worker_name, task_id=task.id, error=str(result))
                     current_task = next(
                         (t for t in await self.task_board.get_tasks() if t.id == task.id),
                         None,
@@ -311,7 +312,7 @@ class SwarmOrchestrator:
         if report_holder:
             report = report_holder[0]
         elif text_content:
-            logger.info("Synthesis: leader responded with text instead of tool (%d chars)", sum(len(t) for t in text_content))
+            log.info("synthesis_text_fallback", chars=sum(len(t) for t in text_content))
             report = "\n".join(text_content)
         else:
             report = "(Synthesis failed: leader did not submit a report)"
