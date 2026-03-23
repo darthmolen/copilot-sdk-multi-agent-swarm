@@ -14,9 +14,11 @@ from backend.swarm.models import Task, TaskStatus
 from backend.swarm.prompts import (
     LEADER_SYSTEM_PROMPT,
     SYNTHESIS_PROMPT_TEMPLATE,
+    make_worker_prompt,
 )
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
+from backend.swarm.template_loader import LoadedTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class SwarmOrchestrator:
         client: Any,
         event_bus: EventBus,
         config: dict[str, Any] | None = None,
+        template: LoadedTemplate | None = None,
     ) -> None:
         self.client = client
         self.event_bus = event_bus
@@ -37,6 +40,7 @@ class SwarmOrchestrator:
         self.registry = TeamRegistry()
         self.agents: dict[str, SwarmAgent] = {}
         self.config = config or {"max_rounds": 3, "timeout": 300}
+        self.template = template
         self._cancelled = False
 
     # ------------------------------------------------------------------
@@ -73,7 +77,8 @@ class SwarmOrchestrator:
 
         Retries once on malformed JSON. Raises ValueError after two failures.
         """
-        session = await self.client.create_session(system_prompt=LEADER_SYSTEM_PROMPT)
+        leader_prompt = self.template.leader_prompt if self.template else LEADER_SYSTEM_PROMPT
+        session = await self.client.create_session(system_prompt=leader_prompt)
         max_attempts = 2
 
         plan: dict[str, Any] | None = None
@@ -128,6 +133,13 @@ class SwarmOrchestrator:
 
             role = t["worker_role"]
             display_name = name.replace("_", " ").title()
+
+            # Use template-specific agent prompt if available, else generic
+            if self.template:
+                agent_def = next((a for a in self.template.agents if a.name == name), None)
+                if agent_def:
+                    display_name = agent_def.display_name
+                    role = agent_def.description or role
 
             agent = SwarmAgent(
                 name=name,
@@ -221,7 +233,8 @@ class SwarmOrchestrator:
             for t in all_tasks
         )
 
-        synthesis_prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
+        synthesis_template = self.template.synthesis_prompt if self.template else SYNTHESIS_PROMPT_TEMPLATE
+        synthesis_prompt = synthesis_template.format(
             task_results=task_results,
             goal=goal,
         )

@@ -14,6 +14,7 @@ from backend.api.schemas import (
     SwarmStartResponse,
     SwarmStatusResponse,
 )
+from backend.swarm.template_loader import TemplateLoader
 from backend.swarm.templates import format_goal
 from backend.swarm.templates import list_templates as _list_templates
 
@@ -28,13 +29,15 @@ swarm_store: dict[str, dict] = {}
 # Injected dependencies (set by main.py lifespan)
 _event_bus: Any = None
 _copilot_client: Any = None
+_template_loader: TemplateLoader | None = None
 
 
-def configure(event_bus: Any, copilot_client: Any = None) -> None:
+def configure(event_bus: Any, copilot_client: Any = None, template_loader: TemplateLoader | None = None) -> None:
     """Inject dependencies. Called during app startup."""
-    global _event_bus, _copilot_client
+    global _event_bus, _copilot_client, _template_loader
     _event_bus = event_bus
     _copilot_client = copilot_client
+    _template_loader = template_loader
 
 
 def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> dict:
@@ -54,7 +57,7 @@ def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> dict:
     return state
 
 
-async def _run_swarm(swarm_id: str, goal: str) -> None:
+async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) -> None:
     """Background task: create orchestrator and run the swarm."""
     from backend.swarm.orchestrator import SwarmOrchestrator
 
@@ -62,7 +65,14 @@ async def _run_swarm(swarm_id: str, goal: str) -> None:
         logger.error("EventBus not configured, cannot run swarm")
         return
 
-    orch = SwarmOrchestrator(client=_copilot_client, event_bus=_event_bus)
+    loaded_template = None
+    if template_key and _template_loader:
+        try:
+            loaded_template = _template_loader.load(template_key)
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning("Failed to load template '%s': %s", template_key, e)
+
+    orch = SwarmOrchestrator(client=_copilot_client, event_bus=_event_bus, template=loaded_template)
     swarm_store[swarm_id]["orchestrator"] = orch
 
     try:
@@ -87,7 +97,7 @@ async def start_swarm(request: SwarmStartRequest, background_tasks: BackgroundTa
     _create_swarm_state(swarm_id, goal, request.template)
 
     if _copilot_client is not None:
-        background_tasks.add_task(_run_swarm, swarm_id, goal)
+        background_tasks.add_task(_run_swarm, swarm_id, goal, request.template)
 
     return SwarmStartResponse(swarm_id=swarm_id, status="starting")
 
@@ -124,4 +134,6 @@ async def cancel_swarm(swarm_id: str) -> dict:
 @router.get("/api/templates")
 async def list_templates() -> dict:
     """Return available swarm templates."""
+    if _template_loader:
+        return {"templates": _template_loader.list_available()}
     return {"templates": _list_templates()}
