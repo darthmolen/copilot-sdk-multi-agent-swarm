@@ -1,9 +1,0 @@
-key: deep-research
-name: Deep Research Team
-description: A research team that investigates topics from multiple angles with primary research, skeptical analysis, and data-driven insights
-goal_template: |
-  Assemble a deep research team to: {user_input}
-
-  Create specialists for: primary research and fact-finding, skeptical/contrarian analysis, and quantitative data analysis.
-  All three research tasks can run in parallel since they provide independent perspectives.
-  The leader will synthesize findings from all three perspectives into a final research report.
