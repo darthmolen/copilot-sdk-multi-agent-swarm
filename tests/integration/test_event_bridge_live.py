@@ -16,7 +16,7 @@ from backend.swarm.event_bridge import (
     bridge_sdk_event,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 
 
 # ---------------------------------------------------------------------------

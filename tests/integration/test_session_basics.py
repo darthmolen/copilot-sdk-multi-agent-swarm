@@ -12,7 +12,7 @@ import pytest_asyncio
 from copilot import CopilotClient, CopilotSession, SubprocessConfig
 from copilot.session import PermissionHandler
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 
 
 # ---------------------------------------------------------------------------

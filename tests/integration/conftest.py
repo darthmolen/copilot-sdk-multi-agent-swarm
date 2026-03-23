@@ -1,15 +1,23 @@
 """Shared fixtures for integration tests against a real copilot-cli process."""
 
+import os
+import shutil
+
 import pytest
 import pytest_asyncio
 from pathlib import Path
 
 
-# Mark every test in this directory as integration by default.
-pytestmark = pytest.mark.integration
+# Mark every test in this directory as integration, and share one event loop
+# per module so the module-scoped copilot_client fixture and per-test functions
+# run on the same loop (the SDK's JSON-RPC layer binds to the loop at start).
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.asyncio(loop_scope="module"),
+]
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def copilot_client():
     """Start a real Copilot CLI client backed by a subprocess.
 
@@ -19,7 +27,12 @@ async def copilot_client():
     """
     from copilot import CopilotClient, SubprocessConfig
 
-    client = CopilotClient(SubprocessConfig(use_stdio=True))
+    # Find copilot CLI: explicit env var, PATH lookup, or common locations
+    cli_path = os.environ.get("COPILOT_CLI_PATH") or shutil.which("copilot")
+    if not cli_path:
+        pytest.skip("copilot-cli binary not found in PATH or COPILOT_CLI_PATH")
+
+    client = CopilotClient(SubprocessConfig(cli_path=cli_path, use_stdio=True))
     try:
         await client.start()
     except Exception as exc:
