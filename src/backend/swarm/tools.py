@@ -104,6 +104,16 @@ def create_swarm_tools(
 
         await inbox.send(agent_name, to, message)
 
+        if event_callback is not None:
+            cb_result = event_callback({
+                "event": "inbox.message",
+                "sender": agent_name,
+                "recipient": to,
+                "content": message,
+            })
+            if asyncio.iscoroutine(cb_result):
+                await cb_result
+
         return ToolResult(
             text_result_for_llm=json.dumps({"ok": True, "sent_to": to}),
         )

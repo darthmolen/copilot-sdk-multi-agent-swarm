@@ -325,3 +325,26 @@ async def test_report_tool_handler_captures_report():
     assert result.result_type == "success"
     assert len(holder) == 1
     assert holder[0] == "The final synthesis report."
+
+
+async def test_inbox_send_emits_event_via_callback():
+    """inbox_send tool emits inbox.message event when event_callback is provided."""
+    board = TaskBoard()
+    inbox = InboxSystem()
+    inbox.register_agent("worker_1")
+    inbox.register_agent("worker_2")
+
+    events: list[dict] = []
+    tools = create_swarm_tools("worker_1", board, inbox, event_callback=events.append)
+    tool = _find_tool(tools, "inbox_send")
+
+    invocation = ToolInvocation(arguments={"to": "worker_2", "message": "hello from worker 1"})
+    await tool.handler(invocation)
+
+    # Should have emitted an event with inbox.message data
+    assert len(events) >= 1
+    inbox_events = [e for e in events if e.get("event") == "inbox.message"]
+    assert len(inbox_events) == 1
+    assert inbox_events[0]["sender"] == "worker_1"
+    assert inbox_events[0]["recipient"] == "worker_2"
+    assert inbox_events[0]["content"] == "hello from worker 1"

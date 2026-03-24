@@ -249,7 +249,7 @@ class SwarmOrchestrator:
 
             for (worker_name, task), result in zip(assigned.items(), results):
                 if isinstance(result, Exception):
-                    log.error("agent_task_failed", agent=worker_name, task_id=task.id, error=str(result))
+                    log.warning("agent_task_failed", agent=worker_name, task_id=task.id, error=str(result))
                     current_task = next(
                         (t for t in await self.task_board.get_tasks() if t.id == task.id),
                         None,
@@ -305,6 +305,7 @@ class SwarmOrchestrator:
             data = getattr(response, "data", None)
             report = getattr(data, "content", None) or getattr(response, "content", "") or ""
         except (TimeoutError, asyncio.TimeoutError):
+            log.warning("synthesis_timeout", timeout=synthesis_timeout)
             report = "(Synthesis timed out)"
         except Exception as exc:
             log.error("synthesis_failed", error=str(exc))

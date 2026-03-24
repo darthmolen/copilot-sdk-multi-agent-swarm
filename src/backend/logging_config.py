@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -11,8 +12,10 @@ import structlog
 
 def configure_logging(
     json_file: Path | None = None,
-    level: str = "INFO",
+    level: str | None = None,
 ) -> None:
+    if level is None:
+        level = os.environ.get("LOG_LEVEL", "INFO")
     """Configure structlog for the application.
 
     - Console: colored dev-friendly output

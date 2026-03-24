@@ -341,3 +341,49 @@ async def test_create_session_no_available_tools_when_none(
     assert kwargs is not None
     # Should be None or not present
     assert kwargs.get("available_tools") is None
+
+
+async def test_create_session_wires_event_callback(
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+) -> None:
+    """SwarmAgent passes event_callback to create_swarm_tools, which emits to EventBus."""
+    events: list[tuple[str, dict]] = []
+    event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+    agent = SwarmAgent(
+        name="coder",
+        role="Write code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+    )
+    await agent.create_session(mock_client)
+
+    # The tools should have been created with an event_callback
+    # that emits to the EventBus. We verify by checking that
+    # the tools kwarg was passed (tools are created internally).
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs is not None
+    tools = kwargs.get("tools", [])
+    assert len(tools) == 4  # 4 swarm tools
+
+    # Invoke inbox_send tool — should emit via EventBus
+    from backend.swarm.tools import ToolInvocation
+    inbox.register_agent("coder")
+    inbox.register_agent("target")
+
+    inbox_tool = next(t for t in tools if t.name == "inbox_send")
+    await inbox_tool.handler(ToolInvocation(arguments={"to": "target", "message": "hi"}))
+
+    # emit_sync schedules on the event loop — yield control so it processes
+    await asyncio.sleep(0.05)
+
+    # Check that an event was emitted to the bus
+    inbox_events = [(t, d) for t, d in events if "inbox" in t.lower() or d.get("event") == "inbox.message"]
+    assert len(inbox_events) >= 1, f"Expected inbox event, got events: {[(t, list(d.keys())) for t, d in events]}"

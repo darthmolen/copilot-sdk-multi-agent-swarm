@@ -48,10 +48,17 @@ class SwarmAgent:
 
     async def create_session(self, client: Any) -> None:
         """Create a CopilotSession with custom_agents config."""
+
+        def _tool_event_callback(event_data: dict) -> None:
+            """Forward tool events to EventBus for frontend consumption."""
+            event_name = event_data.get("event", "tool_event")
+            self.event_bus.emit_sync(event_name, event_data)
+
         tools = create_swarm_tools(
             agent_name=self.name,
             task_board=self.task_board,
             inbox=self.inbox,
+            event_callback=_tool_event_callback,
         )
 
         self.session = await client.create_session(

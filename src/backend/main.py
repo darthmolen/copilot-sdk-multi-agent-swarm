@@ -82,6 +82,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 return
 
             swarm_id = data.pop("swarm_id", None)
+            log.info("event_forwarded", event_type=event_type, swarm_id=swarm_id or "broadcast")
+
             if swarm_id:
                 await manager.broadcast(
                     swarm_id, {"type": event_type, "data": data}
