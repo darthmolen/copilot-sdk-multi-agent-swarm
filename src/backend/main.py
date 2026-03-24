@@ -78,7 +78,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 agent = data.get("agent", "unknown")
                 event_obj = data.get("event")
                 sdk_type = getattr(getattr(event_obj, "type", ""), "value", "unknown")
-                log.debug("sdk_event", agent=agent, sdk_type=sdk_type)
+                event_data = getattr(event_obj, "data", None)
+
+                # Extract key fields from SDK event data for observability
+                extra: dict[str, str | None] = {}
+                if event_data:
+                    content = getattr(event_data, "content", None)
+                    if content:
+                        extra["content"] = str(content)[:300]
+                    for field in ("tool_name", "tool_call_id", "error", "message",
+                                  "reasoning_effort", "turn_id", "success"):
+                        val = getattr(event_data, field, None)
+                        if val is not None:
+                            extra[field] = str(val)[:200]
+                    # Permission request details
+                    tool_requests = getattr(event_data, "tool_requests", None)
+                    if tool_requests:
+                        extra["tool_requests"] = str([
+                            getattr(tr, "name", tr) for tr in tool_requests[:5]
+                        ])
+
+                log.debug("sdk_event", agent=agent, sdk_type=sdk_type, **extra)
                 return
 
             swarm_id = data.pop("swarm_id", None)
