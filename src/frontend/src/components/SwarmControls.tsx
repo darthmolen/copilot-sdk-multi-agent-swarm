@@ -3,8 +3,8 @@ import { useState } from 'react';
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 const TEMPLATES = [
-  { value: 'software-development', label: 'Software Development' },
   { value: 'deep-research', label: 'Deep Research' },
+  { value: 'software-development', label: 'Software Development' },
   { value: 'warehouse-optimizer', label: 'Warehouse Optimizer' },
 ];
 
