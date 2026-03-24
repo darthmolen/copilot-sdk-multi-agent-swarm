@@ -23,7 +23,7 @@ function App() {
               {connected ? 'Connected' : 'Disconnected'}
             </span>
             {state.phase && <span className="phase-badge">{state.phase}</span>}
-            {isThinking(state.phase) && (
+            {(isThinking(state.phase) || (connected && !state.phase)) && (
               <span className="thinking-badge">
                 <span className="thinking-icon">🧠</span>
                 <span className="thinking-text">Thinking...</span>
