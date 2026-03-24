@@ -119,9 +119,10 @@ class SwarmAgent:
             raw = getattr(event, "type", "")
             et = getattr(raw, "value", str(raw)).lower()
 
-            if "turn_end" in et:
-                done.set()
-            elif "idle" in et:
+            # Wait for session.idle — NOT turn_end.
+            # turn_end fires after EVERY turn; agents do multiple turns per task.
+            # session.idle fires when the agent is truly done (no more turns).
+            if "idle" in et:
                 done.set()
             elif "session" in et and "error" in et:
                 data = getattr(event, "data", None)

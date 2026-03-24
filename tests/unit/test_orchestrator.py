@@ -105,7 +105,7 @@ class MockToolCallingSession:
         # Fire turn_end
         for h in list(self._handlers):
             h(SessionEvent(
-                type=SessionEventType.ASSISTANT_TURN_END,
+                type=SessionEventType.SESSION_IDLE,
                 data=SessionEventData(turn_id="turn-1"),
             ))
         return "msg-1"
@@ -138,7 +138,7 @@ class MockWorkerSession:
             return "msg-1"
         for h in list(self._handlers):
             h(SessionEvent(
-                type=SessionEventType.ASSISTANT_TURN_END,
+                type=SessionEventType.SESSION_IDLE,
                 data=SessionEventData(turn_id="turn-1"),
             ))
         return "msg-1"

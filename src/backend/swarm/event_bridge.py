@@ -23,6 +23,7 @@ class SessionEventType(str, Enum):
     SUBAGENT_COMPLETED = "subagent.completed"
     SUBAGENT_FAILED = "subagent.failed"
     SESSION_ERROR = "session.error"
+    SESSION_IDLE = "session.idle"
 
 
 @dataclass

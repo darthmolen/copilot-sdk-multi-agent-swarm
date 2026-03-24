@@ -317,7 +317,8 @@ class SwarmOrchestrator:
         except TypeError:
             session = await self.client.create_session()
 
-        # Event-driven: capture text from assistant.message, wait for turn_end/idle
+        # Event-driven: capture text from assistant.message, wait for session.idle
+        # NOT turn_end — agents do multiple turns per task; idle = truly done
         done = asyncio.Event()
         text_content: list[str] = []
 
@@ -325,9 +326,7 @@ class SwarmOrchestrator:
             raw = getattr(event, "type", "")
             et = getattr(raw, "value", str(raw)).lower()
 
-            if "turn_end" in et:
-                done.set()
-            elif "idle" in et:
+            if "idle" in et:
                 done.set()
             elif "session" in et and "error" in et:
                 done.set()

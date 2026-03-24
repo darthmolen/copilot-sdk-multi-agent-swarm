@@ -236,7 +236,7 @@ async def test_execute_task_marks_in_progress(
 
     async def _fire() -> None:
         await asyncio.sleep(0.01)
-        mock_session.fire_event(SessionEvent(type=SessionEventType.ASSISTANT_TURN_END))
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
 
     asyncio.ensure_future(_fire())
     await agent.execute_task(task)
@@ -254,7 +254,7 @@ async def test_execute_task_sends_prompt(
 
     async def _fire() -> None:
         await asyncio.sleep(0.01)
-        mock_session.fire_event(SessionEvent(type=SessionEventType.ASSISTANT_TURN_END))
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
 
     asyncio.ensure_future(_fire())
     await agent.execute_task(task)
@@ -262,7 +262,7 @@ async def test_execute_task_sends_prompt(
     assert "Implement the login page" in mock_session.sent_messages
 
 
-async def test_execute_task_completes_on_turn_end(
+async def test_execute_task_completes_on_session_idle(
     agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
@@ -271,7 +271,7 @@ async def test_execute_task_completes_on_turn_end(
 
     async def _fire() -> None:
         await asyncio.sleep(0.01)
-        mock_session.fire_event(SessionEvent(type=SessionEventType.ASSISTANT_TURN_END))
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
 
     asyncio.ensure_future(_fire())
     await agent.execute_task(task)
@@ -322,7 +322,7 @@ async def test_execute_task_unsubscribes_on_completion(
 
     async def _fire() -> None:
         await asyncio.sleep(0.01)
-        mock_session.fire_event(SessionEvent(type=SessionEventType.ASSISTANT_TURN_END))
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
 
     asyncio.ensure_future(_fire())
     await agent.execute_task(task)
