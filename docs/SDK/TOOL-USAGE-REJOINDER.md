@@ -83,11 +83,45 @@ Based on empirical evidence, `customAgents[n].tools` appears to be:
 
 ---
 
-## Open Questions
+## Research Sub-Agent Findings (Source Code Analysis)
 
-1. Does `availableTools` recognize custom tool names registered via `tools=`? Or only built-in SDK tool names?
-2. Is the lack of enforcement on `customAgents[n].tools` a bug or by design?
-3. Does the Node.js SDK behave differently from the Python SDK?
+A parallel research agent analyzed the SDK source code and docs. Key findings:
+
+1. **No test exists combining both `availableTools` and `customAgents[n].tools`** — the SDK test scenarios test each independently, never together
+2. The docs describe a "cascading" model: `availableTools` gates session, then `agent.tools` further restricts
+3. The proposed formula: `effective = agent.tools ∩ (availableTools ∩ builtInTools)`
+
+### Contradiction: Docs vs. Empirical Reality
+
+The research agent's "cascading" model is **also disproved** by our spikes:
+
+| Scenario | Cascading predicts | Spike shows |
+|----------|-------------------|-------------|
+| session=[grep,web_fetch], agent=[grep] | grep only | grep AND web_fetch |
+| session=None, agent=[grep,view] | grep and view only | ALL tools |
+
+**Conclusion:** The filtering happens server-side in the copilot-cli binary. The client SDKs pass all parameters but the CLI may not enforce `customAgents[n].tools` at all — it may only use it as context for the LLM's system prompt (telling the model what tools it "should" use), not as a hard gate.
+
+This is consistent with what we observe: the model sometimes respects its tool list (when prompted well) and sometimes ignores it (when its coding-agent instincts override).
+
+## Definitive Findings
+
+1. **`availableTools` = hard enforcement** (server-side, proven by spike)
+2. **`customAgents[n].tools` = soft/advisory** (not enforced, proven by spike)
+3. **`tools=` (custom tool registration) = always available** (separate namespace)
+4. **The extension doc's intersection claim is wrong** in practice, even if conceptually intended
+
+## Practical Guidance for Our Swarm
+
+To restrict workers:
+- Use `availableTools` with the exact built-in tool names needed
+- Custom tools (task_update etc.) are always available via `tools=`
+- `customAgents[n].tools` can hint to the model but won't enforce
+
+To give workers full freedom:
+- Don't set `availableTools` (or set it to None)
+- Register swarm tools via `tools=`
+- Rely on system preamble prompt to encourage swarm tool usage
 
 ---
 
