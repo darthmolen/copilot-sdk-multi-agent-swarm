@@ -16,7 +16,7 @@ export function InboxFeed({ messages }: InboxFeedProps) {
     <div className="inbox-feed">
       <h2>Inbox Feed</h2>
       <div className="message-list">
-        {messages.map((msg, idx) => (
+        {messages.filter(msg => msg?.sender).map((msg, idx) => (
           <div key={idx} className="inbox-message">
             <div className="message-header">
               <span className="sender">{msg.sender}</span>

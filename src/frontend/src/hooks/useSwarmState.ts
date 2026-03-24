@@ -65,14 +65,18 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
       };
     }
 
-    case 'inbox.message':
+    case 'inbox.message': {
+      // Handle both shapes: {message: {...}} (nested) and {sender, recipient, content} (flat)
+      const msg = (event.data.message ?? event.data) as SwarmState['messages'][number];
+      if (!msg || !msg.sender) return state;
       return {
         ...state,
         messages: [
           ...state.messages,
-          event.data.message as SwarmState['messages'][number],
+          msg,
         ],
       };
+    }
 
     case 'leader.plan':
       return { ...state, leaderPlan: event.data.content as string };
