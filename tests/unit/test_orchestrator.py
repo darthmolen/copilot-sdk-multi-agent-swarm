@@ -160,14 +160,6 @@ class MockCopilotClient:
         tools: list[Tool] = kwargs.get("tools", []) or []
         tool_names = {t.name for t in tools}
 
-        # Worker sessions: have custom_agents kwarg
-        if "custom_agents" in kwargs:
-            agent_name = kwargs.get("agent", "")
-            fail = agent_name in self._worker_fail_names
-            session = MockWorkerSession(fail=fail)
-            session._tools = tools
-            return session
-
         # Leader plan session: has create_plan tool
         if "create_plan" in tool_names:
             session = MockToolCallingSession(
@@ -177,17 +169,26 @@ class MockCopilotClient:
             session._tools = tools
             return session
 
-        # Synthesis session: no tools (uses send_and_wait)
-        # Falls through to here after leader plan session is already created
-        if not tool_names or "create_plan" not in tool_names:
-            session = MockToolCallingSession(
-                send_and_wait_response=self._synthesis_report,
-            )
+        # Worker session: has task_update tool (but not create_plan)
+        if "task_update" in tool_names:
+            # Identify worker by system_message content
+            sm = kwargs.get("system_message", {})
+            content = sm.get("content", "") if isinstance(sm, dict) else ""
+            # Find worker name from the prompt content
+            worker_name = ""
+            for name in self._worker_fail_names:
+                if name.lower() in content.lower():
+                    worker_name = name
+                    break
+            fail = worker_name in self._worker_fail_names if worker_name else False
+            session = MockWorkerSession(fail=fail)
             session._tools = tools
             return session
 
-        # Fallback: generic tool-calling session
-        session = MockToolCallingSession()
+        # Synthesis session: no swarm tools (uses send_and_wait)
+        session = MockToolCallingSession(
+            send_and_wait_response=self._synthesis_report,
+        )
         session._tools = tools
         return session
 

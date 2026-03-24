@@ -69,7 +69,9 @@ class SlowMockCopilotClient(MockCopilotClient):
         self._worker_delay = worker_delay
 
     async def create_session(self, **kwargs: Any) -> Any:
-        if "custom_agents" in kwargs:
+        tools = kwargs.get("tools", []) or []
+        tool_names = {t.name for t in tools}
+        if "task_update" in tool_names:
             session = SlowMockWorkerSession(delay=self._worker_delay)
             session._tools = kwargs.get("tools", []) or []
             return session

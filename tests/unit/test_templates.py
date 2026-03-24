@@ -84,7 +84,7 @@ def test_software_development_template_has_blocked_by() -> None:
 def test_config_defaults() -> None:
     """SwarmConfig() has the expected default values."""
     cfg = SwarmConfig()
-    assert cfg.model == "claude-sonnet-4-6"
+    assert cfg.model == "gemini-3-pro-preview"
     assert cfg.max_rounds == 3
     assert cfg.timeout == 300.0
     assert cfg.max_workers == 5

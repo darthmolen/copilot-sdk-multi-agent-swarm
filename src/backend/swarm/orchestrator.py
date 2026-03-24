@@ -60,6 +60,7 @@ class SwarmOrchestrator:
         template: LoadedTemplate | None = None,
         system_preamble: str = "",
         system_tools: list[str] | None = None,
+        model: str = "gemini-3-pro-preview",
     ) -> None:
         self.client = client
         self.event_bus = event_bus
@@ -71,6 +72,7 @@ class SwarmOrchestrator:
         self.template = template
         self.system_preamble = system_preamble
         self.system_tools = system_tools or []
+        self.model = model
         self._cancelled = False
 
     # ------------------------------------------------------------------
@@ -207,6 +209,7 @@ class SwarmOrchestrator:
                 prompt_template=agent_prompt_template,
                 system_preamble=system_preamble,
                 system_tools=self.system_tools,
+                model=self.model,
             )
             await agent.create_session(self.client)
             self.agents[name] = agent

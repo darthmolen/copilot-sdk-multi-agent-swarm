@@ -14,6 +14,7 @@ from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.tools import create_swarm_tools
 
 DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_MODEL = "gemini-3-pro-preview"
 
 
 def _approve_all(_: Any) -> bool:
@@ -22,8 +23,12 @@ def _approve_all(_: Any) -> bool:
 
 
 class SwarmAgent:
-    """Agent that wraps a CopilotSession with custom_agents config and
-    event-driven task execution via session.on()."""
+    """Agent that wraps a CopilotSession with system_message mode:replace
+    and event-driven task execution.
+
+    Does NOT use customAgents — empirically proven to suppress custom tool
+    compliance. Uses system_message + tools + available_tools instead.
+    """
 
     def __init__(
         self,
@@ -38,6 +43,7 @@ class SwarmAgent:
         prompt_template: str | None = None,
         system_preamble: str = "",
         system_tools: list[str] | None = None,
+        model: str = DEFAULT_MODEL,
     ) -> None:
         self.name = name
         self.role = role
@@ -50,10 +56,15 @@ class SwarmAgent:
         self.prompt_template = prompt_template
         self.system_preamble = system_preamble
         self.system_tools = system_tools or []
+        self.model = model
         self.session: Any = None  # Set by create_session
 
     async def create_session(self, client: Any) -> None:
-        """Create a CopilotSession with custom_agents config."""
+        """Create a CopilotSession with system_message mode:replace.
+
+        No customAgents — uses direct system_message override for better
+        custom tool compliance (see spike_no_custom_agents.py).
+        """
         from backend.swarm.prompts import assemble_worker_prompt
 
         def _tool_event_callback(event_data: dict) -> None:
@@ -75,43 +86,20 @@ class SwarmAgent:
             template_prompt=self.prompt_template,
         )
 
-        # Merge system tools (always-available) with template tools (per-agent)
-        # null = no restriction (agent sees everything including custom tools)
-        # list = restricted — merge system tools so they're always accessible
+        # Merge system tools with template available_tools for the session whitelist
         if self.available_tools is not None:
-            merged_agent_tools = list(set(self.available_tools + self.system_tools))
+            merged_available = list(set(self.available_tools + self.system_tools))
         else:
-            merged_agent_tools = None  # null = all tools
+            merged_available = None
 
         self.session = await client.create_session(
-            custom_agents=[
-                {
-                    "name": self.name,
-                    "display_name": self.display_name,
-                    "description": self.role,
-                    "prompt": full_prompt,
-                    "tools": merged_agent_tools,
-                    "infer": False,
-                }
-            ],
-            agent=self.name,
-            tools=tools,
-            available_tools=self.available_tools,
-            on_event=self._on_event,
             on_permission_request=_approve_all,
+            model=self.model,
+            system_message={"mode": "replace", "content": full_prompt},
+            tools=tools,
+            available_tools=merged_available,
+            on_event=self._on_event,
         )
-
-        # Explicitly select the agent — required for customAgents[n].tools enforcement.
-        # The `agent=` param in create_session registers but does NOT activate the agent.
-        try:
-            from copilot.generated.rpc import SessionAgentSelectParams  # type: ignore[import-not-found]
-            await self.session.rpc.agent.select(SessionAgentSelectParams(name=self.name))
-        except (ImportError, AttributeError):
-            # Mock sessions or SDK not installed — try dict fallback
-            try:
-                await self.session.rpc.agent.select({"name": self.name})
-            except (AttributeError, TypeError):
-                pass  # Mock without rpc support
 
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""
@@ -120,26 +108,15 @@ class SwarmAgent:
     async def execute_task(
         self, task: Task, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
     ) -> None:
-        """Execute a task using event-driven session interaction.
-
-        1. Mark task IN_PROGRESS
-        2. Subscribe to session events via session.on()
-        3. Send task prompt via session.send()
-        4. Wait for ASSISTANT_TURN_END or SESSION_ERROR
-        5. On timeout: mark task "timeout"
-        6. On error: mark task "failed"
-        7. Always unsubscribe in finally block
-        """
+        """Execute a task using event-driven session interaction."""
         await self.task_board.update_status(task.id, "in_progress")
 
         done: asyncio.Event = asyncio.Event()
         error_holder: list[str] = []
-        text_content: list[str] = []  # Capture assistant text as fallback result
+        text_content: list[str] = []
 
         def _handler(event: Any) -> None:
             raw = getattr(event, "type", "")
-            # Use .value (dot notation like "assistant.turn_end") if available,
-            # otherwise fall back to str() (like "SessionEventType.ASSISTANT_TURN_END")
             et = getattr(raw, "value", str(raw)).lower()
 
             if "turn_end" in et:
