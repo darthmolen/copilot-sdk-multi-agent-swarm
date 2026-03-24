@@ -73,7 +73,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     def _make_ws_forwarder():  # noqa: ANN202
         async def _forward(event_type: str, data: dict) -> None:
             # Skip internal SDK events (contain non-serializable objects)
+            # Log them for backend observability, but don't forward to frontend
             if event_type == "sdk_event":
+                agent = data.get("agent", "unknown")
+                event_obj = data.get("event")
+                sdk_type = getattr(getattr(event_obj, "type", ""), "value", "unknown")
+                log.debug("sdk_event", agent=agent, sdk_type=sdk_type)
                 return
 
             swarm_id = data.pop("swarm_id", None)
