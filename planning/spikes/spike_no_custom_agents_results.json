@@ -1,0 +1,111 @@
+[
+  {
+    "model": "gemini-3-pro-preview",
+    "task_update": 2,
+    "inbox_send": 1,
+    "other": [],
+    "elapsed": 14.2,
+    "error": "",
+    "response": "The available tools are limited to `inbox_receive`. I cannot execute the requested sequence as the tools `task_update` and `inbox_send` are not available to me. I will acknowledge the user's request a"
+  },
+  {
+    "model": "claude-haiku-4.5",
+    "task_update": 1,
+    "inbox_send": 0,
+    "other": [],
+    "elapsed": 12.9,
+    "error": "",
+    "response": "I apologize, but I cannot complete this task as instructed. The required tools (task_update and inbox_send) are not available in my current function set. I only have access to inbox_receive. \n\nTo proc"
+  },
+  {
+    "model": "claude-sonnet-4.6",
+    "task_update": 0,
+    "inbox_send": 0,
+    "other": [],
+    "elapsed": 16.0,
+    "error": "",
+    "response": "I only have access to the **inbox_receive** tool. The tools **task_update** and **inbox_send** are not available in my current toolset, so I'm unable to follow the full sequence as instructed.\n\nHere's"
+  },
+  {
+    "model": "gpt-5-mini",
+    "task_update": 0,
+    "inbox_send": 0,
+    "other": [],
+    "elapsed": 35.1,
+    "error": "",
+    "response": ""
+  },
+  {
+    "model": "gpt-4.1",
+    "task_update": 0,
+    "inbox_send": 0,
+    "other": [
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive",
+      "inbox_receive"
+    ],
+    "elapsed": 35.0,
+    "error": "",
+    "response": ""
+  },
+  {
+    "model": "gpt-5.1",
+    "task_update": 0,
+    "inbox_send": 0,
+    "other": [],
+    "elapsed": 23.1,
+    "error": "",
+    "response": "RAG stands for Retrieval-Augmented Generation. It\u2019s an approach where a model first retrieves relevant information from an external knowledge source (like a database or document store) and then uses t"
+  },
+  {
+    "model": "gpt-5.2",
+    "task_update": 0,
+    "inbox_send": 0,
+    "other": [
+      "inbox_receive",
+      "inbox_receive"
+    ],
+    "elapsed": 30.4,
+    "error": "",
+    "response": "I can\u2019t follow the requested tool-only workflow because the required tools (`task_update` and `inbox_send`) aren\u2019t available in this environment\u2014only `functions.inbox_receive` is defined, and it\u2019s cur"
+  }
+]
