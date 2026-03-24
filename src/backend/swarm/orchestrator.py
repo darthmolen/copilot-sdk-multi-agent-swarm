@@ -288,7 +288,12 @@ class SwarmOrchestrator:
     # ------------------------------------------------------------------
 
     async def _synthesize(self, goal: str) -> str:
-        """Synthesize final report from task results using send_and_wait."""
+        """Synthesize final report using event-driven pattern (no send_and_wait).
+
+        Uses session.send() + session.on() to capture assistant.message text.
+        Waits for turn_end/idle instead of a fixed timeout — the CLI emits
+        session.idle when truly done, so we don't miss late responses.
+        """
         await self.event_bus.emit("swarm.phase_changed", {"phase": "synthesizing"})
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
@@ -307,24 +312,44 @@ class SwarmOrchestrator:
             else "You are a synthesis agent. Provide a comprehensive report."
         )
 
-        # Use send_and_wait for synthesis — simpler than tool-based approach.
-        # The report IS the text response; no need for a submit_report tool.
         try:
             session = await _create_session_with_tools(self.client, synthesis_system, [])
         except TypeError:
             session = await self.client.create_session()
 
+        # Event-driven: capture text from assistant.message, wait for turn_end/idle
+        done = asyncio.Event()
+        text_content: list[str] = []
+
+        def _on_event(event: Any) -> None:
+            raw = getattr(event, "type", "")
+            et = getattr(raw, "value", str(raw)).lower()
+
+            if "turn_end" in et:
+                done.set()
+            elif "idle" in et:
+                done.set()
+            elif "session" in et and "error" in et:
+                done.set()
+            # Capture assistant text
+            if "assistant.message" in et and "delta" not in et:
+                data = getattr(event, "data", None)
+                content = getattr(data, "content", None)
+                if content and str(content).strip():
+                    text_content.append(str(content))
+
+        unsubscribe = session.on(_on_event)
+        timeout = self.config.get("timeout", 300)
+
         try:
-            synthesis_timeout = self.config.get("timeout", 300)
-            response = await session.send_and_wait(synthesis_prompt, timeout=synthesis_timeout)
-            data = getattr(response, "data", None)
-            report = getattr(data, "content", None) or getattr(response, "content", "") or ""
+            await session.send(synthesis_prompt)
+            await asyncio.wait_for(done.wait(), timeout=timeout)
         except (TimeoutError, asyncio.TimeoutError):
-            log.warning("synthesis_timeout", timeout=synthesis_timeout)
-            report = "(Synthesis timed out)"
-        except Exception as exc:
-            log.error("synthesis_failed", error=str(exc))
-            report = f"(Synthesis failed: {exc})"
+            log.warning("synthesis_timeout", timeout=timeout)
+        finally:
+            unsubscribe()
+
+        report = "\n".join(text_content) if text_content else "(Synthesis produced no output)"
 
         await self.event_bus.emit("leader.report", {"content": report})
         await self.event_bus.emit("swarm.phase_changed", {"phase": "complete"})

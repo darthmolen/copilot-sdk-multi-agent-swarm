@@ -94,6 +94,14 @@ class MockToolCallingSession:
                 )
                 await tool.handler(invocation)
 
+        # Fire assistant.message with content (for event-driven text capture)
+        if self._send_and_wait_response:
+            for h in list(self._handlers):
+                h(SessionEvent(
+                    type=SessionEventType.ASSISTANT_MESSAGE,
+                    data=SessionEventData(content=self._send_and_wait_response),
+                ))
+
         # Fire turn_end
         for h in list(self._handlers):
             h(SessionEvent(
@@ -101,11 +109,6 @@ class MockToolCallingSession:
                 data=SessionEventData(turn_id="turn-1"),
             ))
         return "msg-1"
-
-    async def send_and_wait(self, prompt: str, **kwargs: Any) -> MockEvent:
-        """For synthesis — returns text directly."""
-        self.sent_messages.append(prompt)
-        return MockEvent(content=self._send_and_wait_response)
 
 
 class MockWorkerSession:
@@ -355,8 +358,8 @@ class TestExecute:
 
 
 class TestSynthesize:
-    async def test_synthesize_returns_report_from_tool(self, event_bus: EventBus) -> None:
-        """Leader calls submit_report tool → report text captured."""
+    async def test_synthesize_returns_report_via_event_driven(self, event_bus: EventBus) -> None:
+        """Synthesis uses event-driven pattern — captures assistant.message text."""
         orch = make_orchestrator(event_bus, synthesis_report="The final synthesis report")
 
         await orch.task_board.add_task(
@@ -367,6 +370,21 @@ class TestSynthesize:
 
         report = await orch._synthesize("Build something great")
         assert report == "The final synthesis report"
+
+    async def test_synthesize_does_not_use_send_and_wait(self, event_bus: EventBus) -> None:
+        """Synthesis must NOT use send_and_wait (it times out). Uses send() + on() instead."""
+        orch = make_orchestrator(event_bus, synthesis_report="Report text")
+
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        # The mock's send_and_wait was removed — if synthesis tries to call it,
+        # it will raise AttributeError. This test verifies synthesis uses send() only.
+        report = await orch._synthesize("goal")
+        assert len(report) > 0
 
 
 class TestGranularEvents:
@@ -576,31 +594,30 @@ class TestLogging:
             raise structlog.DropEvent
 
         # Create orchestrator with very short timeout
-        orch = make_orchestrator(event_bus, synthesis_report="report", config={"max_rounds": 3, "timeout": 0.001})
+        orch = make_orchestrator(event_bus, synthesis_report="", config={"max_rounds": 3, "timeout": 0.05})
         await orch.task_board.add_task(id="t-0", subject="R", description="D", worker_role="A", worker_name="a")
         await orch.task_board.update_status("t-0", "completed", "done")
 
-        # Mock send_and_wait to always timeout
-        async def _timeout_send_and_wait(prompt: str, **kwargs: Any) -> None:
-            raise TimeoutError("Timeout after 0.001s")
-
-        # Patch the session creation to return a session that times out
+        # Patch session creation to return a session that never fires turn_end
         original_create = orch.client.create_session
 
-        async def _timeout_session(**kwargs: Any) -> Any:
-            session = await original_create(**kwargs)
-            session.send_and_wait = _timeout_send_and_wait  # type: ignore[attr-defined]
-            return session
+        async def _hanging_session(**kwargs: Any) -> Any:
+            """Session whose send() never fires events — simulates a hung agent."""
 
-        orch.client.create_session = _timeout_session  # type: ignore[attr-defined]
+            class HangingSession:
+                def on(self, handler: Any) -> Any:
+                    return lambda: None  # no-op unsubscribe
+
+                async def send(self, prompt: str, **kw: Any) -> str:
+                    return "msg-1"  # returns immediately but fires no events
+
+            return HangingSession()
+
+        orch.client.create_session = _hanging_session  # type: ignore[attr-defined]
 
         report = await orch._synthesize("goal")
-        assert "timed out" in report.lower()
-
-        # The orchestrator should have logged the timeout at WARNING level
-        # We can't easily capture structlog output in tests, so we verify
-        # the behavior: the report contains the timeout message
-        # The actual log assertion would require a structlog test processor
+        # Synthesis should complete with no output (timeout, not crash)
+        assert report == "(Synthesis produced no output)"
 
     async def test_agent_failure_logs_warning_not_error(self, event_bus: EventBus) -> None:
         """Agent task failures should log at WARNING, not ERROR (they're expected workflow)."""
