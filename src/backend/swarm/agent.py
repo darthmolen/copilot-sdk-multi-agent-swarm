@@ -17,9 +17,13 @@ DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_MODEL = "gemini-3-pro-preview"
 
 
-def _approve_all(_: Any) -> bool:
+def _approve_all(*_args: Any, **_kwargs: Any) -> Any:
     """Auto-approve every permission request from the SDK."""
-    return True
+    try:
+        from copilot.session import PermissionRequestResult  # type: ignore[import-not-found]
+        return PermissionRequestResult(kind="approved")
+    except ImportError:
+        return True  # Mock fallback
 
 
 class SwarmAgent:
