@@ -141,6 +141,8 @@ class SwarmOrchestrator:
         plan = plan_holder[0]
 
         # Create tasks on the board
+        await self.event_bus.emit("swarm.phase_changed", {"phase": "planning"})
+
         tasks_data = plan.get("tasks", [])
         task_ids: list[str] = [f"task-{idx}" for idx in range(len(tasks_data))]
 
@@ -156,7 +158,6 @@ class SwarmOrchestrator:
             )
             await self.event_bus.emit("task.created", {"task": task.to_dict()})
 
-        await self.event_bus.emit("swarm.phase_changed", {"phase": "planning"})
         await self.event_bus.emit("swarm.plan_complete", {"task_count": len(tasks_data)})
         return plan
 

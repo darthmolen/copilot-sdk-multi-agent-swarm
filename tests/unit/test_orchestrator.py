@@ -368,6 +368,136 @@ class TestSynthesize:
         assert report == "The final synthesis report"
 
 
+class TestGranularEvents:
+    """Verify the orchestrator emits granular events for the frontend."""
+
+    async def test_plan_emits_task_created_events(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        await orch._plan("Build something")
+
+        task_created = [(t, d) for t, d in events if t == "task.created"]
+        assert len(task_created) == 2, f"Expected 2 task.created, got {len(task_created)}"
+
+        # Verify task data shape
+        assert task_created[0][1]["task"]["id"] == "task-0"
+        assert task_created[0][1]["task"]["subject"] == "Task 1"
+        assert task_created[1][1]["task"]["id"] == "task-1"
+        assert task_created[1][1]["task"]["worker_name"] == "writer"
+
+    async def test_plan_emits_phase_changed_planning(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        await orch._plan("Build something")
+
+        phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
+        phases = [d["phase"] for _, d in phase_events]
+        assert "planning" in phases
+
+    async def test_spawn_emits_agent_spawned_events(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        await orch._spawn(VALID_PLAN)
+
+        spawned = [(t, d) for t, d in events if t == "agent.spawned"]
+        assert len(spawned) == 2, f"Expected 2 agent.spawned, got {len(spawned)}"
+
+        agent_names = {d["agent"]["name"] for _, d in spawned}
+        assert agent_names == {"analyst", "writer"}
+
+        # Verify agent data shape
+        for _, d in spawned:
+            agent = d["agent"]
+            assert "name" in agent
+            assert "role" in agent
+            assert "display_name" in agent
+            assert agent["status"] == "idle"
+            assert agent["tasks_completed"] == 0
+
+    async def test_spawn_emits_phase_changed_spawning(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        await orch._spawn(VALID_PLAN)
+
+        phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
+        phases = [d["phase"] for _, d in phase_events]
+        assert "spawning" in phases
+
+    async def test_execute_emits_task_updated_events(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+
+        updated = [(t, d) for t, d in events if t == "task.updated"]
+        assert len(updated) >= 2, f"Expected at least 2 task.updated, got {len(updated)}"
+
+        # Verify task data shape
+        for _, d in updated:
+            assert "task" in d
+            assert "id" in d["task"]
+            assert "status" in d["task"]
+
+    async def test_execute_emits_phase_changed_executing(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+
+        phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
+        phases = [d["phase"] for _, d in phase_events]
+        assert "executing" in phases
+
+    async def test_synthesize_emits_leader_report(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, synthesis_report="The great report")
+        await orch.task_board.add_task(
+            id="task-0", subject="Research", description="Do research",
+            worker_role="Analyst", worker_name="analyst",
+        )
+        await orch.task_board.update_status("task-0", "completed", "findings")
+
+        await orch._synthesize("Build something")
+
+        report_events = [(t, d) for t, d in events if t == "leader.report"]
+        assert len(report_events) == 1
+        assert report_events[0][1]["content"] == "The great report"
+
+    async def test_synthesize_emits_phase_changed_synthesizing_and_complete(self, event_bus: EventBus) -> None:
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, synthesis_report="report")
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        await orch._synthesize("goal")
+
+        phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
+        phases = [d["phase"] for _, d in phase_events]
+        assert "synthesizing" in phases
+        assert "complete" in phases
+
+
 class TestFullLifecycle:
     async def test_full_run_lifecycle(self, event_bus: EventBus) -> None:
         events_received: list[tuple[str, dict]] = []
@@ -395,7 +525,36 @@ class TestFullLifecycle:
         assert len(orch.agents) == 2
 
         event_types = [e[0] for e in events_received]
+        # Aggregate events (original)
         assert "swarm.plan_complete" in event_types
         assert "swarm.spawn_complete" in event_types
         assert "swarm.round_start" in event_types
         assert "swarm.synthesis_complete" in event_types
+        # Granular events (new)
+        assert "task.created" in event_types
+        assert "agent.spawned" in event_types
+        assert "task.updated" in event_types
+        assert "leader.report" in event_types
+        assert "swarm.phase_changed" in event_types
+
+    async def test_full_lifecycle_event_order(self, event_bus: EventBus) -> None:
+        """Verify events appear in the correct lifecycle order."""
+        events_received: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events_received.append((t, d)))
+
+        orch = make_orchestrator(event_bus, synthesis_report="Final report")
+        await orch.run("Build something")
+
+        event_types = [e[0] for e in events_received]
+
+        # Verify ordering: planning events before spawning before executing before synthesis
+        plan_idx = event_types.index("swarm.phase_changed")  # first phase_changed = planning
+        task_created_idx = event_types.index("task.created")
+        spawn_idx = event_types.index("agent.spawned")
+        round_idx = event_types.index("swarm.round_start")
+        report_idx = event_types.index("leader.report")
+
+        assert plan_idx < task_created_idx, "phase_changed should come before task.created"
+        assert task_created_idx < spawn_idx, "task.created should come before agent.spawned"
+        assert spawn_idx < round_idx, "agent.spawned should come before round_start"
+        assert round_idx < report_idx, "round_start should come before leader.report"
