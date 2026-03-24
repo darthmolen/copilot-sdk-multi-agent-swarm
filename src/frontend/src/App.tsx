@@ -44,11 +44,13 @@ function App() {
       </header>
 
       <div className="controls-row">
-        {state.leaderReport && (
-          <button className="report-button" onClick={() => setShowReport(true)}>
-            📄 Report
-          </button>
-        )}
+        <button
+          className={`report-button ${state.leaderReport ? 'active' : 'disabled'}`}
+          onClick={() => state.leaderReport && setShowReport(true)}
+          disabled={!state.leaderReport}
+        >
+          📄 Report
+        </button>
         <SwarmControls onStart={setSwarmId} />
       </div>
 
