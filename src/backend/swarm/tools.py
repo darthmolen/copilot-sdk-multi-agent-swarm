@@ -52,6 +52,29 @@ class Tool:
 
 
 # ---------------------------------------------------------------------------
+# Pydantic schemas for swarm tool parameters (valid JSON Schema for CLI)
+# ---------------------------------------------------------------------------
+
+
+class TaskUpdateParams(BaseModel):
+    """Parameters for the task_update tool."""
+    task_id: str = Field(description="ID of the task to update")
+    status: str = Field(description="New status: in_progress, completed, or failed")
+    result: str = Field(default="", description="Task result or output text")
+
+
+class InboxSendParams(BaseModel):
+    """Parameters for the inbox_send tool."""
+    to: str = Field(description="Name of the recipient agent or 'leader'")
+    message: str = Field(description="Message content to send")
+
+
+class TaskListParams(BaseModel):
+    """Parameters for the task_list tool."""
+    owner: str | None = Field(default=None, description="Filter tasks by owner name (optional)")
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -157,39 +180,30 @@ def create_swarm_tools(
     return [
         Tool(
             name="task_update",
-            description="Update the status of a task on the task board.",
+            description="Update the status of a task on the task board. Call with status='in_progress' before work, then status='completed' with your result when done.",
             handler=_task_update,
-            parameters={
-                "task_id": {"type": "string", "required": True},
-                "status": {"type": "string", "required": True},
-                "result": {"type": "string", "required": False},
-            },
+            parameters=TaskUpdateParams.model_json_schema(),
             skip_permission=True,
         ),
         Tool(
             name="inbox_send",
-            description="Send a message to another agent's inbox.",
+            description="Send a message to another agent or the leader. Use to='leader' to notify the team lead.",
             handler=_inbox_send,
-            parameters={
-                "to": {"type": "string", "required": True},
-                "message": {"type": "string", "required": True},
-            },
+            parameters=InboxSendParams.model_json_schema(),
             skip_permission=True,
         ),
         Tool(
             name="inbox_receive",
-            description="Receive and clear all messages from your inbox.",
+            description="Receive and clear all messages from your inbox. Returns a list of messages with sender, content, and timestamp.",
             handler=_inbox_receive,
             parameters=None,
             skip_permission=True,
         ),
         Tool(
             name="task_list",
-            description="List tasks on the task board, optionally filtered by owner.",
+            description="List all tasks on the task board. Optionally filter by owner name.",
             handler=_task_list,
-            parameters={
-                "owner": {"type": "string", "required": False},
-            },
+            parameters=TaskListParams.model_json_schema(),
             skip_permission=True,
         ),
     ]

@@ -61,6 +61,27 @@ async def test_create_swarm_tools_returns_4_tools():
 
 
 @pytest.mark.asyncio
+async def test_swarm_tool_parameters_are_json_schema():
+    """All swarm tools with parameters must use valid JSON Schema format (from Pydantic)."""
+    board = TaskBoard()
+    inbox = InboxSystem()
+    tools = create_swarm_tools("worker_1", board, inbox)
+
+    for tool in tools:
+        if tool.parameters is None:
+            continue  # inbox_receive has no params — OK
+        schema = tool.parameters
+        # Must be a JSON Schema object with "properties" and "type"
+        assert "properties" in schema, f"{tool.name}: missing 'properties' in schema: {schema}"
+        assert schema.get("type") == "object", f"{tool.name}: schema type must be 'object', got {schema.get('type')}"
+        # "required" should be a list at the top level, not per-property
+        for prop_name, prop_def in schema["properties"].items():
+            assert "required" not in prop_def, (
+                f"{tool.name}.{prop_name}: 'required' must be at schema top level, not per-property"
+            )
+
+
+@pytest.mark.asyncio
 async def test_task_update_mutates_real_taskboard():
     """task_update tool actually changes the task status on the real board."""
     board = TaskBoard()
