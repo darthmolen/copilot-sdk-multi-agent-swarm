@@ -39,6 +39,9 @@ class ToolResult:
     text_result_for_llm: str = ""
     result_type: str = "success"
     error: str | None = None
+    binary_results_for_llm: list[Any] | None = None
+    session_log: str | None = None
+    tool_telemetry: dict[str, Any] | None = None
 
 
 @dataclass
