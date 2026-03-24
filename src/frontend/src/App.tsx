@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSwarmState, isThinking } from './hooks/useSwarmState';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SwarmControls } from './components/SwarmControls';
@@ -12,6 +12,14 @@ function App() {
   const { state, dispatch } = useSwarmState();
   const [swarmId, setSwarmId] = useState<string | null>(null);
   const { connected } = useWebSocket(swarmId, dispatch);
+  const [showReport, setShowReport] = useState(false);
+
+  // Auto-pop modal when synthesis report arrives
+  useEffect(() => {
+    if (state.leaderReport && state.leaderReport.length > 50) {
+      setShowReport(true);
+    }
+  }, [state.leaderReport]);
 
   return (
     <div className="app">
@@ -34,13 +42,40 @@ function App() {
         )}
         {state.error && <p className="error-banner">{state.error}</p>}
       </header>
-      <SwarmControls onStart={setSwarmId} />
-      <div className="dashboard">
-        <ChatPanel plan={state.leaderPlan} report={state.leaderReport} />
-        <TaskBoard tasks={state.tasks} />
-        <AgentRoster agents={state.agents} outputs={state.agentOutputs} />
-        <InboxFeed messages={state.messages} />
+
+      <div className="controls-row">
+        {state.leaderReport && (
+          <button className="report-button" onClick={() => setShowReport(true)}>
+            📄 Report
+          </button>
+        )}
+        <SwarmControls onStart={setSwarmId} />
       </div>
+
+      <div className="dashboard-new">
+        <div className="top-row">
+          <AgentRoster agents={state.agents} outputs={state.agentOutputs} />
+          <InboxFeed messages={state.messages} />
+        </div>
+        <div className="bottom-row">
+          <TaskBoard tasks={state.tasks} />
+        </div>
+      </div>
+
+      {/* Report Modal */}
+      {showReport && (
+        <div className="modal-overlay" onClick={() => setShowReport(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Synthesis Report</h2>
+              <button className="modal-close" onClick={() => setShowReport(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <ChatPanel plan={state.leaderPlan} report={state.leaderReport} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
