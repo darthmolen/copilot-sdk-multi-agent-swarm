@@ -37,6 +37,7 @@ class SwarmAgent:
         available_tools: list[str] | None = None,
         prompt_template: str | None = None,
         system_preamble: str = "",
+        system_tools: list[str] | None = None,
     ) -> None:
         self.name = name
         self.role = role
@@ -48,6 +49,7 @@ class SwarmAgent:
         self.available_tools = available_tools
         self.prompt_template = prompt_template
         self.system_preamble = system_preamble
+        self.system_tools = system_tools or []
         self.session: Any = None  # Set by create_session
 
     async def create_session(self, client: Any) -> None:
@@ -73,6 +75,14 @@ class SwarmAgent:
             template_prompt=self.prompt_template,
         )
 
+        # Merge system tools (always-available) with template tools (per-agent)
+        # null = no restriction (agent sees everything including custom tools)
+        # list = restricted — merge system tools so they're always accessible
+        if self.available_tools is not None:
+            merged_agent_tools = list(set(self.available_tools + self.system_tools))
+        else:
+            merged_agent_tools = None  # null = all tools
+
         self.session = await client.create_session(
             custom_agents=[
                 {
@@ -80,7 +90,7 @@ class SwarmAgent:
                     "display_name": self.display_name,
                     "description": self.role,
                     "prompt": full_prompt,
-                    "tools": None,
+                    "tools": merged_agent_tools,
                     "infer": False,
                 }
             ],

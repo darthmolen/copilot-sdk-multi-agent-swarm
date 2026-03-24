@@ -479,3 +479,67 @@ async def test_create_session_selects_agent(
 
     # Agent should have been selected after session creation
     assert mock_session.rpc.agent.selected_agent == "coder"
+
+
+# ---------------------------------------------------------------------------
+# system_tools merge tests
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_tools_merges_system_tools_when_restricted(
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+) -> None:
+    """When template specifies tools (restricted), system_tools are merged in."""
+    agent = SwarmAgent(
+        name="coder",
+        role="Write code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        available_tools=["bash", "grep"],  # template's built-in whitelist
+        system_tools=["task_update", "inbox_send", "inbox_receive", "task_list"],
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    agent_tools = kwargs["custom_agents"][0]["tools"]
+    # Should have BOTH template tools AND system tools
+    assert "bash" in agent_tools
+    assert "grep" in agent_tools
+    assert "task_update" in agent_tools
+    assert "inbox_send" in agent_tools
+    assert "inbox_receive" in agent_tools
+    assert "task_list" in agent_tools
+
+
+async def test_agent_tools_stays_null_when_unrestricted(
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+) -> None:
+    """When template tools is null (no restriction), agent.tools stays null."""
+    agent = SwarmAgent(
+        name="coder",
+        role="Write code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        available_tools=None,  # null = no restriction
+        system_tools=["task_update", "inbox_send", "inbox_receive", "task_list"],
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    agent_tools = kwargs["custom_agents"][0]["tools"]
+    # null means "all tools" — don't merge, keep null
+    assert agent_tools is None

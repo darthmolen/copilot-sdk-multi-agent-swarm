@@ -8,7 +8,7 @@ The system follows a four-phase lifecycle: **Plan** (leader decomposes the goal 
 
 An `EventBus` decouples all components. SDK session events are mapped through an `EventBridge` to WebSocket messages, enabling real-time frontend updates without polling.
 
-For a detailed architecture diagram and component descriptions, see [docs/Architecture.md](docs/Architecture.md).
+For a detailed architecture diagram and component descriptions, see [documentation/Architecture.md](documentation/Architecture.md).
 
 ## Key Features
 
@@ -80,7 +80,7 @@ copilot-sdk-multi-agent-swarm/
     test_templates.py
     test_api.py
     test_cancellation.py
-  docs/
+  documentation/
     Architecture.md
     Communication.md
 ```
@@ -154,5 +154,5 @@ npm test
 
 ## Documentation
 
-- [Architecture](docs/Architecture.md) -- system design, component interactions, and data flow
-- [Communication](docs/Communication.md) -- event taxonomy, WebSocket protocol, and inter-agent messaging
+- [Architecture](documentation/Architecture.md) -- system design, component interactions, and data flow
+- [Communication](documentation/Communication.md) -- event taxonomy, WebSocket protocol, and inter-agent messaging

@@ -59,6 +59,7 @@ class SwarmOrchestrator:
         config: dict[str, Any] | None = None,
         template: LoadedTemplate | None = None,
         system_preamble: str = "",
+        system_tools: list[str] | None = None,
     ) -> None:
         self.client = client
         self.event_bus = event_bus
@@ -69,6 +70,7 @@ class SwarmOrchestrator:
         self.config = config or {"max_rounds": 3, "timeout": 300}
         self.template = template
         self.system_preamble = system_preamble
+        self.system_tools = system_tools or []
         self._cancelled = False
 
     # ------------------------------------------------------------------
@@ -204,6 +206,7 @@ class SwarmOrchestrator:
                 available_tools=agent_available_tools,
                 prompt_template=agent_prompt_template,
                 system_preamble=system_preamble,
+                system_tools=self.system_tools,
             )
             await agent.create_session(self.client)
             self.agents[name] = agent
