@@ -67,3 +67,35 @@ Synthesize these results into a comprehensive final report that addresses the or
 
 You MUST call the submit_report tool with your complete report. Provide a clear, well-structured report combining all worker outputs.
 """
+
+
+def assemble_worker_prompt(
+    system_preamble: str,
+    display_name: str,
+    role: str,
+    template_prompt: str | None = None,
+) -> str:
+    """Assemble a worker's full prompt from system preamble + template + context.
+
+    Three layers:
+    1. System preamble (tool mandates, coordination protocol) — from system-prompt.md
+    2. Template prompt (domain expertise) — from worker YAML body, with {display_name}/{role} expanded
+    3. Fallback: generic role description if no template
+
+    The system preamble is NOT in user-editable templates — it's a system concern.
+    """
+    parts: list[str] = []
+
+    if system_preamble:
+        parts.append(system_preamble)
+
+    if template_prompt:
+        try:
+            expanded = template_prompt.format(display_name=display_name, role=role)
+        except KeyError:
+            expanded = template_prompt  # template doesn't use placeholders
+        parts.append(expanded)
+    else:
+        parts.append(f"You are {display_name}, a specialist in {role}.")
+
+    return "\n\n".join(parts)

@@ -35,6 +35,17 @@ class TemplateLoader:
     def __init__(self, templates_dir: str | Path) -> None:
         self.templates_dir = Path(templates_dir)
 
+        # Load system preamble (shared across all templates)
+        # Uses same frontmatter pattern as agent files — body is the prompt
+        system_prompt_path = self.templates_dir / "system-prompt.md"
+        if system_prompt_path.exists():
+            meta, body = self.parse_frontmatter(system_prompt_path.read_text())
+            self.system_preamble: str = body
+            self.system_tools: list[str] = meta.get("tools", []) or []
+        else:
+            self.system_preamble = ""
+            self.system_tools = []
+
     def load(self, template_key: str) -> LoadedTemplate:
         """Load a template by key from its directory."""
         template_dir = self.templates_dir / template_key

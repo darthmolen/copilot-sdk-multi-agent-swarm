@@ -73,7 +73,11 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         except (FileNotFoundError, ValueError) as e:
             log.warning("template_load_failed", template=template_key, error=str(e))
 
-    orch = SwarmOrchestrator(client=_copilot_client, event_bus=_event_bus, template=loaded_template)
+    system_preamble = _template_loader.system_preamble if _template_loader else ""
+    orch = SwarmOrchestrator(
+        client=_copilot_client, event_bus=_event_bus,
+        template=loaded_template, system_preamble=system_preamble,
+    )
     swarm_store[swarm_id]["orchestrator"] = orch
 
     try:

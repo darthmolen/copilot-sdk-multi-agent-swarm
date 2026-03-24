@@ -58,6 +58,7 @@ class SwarmOrchestrator:
         event_bus: EventBus,
         config: dict[str, Any] | None = None,
         template: LoadedTemplate | None = None,
+        system_preamble: str = "",
     ) -> None:
         self.client = client
         self.event_bus = event_bus
@@ -67,6 +68,7 @@ class SwarmOrchestrator:
         self.agents: dict[str, SwarmAgent] = {}
         self.config = config or {"max_rounds": 3, "timeout": 300}
         self.template = template
+        self.system_preamble = system_preamble
         self._cancelled = False
 
     # ------------------------------------------------------------------
@@ -179,12 +181,17 @@ class SwarmOrchestrator:
 
             # Use template-specific agent config if available
             agent_available_tools: list[str] | None = None
+            agent_prompt_template: str | None = None
+            system_preamble = ""
             if self.template:
                 agent_def = next((a for a in self.template.agents if a.name == name), None)
                 if agent_def:
                     display_name = agent_def.display_name
                     role = agent_def.description or role
-                    agent_available_tools = agent_def.tools  # None = all, list = whitelist
+                    agent_available_tools = agent_def.tools  # None = all, list = built-in whitelist
+                    agent_prompt_template = agent_def.prompt_template
+
+            system_preamble = self.system_preamble
 
             agent = SwarmAgent(
                 name=name,
@@ -195,6 +202,8 @@ class SwarmOrchestrator:
                 registry=self.registry,
                 event_bus=self.event_bus,
                 available_tools=agent_available_tools,
+                prompt_template=agent_prompt_template,
+                system_preamble=system_preamble,
             )
             await agent.create_session(self.client)
             self.agents[name] = agent

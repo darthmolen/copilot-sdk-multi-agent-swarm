@@ -387,3 +387,65 @@ async def test_create_session_wires_event_callback(
     # Check that an event was emitted to the bus
     inbox_events = [(t, d) for t, d in events if "inbox" in t.lower() or d.get("event") == "inbox.message"]
     assert len(inbox_events) >= 1, f"Expected inbox event, got events: {[(t, list(d.keys())) for t, d in events]}"
+
+
+async def test_create_session_uses_assembled_prompt(
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+) -> None:
+    """SwarmAgent uses assemble_worker_prompt with system preamble + template."""
+    agent = SwarmAgent(
+        name="researcher",
+        role="Primary Researcher",
+        display_name="Dr. Smith",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        prompt_template="You are an expert in {role}.\n\nDo literature review.",
+        system_preamble="## Protocol\nYou MUST call task_update.",
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs is not None
+    prompt = kwargs["custom_agents"][0]["prompt"]
+
+    # System preamble present
+    assert "task_update" in prompt
+    assert "Protocol" in prompt
+    # Template content present (with substitution)
+    assert "literature review" in prompt
+    assert "Primary Researcher" in prompt
+    # Preamble comes first
+    assert prompt.index("Protocol") < prompt.index("literature review")
+
+
+async def test_create_session_fallback_without_template(
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+) -> None:
+    """Without template, agent gets preamble + generic role description."""
+    agent = SwarmAgent(
+        name="coder",
+        role="Write Python code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        system_preamble="## Protocol\nMandatory tools.",
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    prompt = kwargs["custom_agents"][0]["prompt"]
+    assert "Mandatory tools" in prompt
+    assert "Coder" in prompt
+    assert "Write Python code" in prompt

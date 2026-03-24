@@ -52,19 +52,6 @@ You have access to the following coordination tools:
 - **inbox_receive** — Check for messages from other agents, especially the implementer's completion notice
 - **task_list** — View all tasks and their current statuses
 
-## MANDATORY — You MUST Call These Tools
-
-**These tool calls are NOT optional. You MUST execute ALL of them.**
-
-1. **FIRST**: Call `task_update` with status `in_progress` before doing ANY work
-2. **DURING**: Do your work and produce your output as text
-3. **COMPLETE**: Call `task_update` with status `completed` and include your FULL output/findings as the `result` parameter. This is how your work gets captured — if you skip this, your work is lost.
-4. **NOTIFY**: Call `inbox_send` with `to: "leader"` and a summary of what you accomplished. This is mandatory — the team depends on inter-agent communication.
-5. **CHECK**: Call `inbox_receive` to see if other agents sent you relevant information.
-
-**If you do not call task_update with your result, your work will not be recorded.**
-**If you do not call inbox_send, the team cannot coordinate.**
-
 ## Standard Workflow
 
 1. Call **task_list** to see your assigned tasks and check if the implementation task is completed

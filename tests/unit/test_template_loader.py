@@ -259,3 +259,40 @@ class TestLoadAllAndListAvailable:
         assert len(summaries) == 2
         assert summaries[0] == {"key": "tpl-x", "name": "X", "description": "Desc X"}
         assert summaries[1] == {"key": "tpl-y", "name": "Y", "description": "Desc Y"}
+
+
+# ---------------------------------------------------------------------------
+# System preamble tests
+# ---------------------------------------------------------------------------
+
+
+class TestSystemPreamble:
+    def test_loader_reads_system_prompt_file(self, tmp_path: Path) -> None:
+        """TemplateLoader reads system-prompt.md from the templates directory."""
+        (tmp_path / "system-prompt.md").write_text("You MUST call task_update and inbox_send")
+        loader = TemplateLoader(tmp_path)
+        assert "task_update" in loader.system_preamble
+        assert "inbox_send" in loader.system_preamble
+
+    def test_loader_falls_back_when_no_system_prompt(self, tmp_path: Path) -> None:
+        """If system-prompt.md doesn't exist, system_preamble is empty string."""
+        loader = TemplateLoader(tmp_path)
+        assert loader.system_preamble == ""
+
+    def test_real_system_prompt_contains_mandatory_tools(self) -> None:
+        """The actual src/templates/system-prompt.md contains coordination tools."""
+        loader = TemplateLoader(Path("src/templates"))
+        assert "task_update" in loader.system_preamble
+        assert "inbox_send" in loader.system_preamble
+        assert "inbox_receive" in loader.system_preamble
+        assert "task_list" in loader.system_preamble
+
+    def test_system_tools_loaded_from_frontmatter(self) -> None:
+        """system_tools list is read from system-prompt.md frontmatter."""
+        loader = TemplateLoader(Path("src/templates"))
+        assert loader.system_tools == ["task_update", "inbox_send", "inbox_receive", "task_list"]
+
+    def test_system_tools_empty_when_no_file(self, tmp_path: Path) -> None:
+        """system_tools is empty list when no system-prompt.md."""
+        loader = TemplateLoader(tmp_path)
+        assert loader.system_tools == []

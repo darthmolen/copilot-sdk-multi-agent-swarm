@@ -35,6 +35,8 @@ class SwarmAgent:
         registry: TeamRegistry,
         event_bus: EventBus,
         available_tools: list[str] | None = None,
+        prompt_template: str | None = None,
+        system_preamble: str = "",
     ) -> None:
         self.name = name
         self.role = role
@@ -44,10 +46,13 @@ class SwarmAgent:
         self.registry = registry
         self.event_bus = event_bus
         self.available_tools = available_tools
+        self.prompt_template = prompt_template
+        self.system_preamble = system_preamble
         self.session: Any = None  # Set by create_session
 
     async def create_session(self, client: Any) -> None:
         """Create a CopilotSession with custom_agents config."""
+        from backend.swarm.prompts import assemble_worker_prompt
 
         def _tool_event_callback(event_data: dict) -> None:
             """Forward tool events to EventBus for frontend consumption."""
@@ -61,13 +66,20 @@ class SwarmAgent:
             event_callback=_tool_event_callback,
         )
 
+        full_prompt = assemble_worker_prompt(
+            system_preamble=self.system_preamble,
+            display_name=self.display_name,
+            role=self.role,
+            template_prompt=self.prompt_template,
+        )
+
         self.session = await client.create_session(
             custom_agents=[
                 {
                     "name": self.name,
                     "display_name": self.display_name,
                     "description": self.role,
-                    "prompt": self.role,
+                    "prompt": full_prompt,
                     "tools": None,
                     "infer": False,
                 }
