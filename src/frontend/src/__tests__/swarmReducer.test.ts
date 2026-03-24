@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { swarmReducer, initialState } from '../hooks/useSwarmState';
+import { swarmReducer, initialState, isThinking } from '../hooks/useSwarmState';
 import type { SwarmState, SwarmEvent, Task, AgentInfo, InboxMessage } from '../types/swarm';
 
 describe('swarmReducer', () => {
@@ -154,5 +154,31 @@ describe('swarmReducer', () => {
     const event: SwarmEvent = { type: 'unknown.event', data: { foo: 'bar' } };
     const result = swarmReducer(initialState, event);
     expect(result).toBe(initialState);
+  });
+});
+
+describe('isThinking', () => {
+  it('is true when phase is planning', () => {
+    expect(isThinking('planning')).toBe(true);
+  });
+
+  it('is true when phase is executing', () => {
+    expect(isThinking('executing')).toBe(true);
+  });
+
+  it('is true when phase is synthesizing', () => {
+    expect(isThinking('synthesizing')).toBe(true);
+  });
+
+  it('is false when phase is complete', () => {
+    expect(isThinking('complete')).toBe(false);
+  });
+
+  it('is false when phase is null', () => {
+    expect(isThinking(null)).toBe(false);
+  });
+
+  it('is false when phase is cancelled', () => {
+    expect(isThinking('cancelled')).toBe(false);
   });
 });

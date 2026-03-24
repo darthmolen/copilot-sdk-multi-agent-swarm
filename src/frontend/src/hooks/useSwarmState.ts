@@ -95,6 +95,10 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
   }
 }
 
+export function isThinking(phase: SwarmState['phase']): boolean {
+  return phase !== null && phase !== 'complete' && phase !== 'cancelled';
+}
+
 export function useSwarmState() {
   const [state, dispatch] = useReducer(swarmReducer, initialState);
   return { state, dispatch };

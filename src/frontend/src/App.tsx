@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSwarmState } from './hooks/useSwarmState';
+import { useSwarmState, isThinking } from './hooks/useSwarmState';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SwarmControls } from './components/SwarmControls';
 import { TaskBoard } from './components/TaskBoard';
@@ -23,6 +23,12 @@ function App() {
               {connected ? 'Connected' : 'Disconnected'}
             </span>
             {state.phase && <span className="phase-badge">{state.phase}</span>}
+            {isThinking(state.phase) && (
+              <span className="thinking-badge">
+                <span className="thinking-icon">🧠</span>
+                <span className="thinking-text">Thinking...</span>
+              </span>
+            )}
             {state.roundNumber > 0 && <span className="round-badge">Round {state.roundNumber}</span>}
           </div>
         )}

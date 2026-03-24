@@ -24,7 +24,7 @@ function AgentCard({
     <div className={`agent-card agent-${agent.status}`}>
       <div className="agent-header">
         <span
-          className="status-dot"
+          className={`status-dot agent-status-dot${agent.status === 'thinking' || agent.status === 'working' ? ' active' : ''}`}
           style={{ backgroundColor: STATUS_COLORS[agent.status] ?? '#9ca3af' }}
         />
         <strong>{agent.display_name || agent.name}</strong>
