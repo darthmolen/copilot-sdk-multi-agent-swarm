@@ -146,7 +146,7 @@ class SwarmOrchestrator:
 
         for idx, t in enumerate(tasks_data):
             blocked_by = [task_ids[i] for i in t.get("blocked_by_indices", [])]
-            await self.task_board.add_task(
+            task = await self.task_board.add_task(
                 id=task_ids[idx],
                 subject=t["subject"],
                 description=t["description"],
@@ -154,7 +154,9 @@ class SwarmOrchestrator:
                 worker_name=t["worker_name"],
                 blocked_by=blocked_by,
             )
+            await self.event_bus.emit("task.created", {"task": task.to_dict()})
 
+        await self.event_bus.emit("swarm.phase_changed", {"phase": "planning"})
         await self.event_bus.emit("swarm.plan_complete", {"task_count": len(tasks_data)})
         return plan
 
@@ -198,7 +200,11 @@ class SwarmOrchestrator:
 
             await self.registry.register(name, role, display_name)
             self.inbox.register_agent(name)
+            await self.event_bus.emit("agent.spawned", {
+                "agent": {"name": name, "role": role, "display_name": display_name, "status": "idle", "tasks_completed": 0}
+            })
 
+        await self.event_bus.emit("swarm.phase_changed", {"phase": "spawning"})
         await self.event_bus.emit(
             "swarm.spawn_complete", {"agent_count": len(self.agents)}
         )
@@ -211,6 +217,8 @@ class SwarmOrchestrator:
         """Round-based execution. One task per worker per round."""
         max_rounds = self.config.get("max_rounds", 3)
         timeout = self.config.get("timeout", 300)
+
+        await self.event_bus.emit("swarm.phase_changed", {"phase": "executing"})
 
         for round_num in range(1, max_rounds + 1):
             if self._cancelled:
@@ -252,6 +260,11 @@ class SwarmOrchestrator:
                         {"task_id": task.id, "agent": worker_name, "error": str(result)},
                     )
 
+            # Emit task.updated for all tasks that changed this round
+            all_tasks = await self.task_board.get_tasks()
+            for t in all_tasks:
+                await self.event_bus.emit("task.updated", {"task": t.to_dict()})
+
             await self.event_bus.emit("swarm.round_end", {"round": round_num})
 
     # ------------------------------------------------------------------
@@ -260,6 +273,7 @@ class SwarmOrchestrator:
 
     async def _synthesize(self, goal: str) -> str:
         """Synthesize final report from task results using send_and_wait."""
+        await self.event_bus.emit("swarm.phase_changed", {"phase": "synthesizing"})
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
             f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}"
@@ -295,5 +309,7 @@ class SwarmOrchestrator:
             log.error("synthesis_failed", error=str(exc))
             report = f"(Synthesis failed: {exc})"
 
+        await self.event_bus.emit("leader.report", {"content": report})
+        await self.event_bus.emit("swarm.phase_changed", {"phase": "complete"})
         await self.event_bus.emit("swarm.synthesis_complete", {})
         return report
