@@ -72,6 +72,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # --- EventBus → WebSocket forwarder -----------------------------------
     def _make_ws_forwarder():  # noqa: ANN202
         async def _forward(event_type: str, data: dict) -> None:
+            # Skip internal SDK events (contain non-serializable objects)
+            if event_type == "sdk_event":
+                return
+
             swarm_id = data.pop("swarm_id", None)
             if swarm_id:
                 await manager.broadcast(
