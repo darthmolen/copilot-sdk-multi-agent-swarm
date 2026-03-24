@@ -91,6 +91,18 @@ class SwarmAgent:
             on_permission_request=_approve_all,
         )
 
+        # Explicitly select the agent — required for customAgents[n].tools enforcement.
+        # The `agent=` param in create_session registers but does NOT activate the agent.
+        try:
+            from copilot.generated.rpc import SessionAgentSelectParams  # type: ignore[import-not-found]
+            await self.session.rpc.agent.select(SessionAgentSelectParams(name=self.name))
+        except (ImportError, AttributeError):
+            # Mock sessions or SDK not installed — try dict fallback
+            try:
+                await self.session.rpc.agent.select({"name": self.name})
+            except (AttributeError, TypeError):
+                pass  # Mock without rpc support
+
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""
         self.event_bus.emit_sync("sdk_event", {"agent": self.name, "event": event})

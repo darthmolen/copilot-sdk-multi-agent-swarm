@@ -111,17 +111,39 @@ This is consistent with what we observe: the model sometimes respects its tool l
 3. **`tools=` (custom tool registration) = always available** (separate namespace)
 4. **The extension doc's intersection claim is wrong** in practice, even if conceptually intended
 
+## ROOT CAUSE FOUND (2026-03-24, late)
+
+**The Python SDK's `agent=` parameter in `create_session` does NOT auto-select the agent.** The agent is registered but `getCurrent()` returns `None`. When no agent is selected, `customAgents[n].tools` is not enforced.
+
+**Fix:** Explicitly call `session.rpc.agent.select(SessionAgentSelectParams(name=...))` after `create_session`. After this call:
+- `getCurrent()` returns the selected agent
+- `customAgents[n].tools` IS enforced (intersection with `availableTools`)
+- Agent sees only the tools in its `tools` array (within the session whitelist)
+
+**Spike proof:** With `availableTools=["grep","web_fetch"]` and `agent.tools=["grep"]`:
+- Without select: agent sees both grep AND web_fetch
+- With select: agent sees ONLY grep ✅
+
+**The extension doc's intersection claim IS correct** — it just requires the agent to be explicitly selected first. Our earlier spikes never called `agent.select()`.
+
+## Revised Definitive Findings
+
+1. **`availableTools` = hard enforcement** (session-level, always works)
+2. **`customAgents[n].tools` = hard enforcement ONLY when agent is selected via `rpc.agent.select()`**
+3. **`agent=` in create_session = registers agent but does NOT select it** (possible SDK bug or missing documentation)
+4. **Effective tools = `availableTools ∩ agent.tools`** — confirmed, but only after explicit select
+
 ## Practical Guidance for Our Swarm
 
 To restrict workers:
-- Use `availableTools` with the exact built-in tool names needed
-- Custom tools (task_update etc.) are always available via `tools=`
-- `customAgents[n].tools` can hint to the model but won't enforce
+- Register custom agents with specific `tools` lists
+- Call `session.rpc.agent.select()` after session creation
+- Use `availableTools` as the session-level cap
+- Effective restriction = intersection of both
 
 To give workers full freedom:
-- Don't set `availableTools` (or set it to None)
-- Register swarm tools via `tools=`
-- Rely on system preamble prompt to encourage swarm tool usage
+- Set `agent.tools = null` (no per-agent restriction)
+- Don't set `availableTools` (no session restriction)
 
 ---
 

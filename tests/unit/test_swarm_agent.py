@@ -22,10 +22,28 @@ from backend.swarm.tools import Tool
 # ---------------------------------------------------------------------------
 
 
+class MockAgentRpc:
+    """Mock for session.rpc.agent — tracks select() calls."""
+
+    def __init__(self) -> None:
+        self.selected_agent: str | None = None
+
+    async def select(self, params: Any) -> Any:
+        name = getattr(params, "name", None) or (params.get("name") if isinstance(params, dict) else str(params))
+        self.selected_agent = name
+        return None
+
+
+class MockRpc:
+    def __init__(self) -> None:
+        self.agent = MockAgentRpc()
+
+
 class MockSession:
     def __init__(self) -> None:
         self._handlers: list[Callable[[SessionEvent], None]] = []
         self.sent_messages: list[str] = []
+        self.rpc = MockRpc()
 
     def on(self, handler: Callable[[SessionEvent], None]) -> Callable[[], None]:
         self._handlers.append(handler)
@@ -449,3 +467,15 @@ async def test_create_session_fallback_without_template(
     assert "Mandatory tools" in prompt
     assert "Coder" in prompt
     assert "Write Python code" in prompt
+
+
+async def test_create_session_selects_agent(
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
+) -> None:
+    """After create_session, the agent must be explicitly selected via rpc.agent.select()."""
+    await agent.create_session(mock_client)
+
+    # Agent should have been selected after session creation
+    assert mock_session.rpc.agent.selected_agent == "coder"
