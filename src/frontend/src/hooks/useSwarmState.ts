@@ -18,8 +18,11 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
     case 'swarm.phase_changed':
       return { ...state, phase: event.data.phase as SwarmState['phase'] };
 
-    case 'task.created':
-      return { ...state, tasks: [...state.tasks, event.data.task as Task] };
+    case 'task.created': {
+      const newTask = { ...(event.data.task as Task) };
+      if (event.data.swarm_id) newTask.swarm_id = event.data.swarm_id as string;
+      return { ...state, tasks: [...state.tasks, newTask] };
+    }
 
     case 'task.updated': {
       const updated = event.data.task as Task;
@@ -29,16 +32,22 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
       };
     }
 
-    case 'agent.spawned':
-      return { ...state, agents: [...state.agents, event.data.agent as AgentInfo] };
+    case 'agent.spawned': {
+      const newAgent = { ...(event.data.agent as AgentInfo) };
+      if (event.data.swarm_id) newAgent.swarm_id = event.data.swarm_id as string;
+      return { ...state, agents: [...state.agents, newAgent] };
+    }
 
     case 'agent.status_changed': {
       const name = (event.data.name ?? event.data.agent_name) as string;
       const status = event.data.status as AgentInfo['status'];
+      const tasksCompleted = event.data.tasks_completed as number | undefined;
       return {
         ...state,
         agents: state.agents.map((a) =>
-          a.name === name ? { ...a, status } : a,
+          a.name === name
+            ? { ...a, status, ...(tasksCompleted !== undefined ? { tasks_completed: tasksCompleted } : {}) }
+            : a,
         ),
       };
     }
@@ -67,8 +76,9 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
 
     case 'inbox.message': {
       // Handle both shapes: {message: {...}} (nested) and {sender, recipient, content} (flat)
-      const msg = (event.data.message ?? event.data) as SwarmState['messages'][number];
+      const msg = { ...((event.data.message ?? event.data) as SwarmState['messages'][number]) };
       if (!msg || !msg.sender) return state;
+      if (event.data.swarm_id) msg.swarm_id = event.data.swarm_id as string;
       return {
         ...state,
         messages: [
@@ -106,4 +116,88 @@ export function isThinking(phase: SwarmState['phase']): boolean {
 export function useSwarmState() {
   const [state, dispatch] = useReducer(swarmReducer, initialState);
   return { state, dispatch };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-swarm state management
+// ---------------------------------------------------------------------------
+
+const MAX_SWARMS = 10;
+
+export interface MultiSwarmStore {
+  swarms: Record<string, SwarmState>;
+  activeSwarmIds: string[];
+  completedSwarmIds: string[];
+}
+
+export type MultiSwarmAction =
+  | { type: 'swarm.add'; swarmId: string }
+  | { type: 'swarm.remove'; swarmId: string }
+  | { type: 'swarm.event'; swarmId: string; event: SwarmEvent };
+
+export const initialMultiSwarmState: MultiSwarmStore = {
+  swarms: {},
+  activeSwarmIds: [],
+  completedSwarmIds: [],
+};
+
+export function multiSwarmReducer(
+  state: MultiSwarmStore,
+  action: MultiSwarmAction,
+): MultiSwarmStore {
+  switch (action.type) {
+    case 'swarm.add': {
+      let next = {
+        ...state,
+        swarms: { ...state.swarms, [action.swarmId]: initialState },
+        activeSwarmIds: [...state.activeSwarmIds, action.swarmId],
+      };
+      // Hard cap: evict oldest completed if over limit
+      const total = next.activeSwarmIds.length + next.completedSwarmIds.length;
+      if (total > MAX_SWARMS && next.completedSwarmIds.length > 0) {
+        const evictId = next.completedSwarmIds[0];
+        const { [evictId]: _, ...rest } = next.swarms;
+        next = {
+          ...next,
+          swarms: rest,
+          completedSwarmIds: next.completedSwarmIds.slice(1),
+        };
+      }
+      return next;
+    }
+
+    case 'swarm.remove': {
+      const { [action.swarmId]: _, ...rest } = state.swarms;
+      return {
+        swarms: rest,
+        activeSwarmIds: state.activeSwarmIds.filter((id) => id !== action.swarmId),
+        completedSwarmIds: state.completedSwarmIds.filter((id) => id !== action.swarmId),
+      };
+    }
+
+    case 'swarm.event': {
+      const current = state.swarms[action.swarmId] ?? initialState;
+      const updated = swarmReducer(current, action.event);
+
+      let { activeSwarmIds, completedSwarmIds } = state;
+
+      // Auto-transition: active → completed when phase is complete/cancelled
+      if (
+        (updated.phase === 'complete' || updated.phase === 'cancelled') &&
+        activeSwarmIds.includes(action.swarmId)
+      ) {
+        activeSwarmIds = activeSwarmIds.filter((id) => id !== action.swarmId);
+        completedSwarmIds = [...completedSwarmIds, action.swarmId];
+      }
+
+      return {
+        swarms: { ...state.swarms, [action.swarmId]: updated },
+        activeSwarmIds,
+        completedSwarmIds,
+      };
+    }
+
+    default:
+      return state;
+  }
 }

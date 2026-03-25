@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.debug("sdk_event", agent=agent, sdk_type=sdk_type, **extra)
                 return
 
-            swarm_id = data.pop("swarm_id", None)
+            swarm_id = data.get("swarm_id", None)
             log.info("event_forwarded", event_type=event_type, swarm_id=swarm_id or "broadcast")
 
             if swarm_id:

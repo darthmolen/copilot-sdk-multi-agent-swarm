@@ -11,6 +11,7 @@ export interface Task {
   status: TaskStatus;
   blocked_by: string[];
   result: string;
+  swarm_id?: string;
 }
 
 export interface AgentInfo {
@@ -19,6 +20,7 @@ export interface AgentInfo {
   display_name: string;
   status: AgentStatus;
   tasks_completed: number;
+  swarm_id?: string;
 }
 
 export interface InboxMessage {
@@ -26,6 +28,7 @@ export interface InboxMessage {
   recipient: string;
   content: string;
   timestamp: string;
+  swarm_id?: string;
 }
 
 export interface SwarmState {

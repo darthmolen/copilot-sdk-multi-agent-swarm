@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 import structlog
@@ -97,86 +98,131 @@ def create_swarm_tools(
     # -- task_update --------------------------------------------------------
 
     async def _task_update(invocation: ToolInvocation) -> ToolResult:
-        args: dict[str, Any] = invocation.arguments or {}
-        task_id: str = args["task_id"]
-        status: str = args["status"]
-        result: str = args.get("result", "")
+        try:
+            args: dict[str, Any] = invocation.arguments if isinstance(invocation.arguments, dict) else {}
+            if "task_id" not in args or "status" not in args:
+                log.warning("task_update_missing_fields", agent=agent_name, args=args)
+                return ToolResult(
+                    text_result_for_llm=json.dumps({
+                        "error": "Missing required fields. Call with: {task_id: string, status: string, result?: string}",
+                    }),
+                    result_type="error",
+                )
 
-        task = await task_board.update_status(task_id, status, result)
+            task_id: str = args["task_id"]
+            status: str = args["status"]
+            result: str = args.get("result", "")
 
-        if event_callback is not None:
-            cb_result = event_callback(
-                {
-                    "event": "task_update",
-                    "agent": agent_name,
-                    "task_id": task_id,
-                    "status": status,
-                    "result": result,
-                }
+            task = await task_board.update_status(task_id, status, result)
+
+            if event_callback is not None:
+                # Emit task.updated with full task dict so frontend sees real-time changes
+                cb_result = event_callback(
+                    {
+                        "event": "task.updated",
+                        "task": task.to_dict(),
+                    }
+                )
+                if asyncio.iscoroutine(cb_result):
+                    await cb_result
+
+            return ToolResult(
+                text_result_for_llm=json.dumps({"ok": True, "task_id": task_id}),
             )
-            if asyncio.iscoroutine(cb_result):
-                await cb_result
-
-        return ToolResult(
-            text_result_for_llm=json.dumps({"ok": True, "task_id": task_id}),
-        )
+        except Exception as exc:
+            log.warning("task_update_error", agent=agent_name, error=str(exc), args=getattr(invocation, "arguments", None))
+            return ToolResult(
+                text_result_for_llm=json.dumps({"error": str(exc)}),
+                result_type="error",
+            )
 
     # -- inbox_send ---------------------------------------------------------
 
     async def _inbox_send(invocation: ToolInvocation) -> ToolResult:
-        args: dict[str, Any] = invocation.arguments or {}
-        to: str = args["to"]
-        message: str = args["message"]
+        try:
+            args: dict[str, Any] = invocation.arguments if isinstance(invocation.arguments, dict) else {}
+            if "to" not in args or "message" not in args:
+                log.warning("inbox_send_missing_fields", agent=agent_name, args=args)
+                return ToolResult(
+                    text_result_for_llm=json.dumps({
+                        "error": "Missing required fields. Call with: {to: string, message: string}",
+                    }),
+                    result_type="error",
+                )
 
-        await inbox.send(agent_name, to, message)
+            to: str = args["to"]
+            message: str = args["message"]
 
-        if event_callback is not None:
-            cb_result = event_callback({
-                "event": "inbox.message",
-                "sender": agent_name,
-                "recipient": to,
-                "content": message,
-            })
-            if asyncio.iscoroutine(cb_result):
-                await cb_result
+            await inbox.send(agent_name, to, message)
 
-        return ToolResult(
-            text_result_for_llm=json.dumps({"ok": True, "sent_to": to}),
-        )
+            if event_callback is not None:
+                cb_result = event_callback({
+                    "event": "inbox.message",
+                    "sender": agent_name,
+                    "recipient": to,
+                    "content": message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                if asyncio.iscoroutine(cb_result):
+                    await cb_result
+
+            return ToolResult(
+                text_result_for_llm=json.dumps({"ok": True, "sent_to": to}),
+            )
+        except Exception as exc:
+            log.warning("inbox_send_error", agent=agent_name, error=str(exc), args=getattr(invocation, "arguments", None))
+            return ToolResult(
+                text_result_for_llm=json.dumps({"error": str(exc)}),
+                result_type="error",
+            )
 
     # -- inbox_receive ------------------------------------------------------
 
     async def _inbox_receive(invocation: ToolInvocation) -> ToolResult:
-        messages = await inbox.receive(agent_name)
+        try:
+            messages = await inbox.receive(agent_name)
 
-        payload = {
-            "messages": [
-                {
-                    "sender": m.sender,
-                    "content": m.content,
-                    "timestamp": m.timestamp.isoformat(),
-                }
-                for m in messages
-            ]
-        }
+            payload = {
+                "messages": [
+                    {
+                        "sender": m.sender,
+                        "content": m.content,
+                        "timestamp": m.timestamp.isoformat(),
+                    }
+                    for m in messages
+                ]
+            }
 
-        return ToolResult(
-            text_result_for_llm=json.dumps(payload),
-        )
+            return ToolResult(
+                text_result_for_llm=json.dumps(payload),
+            )
+        except Exception as exc:
+            log.warning("inbox_receive_error", agent=agent_name, error=str(exc))
+            return ToolResult(
+                text_result_for_llm=json.dumps({"error": str(exc)}),
+                result_type="error",
+            )
 
     # -- task_list ----------------------------------------------------------
 
     async def _task_list(invocation: ToolInvocation) -> ToolResult:
-        args: dict[str, Any] = invocation.arguments or {}
-        owner: str | None = args.get("owner")
+        try:
+            args: dict[str, Any] = invocation.arguments if isinstance(invocation.arguments, dict) else {}
+            owner: str | None = args.get("owner")
 
-        tasks = await task_board.get_tasks(owner=owner)
+            tasks = await task_board.get_tasks(owner=owner)
 
-        payload = {"tasks": [t.to_dict() for t in tasks]}
+            payload = {"tasks": [t.to_dict() for t in tasks]}
 
-        return ToolResult(
-            text_result_for_llm=json.dumps(payload),
-        )
+            return ToolResult(
+                text_result_for_llm=json.dumps(payload),
+            )
+        except Exception as exc:
+            log.warning("task_list_error", agent=agent_name, error=str(exc))
+            return ToolResult(
+                text_result_for_llm=json.dumps({"error": str(exc)}),
+                result_type="error",
+            )
 
     # -- assemble -----------------------------------------------------------
 

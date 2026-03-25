@@ -16,6 +16,7 @@ const COLUMNS: { key: TaskStatus; label: string }[] = [
 function TaskCard({ task }: { task: Task }) {
   return (
     <div className={`task-card task-${task.status}`}>
+      {task.swarm_id && <span className="swarm-id-label">{task.swarm_id.slice(0, 8)}</span>}
       <h4 className="task-subject">{task.subject}</h4>
       <p className="task-worker">{task.worker_name || task.worker_role}</p>
       <span className="task-status-badge">{task.status}</span>
@@ -37,7 +38,7 @@ export function TaskBoard({ tasks }: TaskBoardProps) {
               </h3>
               <div className="kanban-cards">
                 {colTasks.map((task) => (
-                  <TaskCard key={task.id} task={task} />
+                  <TaskCard key={`${task.swarm_id ?? 'x'}-${task.id}`} task={task} />
                 ))}
               </div>
             </div>

@@ -259,7 +259,10 @@ async def test_execute_task_sends_prompt(
     asyncio.ensure_future(_fire())
     await agent.execute_task(task)
 
-    assert "Implement the login page" in mock_session.sent_messages
+    assert len(mock_session.sent_messages) == 1
+    sent = mock_session.sent_messages[0]
+    assert "task-1" in sent  # task ID included
+    assert "Implement the login page" in sent  # description included
 
 
 async def test_execute_task_completes_on_session_idle(

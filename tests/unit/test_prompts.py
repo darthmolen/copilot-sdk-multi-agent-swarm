@@ -39,6 +39,33 @@ def test_assemble_worker_prompt_fallback_without_template() -> None:
     assert "Write Python code" in result
 
 
+def test_assemble_worker_prompt_includes_work_dir() -> None:
+    """When work_dir is provided, prompt includes the absolute path."""
+    from pathlib import Path
+    from backend.swarm.prompts import assemble_worker_prompt
+
+    result = assemble_worker_prompt(
+        system_preamble="## Protocol",
+        display_name="Agent",
+        role="Coder",
+        work_dir=Path("/tmp/swarm-workdir/swarm-abc"),
+    )
+    assert "/tmp/swarm-workdir/swarm-abc" in result
+    assert "work directory" in result.lower() or "work_dir" in result.lower()
+
+
+def test_assemble_worker_prompt_no_work_dir_omits_section() -> None:
+    """When work_dir is None, no work directory section in prompt."""
+    from backend.swarm.prompts import assemble_worker_prompt
+
+    result = assemble_worker_prompt(
+        system_preamble="## Protocol",
+        display_name="Agent",
+        role="Coder",
+    )
+    assert "work directory" not in result.lower()
+
+
 def test_assemble_worker_prompt_empty_preamble() -> None:
     """Empty preamble still produces valid prompt."""
     from backend.swarm.prompts import assemble_worker_prompt

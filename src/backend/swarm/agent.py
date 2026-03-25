@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, Callable
 
 from backend.events import EventBus
@@ -48,6 +49,8 @@ class SwarmAgent:
         system_preamble: str = "",
         system_tools: list[str] | None = None,
         model: str = DEFAULT_MODEL,
+        work_dir: Path | None = None,
+        swarm_id: str | None = None,
     ) -> None:
         self.name = name
         self.role = role
@@ -61,6 +64,8 @@ class SwarmAgent:
         self.system_preamble = system_preamble
         self.system_tools = system_tools or []
         self.model = model
+        self.work_dir = work_dir
+        self.swarm_id = swarm_id
         self.session: Any = None  # Set by create_session
 
     async def create_session(self, client: Any) -> None:
@@ -73,6 +78,8 @@ class SwarmAgent:
 
         def _tool_event_callback(event_data: dict) -> None:
             """Forward tool events to EventBus for frontend consumption."""
+            if self.swarm_id:
+                event_data = {**event_data, "swarm_id": self.swarm_id}
             event_name = event_data.get("event", "tool_event")
             self.event_bus.emit_sync(event_name, event_data)
 
@@ -88,6 +95,7 @@ class SwarmAgent:
             display_name=self.display_name,
             role=self.role,
             template_prompt=self.prompt_template,
+            work_dir=self.work_dir,
         )
 
         # Merge system tools with template available_tools for the session whitelist
@@ -150,7 +158,12 @@ class SwarmAgent:
         unsubscribe: Callable[[], None] = self.session.on(_handler)
 
         try:
-            await self.session.send(task.description)
+            task_prompt = (
+                f"Your task ID is: {task.id}\n"
+                f"Subject: {task.subject}\n\n"
+                f"{task.description}"
+            )
+            await self.session.send(task_prompt)
 
             try:
                 await asyncio.wait_for(done.wait(), timeout=timeout)

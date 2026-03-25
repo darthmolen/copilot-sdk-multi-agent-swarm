@@ -1,5 +1,9 @@
 """System prompts for leader and worker agents."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
 LEADER_SYSTEM_PROMPT = """\
 You are the Leader Agent of a multi-agent swarm team. Your job is to decompose a high-level goal into concrete, actionable subtasks.
 
@@ -74,13 +78,15 @@ def assemble_worker_prompt(
     display_name: str,
     role: str,
     template_prompt: str | None = None,
+    work_dir: "Path | None" = None,
 ) -> str:
     """Assemble a worker's full prompt from system preamble + template + context.
 
-    Three layers:
+    Layers:
     1. System preamble (tool mandates, coordination protocol) — from system-prompt.md
-    2. Template prompt (domain expertise) — from worker YAML body, with {display_name}/{role} expanded
-    3. Fallback: generic role description if no template
+    2. Work directory directive (if provided) — sandbox for agent file output
+    3. Template prompt (domain expertise) — from worker YAML body, with {display_name}/{role} expanded
+    4. Fallback: generic role description if no template
 
     The system preamble is NOT in user-editable templates — it's a system concern.
     """
@@ -88,6 +94,13 @@ def assemble_worker_prompt(
 
     if system_preamble:
         parts.append(system_preamble)
+
+    if work_dir is not None:
+        parts.append(
+            f"## Work Directory\n\n"
+            f"Your work directory is: `{work_dir}`\n\n"
+            f"Write ALL output files to this directory. Do not write files outside of it."
+        )
 
     if template_prompt:
         try:

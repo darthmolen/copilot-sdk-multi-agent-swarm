@@ -41,17 +41,25 @@ export function useWebSocket(
   useEffect(() => {
     if (!swarmId) return;
 
+    // Guard against stale connections from React Strict Mode double-invoke.
+    // Each effect invocation gets its own `active` flag. When cleanup runs
+    // (Strict Mode unmount), `active` becomes false for THAT invocation's
+    // closures, so the stale WS's onmessage/onclose handlers silently no-op.
+    let active = true;
+
     function connect() {
       const url = `${WS_BASE}/ws/${swarmId}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (!active) { ws.close(); return; }
         setConnected(true);
         reconnectDelay.current = INITIAL_RECONNECT_DELAY;
       };
 
       ws.onmessage = (evt) => {
+        if (!active) return;
         try {
           const event: SwarmEvent = JSON.parse(evt.data);
           onEventRef.current(event);
@@ -61,15 +69,15 @@ export function useWebSocket(
       };
 
       ws.onclose = () => {
+        if (!active) return;
         setConnected(false);
         if (!shouldReconnect.current) return;
-        // Reconnect with exponential backoff
         reconnectTimer.current = setTimeout(() => {
           reconnectDelay.current = Math.min(
             reconnectDelay.current * 2,
             MAX_RECONNECT_DELAY,
           );
-          connect();
+          if (active) connect();
         }, reconnectDelay.current);
       };
 
@@ -82,9 +90,19 @@ export function useWebSocket(
     connect();
 
     return () => {
-      disconnect();
+      active = false;
+      shouldReconnect.current = false;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setConnected(false);
     };
-  }, [swarmId, disconnect]);
+  }, [swarmId]);
 
   return { connected, send, disconnect };
 }

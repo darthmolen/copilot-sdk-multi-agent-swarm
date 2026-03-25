@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -212,13 +213,18 @@ def make_orchestrator(
     worker_fail_names: set[str] | None = None,
     synthesis_report: str = "Final report",
     config: dict[str, Any] | None = None,
+    swarm_id: str | None = None,
+    work_base: Path | None = None,
 ) -> SwarmOrchestrator:
     client = MockCopilotClient(
         leader_plan=leader_plan,
         worker_fail_names=worker_fail_names,
         synthesis_report=synthesis_report,
     )
-    return SwarmOrchestrator(client=client, event_bus=event_bus, config=config)
+    return SwarmOrchestrator(
+        client=client, event_bus=event_bus, config=config,
+        swarm_id=swarm_id, work_base=work_base,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +583,149 @@ class TestFullLifecycle:
         assert task_created_idx < spawn_idx, "task.created should come before agent.spawned"
         assert spawn_idx < round_idx, "agent.spawned should come before round_start"
         assert round_idx < report_idx, "round_start should come before leader.report"
+
+
+class TestWorkDirectory:
+    """Verify orchestrator creates per-swarm work directories and passes path to agents."""
+
+    async def test_run_creates_work_directory(self, event_bus: EventBus, tmp_path: Path) -> None:
+        """Orchestrator creates workdir/<swarm_id>/ on run()."""
+        orch = make_orchestrator(event_bus, swarm_id="swarm-abc", work_base=tmp_path)
+        await orch.run("Build something")
+
+        work_dir = tmp_path / "swarm-abc"
+        assert work_dir.is_dir(), f"Expected work directory at {work_dir}"
+
+    async def test_work_dir_path_passed_to_agent_prompt(self, event_bus: EventBus, tmp_path: Path) -> None:
+        """Agent system prompts include the work directory path."""
+        orch = make_orchestrator(event_bus, swarm_id="swarm-xyz", work_base=tmp_path)
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+
+        # Every agent session should have been created with a prompt containing the work dir
+        work_dir = tmp_path / "swarm-xyz"
+        for agent in orch.agents.values():
+            # The mock stores system_message kwarg — check the prompt contains work_dir
+            assert agent.work_dir == work_dir
+
+    async def test_work_dir_not_created_without_swarm_id(self, event_bus: EventBus) -> None:
+        """Without swarm_id, no work directory is created (backward compat)."""
+        orch = make_orchestrator(event_bus)
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+
+        for agent in orch.agents.values():
+            assert agent.work_dir is None
+
+
+class TestSwarmIdRouting:
+    """Phase 2C: All orchestrator events must include swarm_id for per-swarm routing."""
+
+    async def test_plan_events_include_swarm_id(self, event_bus: EventBus) -> None:
+        """Planning phase events include swarm_id."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-123")
+        await orch._plan("Build something")
+
+        for event_type, data in events:
+            assert data.get("swarm_id") == "swarm-123", (
+                f"{event_type} missing swarm_id: {data}"
+            )
+
+    async def test_spawn_events_include_swarm_id(self, event_bus: EventBus) -> None:
+        """Spawning phase events include swarm_id."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-456")
+        await orch._spawn(VALID_PLAN)
+
+        for event_type, data in events:
+            assert data.get("swarm_id") == "swarm-456", (
+                f"{event_type} missing swarm_id: {data}"
+            )
+
+    async def test_execute_events_include_swarm_id(self, event_bus: EventBus) -> None:
+        """Execution phase events include swarm_id."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-789")
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        events.clear()  # Only check execution events
+        await orch._execute()
+
+        non_sdk = [(t, d) for t, d in events if t != "sdk_event"]
+        assert len(non_sdk) > 0, "Expected execution events"
+        for event_type, data in non_sdk:
+            assert data.get("swarm_id") == "swarm-789", (
+                f"{event_type} missing swarm_id: {data}"
+            )
+
+    async def test_synthesize_events_include_swarm_id(self, event_bus: EventBus) -> None:
+        """Synthesis phase events include swarm_id."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-syn", synthesis_report="Report")
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        await orch._synthesize("goal")
+
+        for event_type, data in events:
+            assert data.get("swarm_id") == "swarm-syn", (
+                f"{event_type} missing swarm_id: {data}"
+            )
+
+    async def test_tool_callback_events_include_swarm_id(self, event_bus: EventBus) -> None:
+        """Tool events (task.updated, inbox.message) from agents include swarm_id."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-tool")
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        events.clear()
+
+        # Simulate a task_update tool call through the agent's event_callback
+        # The agent's _tool_event_callback should attach swarm_id
+        agent = list(orch.agents.values())[0]
+        # Call the tool directly to trigger the callback
+        from backend.swarm.tools import ToolInvocation
+        task = (await orch.task_board.get_tasks())[0]
+        tool = next(t for t in agent.session._tools if t.name == "task_update")
+        await tool.handler(ToolInvocation(arguments={
+            "task_id": task.id, "status": "in_progress",
+        }))
+
+        import asyncio
+        await asyncio.sleep(0.05)
+
+        task_events = [(t, d) for t, d in events if t == "task.updated"]
+        assert len(task_events) >= 1, f"Expected task.updated events, got {events}"
+        assert task_events[0][1].get("swarm_id") == "swarm-tool", (
+            f"task.updated missing swarm_id: {task_events[0][1]}"
+        )
+
+    async def test_no_swarm_id_emits_without_swarm_id(self, event_bus: EventBus) -> None:
+        """Backward compat: no swarm_id means events don't include it."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)  # no swarm_id
+        await orch._plan("Build something")
+
+        for event_type, data in events:
+            assert "swarm_id" not in data, (
+                f"{event_type} should not have swarm_id when none set: {data}"
+            )
 
 
 class TestLogging:

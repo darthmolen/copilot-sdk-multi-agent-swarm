@@ -28,6 +28,7 @@ function AgentCard({
           style={{ backgroundColor: STATUS_COLORS[agent.status] ?? '#9ca3af' }}
         />
         <strong>{agent.display_name || agent.name}</strong>
+        {agent.swarm_id && <span className="swarm-id-label">{agent.swarm_id.slice(0, 8)}</span>}
       </div>
       <p className="agent-role">{agent.role}</p>
       <p className="agent-tasks">Tasks completed: {agent.tasks_completed}</p>
@@ -45,7 +46,7 @@ export function AgentRoster({ agents, outputs }: AgentRosterProps) {
       <div className="agent-grid">
         {agents.map((agent) => (
           <AgentCard
-            key={agent.name}
+            key={`${agent.swarm_id ?? 'x'}-${agent.name}`}
             agent={agent}
             output={outputs[agent.name]}
           />

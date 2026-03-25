@@ -109,7 +109,7 @@ async def test_task_update_event_reaches_eventbus() -> None:
 
     await asyncio.sleep(0.05)
 
-    task_events = [(t, d) for t, d in received if t == "task_update"]
+    task_events = [(t, d) for t, d in received if t == "task.updated"]
     assert len(task_events) == 1
-    assert task_events[0][1]["task_id"] == "t1"
-    assert task_events[0][1]["status"] == "in_progress"
+    assert task_events[0][1]["task"]["id"] == "t1"
+    assert task_events[0][1]["task"]["status"] == "in_progress"

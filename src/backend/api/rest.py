@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -75,10 +76,12 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
 
     system_preamble = _template_loader.system_preamble if _template_loader else ""
     system_tools = _template_loader.system_tools if _template_loader else []
+    work_base = Path("workdir")
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
         template=loaded_template, system_preamble=system_preamble,
         system_tools=system_tools,
+        swarm_id=swarm_id, work_base=work_base,
     )
     swarm_store[swarm_id]["orchestrator"] = orch
 

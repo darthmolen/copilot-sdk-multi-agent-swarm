@@ -246,9 +246,9 @@
   background: #0f172a;
   border: 1px solid #334155;
   border-radius: 12px;
-  width: 90%;
-  max-width: 900px;
-  max-height: 85vh;
+  width: 95%;
+  max-width: 1200px;
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -266,6 +266,27 @@
   margin: 0;
   font-size: 18px;
   color: #e2e8f0;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.copy-button {
+  background: #334155;
+  border: 1px solid #475569;
+  color: #e2e8f0;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.copy-button:hover {
+  background: #475569;
 }
 
 .modal-close {
@@ -342,6 +363,12 @@
   max-height: 300px;
   overflow-y: auto;
   margin: 0;
+}
+
+.modal-body .chat-content {
+  max-height: none;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 /* Task board */
@@ -525,6 +552,18 @@
   font-style: italic;
 }
 
+/* Swarm ID label */
+.swarm-id-label {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #1e293b;
+  color: #64748b;
+  font-size: 10px;
+  font-family: monospace;
+  margin-left: auto;
+}
+
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .app {
@@ -578,5 +617,10 @@
 
   .message-content {
     color: #d1d5db;
+  }
+
+  .task-status-badge {
+    background: #374151;
+    color: #9ca3af;
   }
 }

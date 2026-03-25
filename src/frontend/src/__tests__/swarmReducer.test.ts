@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { swarmReducer, initialState, isThinking } from '../hooks/useSwarmState';
+import { swarmReducer, initialState, isThinking, multiSwarmReducer, initialMultiSwarmState } from '../hooks/useSwarmState';
 import type { SwarmState, SwarmEvent, Task, AgentInfo, InboxMessage } from '../types/swarm';
 
 describe('swarmReducer', () => {
@@ -154,6 +154,130 @@ describe('swarmReducer', () => {
     const event: SwarmEvent = { type: 'unknown.event', data: { foo: 'bar' } };
     const result = swarmReducer(initialState, event);
     expect(result).toBe(initialState);
+  });
+
+  it('task.created captures swarm_id from event data', () => {
+    const task: Task = {
+      id: 't1', subject: 'X', description: 'D', worker_role: 'R',
+      worker_name: 'w', status: 'pending', blocked_by: [], result: '',
+    };
+    const event: SwarmEvent = { type: 'task.created', data: { task, swarm_id: 'swarm-abc' } };
+    const result = swarmReducer(initialState, event);
+    expect(result.tasks[0].swarm_id).toBe('swarm-abc');
+  });
+
+  it('agent.spawned captures swarm_id from event data', () => {
+    const agent: AgentInfo = {
+      name: 'w1', role: 'R', display_name: 'W1', status: 'idle', tasks_completed: 0,
+    };
+    const event: SwarmEvent = { type: 'agent.spawned', data: { agent, swarm_id: 'swarm-xyz' } };
+    const result = swarmReducer(initialState, event);
+    expect(result.agents[0].swarm_id).toBe('swarm-xyz');
+  });
+
+  it('inbox.message captures swarm_id from event data', () => {
+    const message: InboxMessage = {
+      sender: 'a', recipient: 'b', content: 'hi', timestamp: '2026-01-01T00:00:00Z',
+    };
+    const event: SwarmEvent = { type: 'inbox.message', data: { message, swarm_id: 's1' } };
+    const result = swarmReducer(initialState, event);
+    expect(result.messages[0].swarm_id).toBe('s1');
+  });
+});
+
+describe('multiSwarmReducer', () => {
+  it('dispatches events to correct swarm only', () => {
+
+    const task: Task = {
+      id: 'task-0', subject: 'A', description: 'D', worker_role: 'R',
+      worker_name: 'w', status: 'pending', blocked_by: [], result: '',
+    };
+
+    let state = multiSwarmReducer(initialMultiSwarmState, {
+      type: 'swarm.add', swarmId: 's1',
+    });
+    state = multiSwarmReducer(state, {
+      type: 'swarm.add', swarmId: 's2',
+    });
+    state = multiSwarmReducer(state, {
+      type: 'swarm.event', swarmId: 's1',
+      event: { type: 'task.created', data: { task } },
+    });
+
+    expect(state.swarms['s1'].tasks).toHaveLength(1);
+    expect(state.swarms['s2'].tasks).toHaveLength(0);
+  });
+
+  it('two swarms with same task ID stay separate', () => {
+
+    const taskA: Task = {
+      id: 'task-0', subject: 'Swarm A task', description: 'D', worker_role: 'R',
+      worker_name: 'w', status: 'pending', blocked_by: [], result: '',
+    };
+    const taskB: Task = {
+      id: 'task-0', subject: 'Swarm B task', description: 'D', worker_role: 'R',
+      worker_name: 'w', status: 'pending', blocked_by: [], result: '',
+    };
+
+    let state = multiSwarmReducer(initialMultiSwarmState, { type: 'swarm.add', swarmId: 's1' });
+    state = multiSwarmReducer(state, { type: 'swarm.add', swarmId: 's2' });
+    state = multiSwarmReducer(state, {
+      type: 'swarm.event', swarmId: 's1',
+      event: { type: 'task.created', data: { task: taskA } },
+    });
+    state = multiSwarmReducer(state, {
+      type: 'swarm.event', swarmId: 's2',
+      event: { type: 'task.created', data: { task: taskB } },
+    });
+
+    expect(state.swarms['s1'].tasks[0].subject).toBe('Swarm A task');
+    expect(state.swarms['s2'].tasks[0].subject).toBe('Swarm B task');
+  });
+
+  it('completed swarm moves to completedSwarmIds', () => {
+
+
+    let state = multiSwarmReducer(initialMultiSwarmState, { type: 'swarm.add', swarmId: 's1' });
+    state = multiSwarmReducer(state, {
+      type: 'swarm.event', swarmId: 's1',
+      event: { type: 'swarm.phase_changed', data: { phase: 'complete' } },
+    });
+
+    expect(state.activeSwarmIds).not.toContain('s1');
+    expect(state.completedSwarmIds).toContain('s1');
+    expect(state.swarms['s1']).toBeDefined(); // data still accessible
+  });
+
+  it('removeSwarm frees all data', () => {
+
+
+    let state = multiSwarmReducer(initialMultiSwarmState, { type: 'swarm.add', swarmId: 's1' });
+    state = multiSwarmReducer(state, { type: 'swarm.remove', swarmId: 's1' });
+
+    expect(state.swarms['s1']).toBeUndefined();
+    expect(state.activeSwarmIds).not.toContain('s1');
+    expect(state.completedSwarmIds).not.toContain('s1');
+  });
+
+  it('hard cap at 10 swarms auto-dismisses oldest completed', () => {
+
+
+    let state = initialMultiSwarmState;
+    // Add 10 swarms, complete the first 5
+    for (let i = 0; i < 10; i++) {
+      state = multiSwarmReducer(state, { type: 'swarm.add', swarmId: `s${i}` });
+    }
+    for (let i = 0; i < 5; i++) {
+      state = multiSwarmReducer(state, {
+        type: 'swarm.event', swarmId: `s${i}`,
+        event: { type: 'swarm.phase_changed', data: { phase: 'complete' } },
+      });
+    }
+
+    // Add 11th — should evict oldest completed (s0)
+    state = multiSwarmReducer(state, { type: 'swarm.add', swarmId: 's10' });
+    expect(state.swarms['s0']).toBeUndefined();
+    expect(Object.keys(state.swarms)).toHaveLength(10);
   });
 });
 

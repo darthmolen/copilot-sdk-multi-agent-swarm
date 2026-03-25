@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -61,6 +62,8 @@ class SwarmOrchestrator:
         system_preamble: str = "",
         system_tools: list[str] | None = None,
         model: str = "gemini-3-pro-preview",
+        swarm_id: str | None = None,
+        work_base: Path | None = None,
     ) -> None:
         self.client = client
         self.event_bus = event_bus
@@ -73,16 +76,26 @@ class SwarmOrchestrator:
         self.system_preamble = system_preamble
         self.system_tools = system_tools or []
         self.model = model
+        self.swarm_id = swarm_id
+        self.work_dir: Path | None = None
+        if swarm_id and work_base:
+            self.work_dir = work_base / swarm_id
         self._cancelled = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
+    async def _emit(self, event_type: str, data: dict[str, Any]) -> None:
+        """Emit an event with swarm_id attached (if set)."""
+        if self.swarm_id:
+            data = {**data, "swarm_id": self.swarm_id}
+        await self.event_bus.emit(event_type, data)
+
     async def cancel(self) -> None:
         """Cancel the swarm execution."""
         self._cancelled = True
-        await self.event_bus.emit("swarm.cancelled", {})
+        await self._emit("swarm.cancelled", {})
 
     @property
     def is_cancelled(self) -> bool:
@@ -91,13 +104,16 @@ class SwarmOrchestrator:
     async def run(self, goal: str) -> str:
         """Full swarm lifecycle. Returns final report."""
         try:
+            if self.work_dir:
+                self.work_dir.mkdir(parents=True, exist_ok=True)
+                log.info("work_dir_created", path=str(self.work_dir))
             plan = await self._plan(goal)
             await self._spawn(plan)
             await self._execute()
             report = await self._synthesize(goal)
             return report
         except Exception as e:
-            await self.event_bus.emit("swarm.error", {"message": str(e)})
+            await self._emit("swarm.error", {"message": str(e)})
             raise
 
     # ------------------------------------------------------------------
@@ -147,7 +163,7 @@ class SwarmOrchestrator:
         plan = plan_holder[0]
 
         # Create tasks on the board
-        await self.event_bus.emit("swarm.phase_changed", {"phase": "planning"})
+        await self._emit("swarm.phase_changed", {"phase": "planning"})
 
         tasks_data = plan.get("tasks", [])
         task_ids: list[str] = [f"task-{idx}" for idx in range(len(tasks_data))]
@@ -162,9 +178,9 @@ class SwarmOrchestrator:
                 worker_name=t["worker_name"],
                 blocked_by=blocked_by,
             )
-            await self.event_bus.emit("task.created", {"task": task.to_dict()})
+            await self._emit("task.created", {"task": task.to_dict()})
 
-        await self.event_bus.emit("swarm.plan_complete", {"task_count": len(tasks_data)})
+        await self._emit("swarm.plan_complete", {"task_count": len(tasks_data)})
         return plan
 
     # ------------------------------------------------------------------
@@ -210,18 +226,20 @@ class SwarmOrchestrator:
                 system_preamble=system_preamble,
                 system_tools=self.system_tools,
                 model=self.model,
+                work_dir=self.work_dir,
+                swarm_id=self.swarm_id,
             )
             await agent.create_session(self.client)
             self.agents[name] = agent
 
             await self.registry.register(name, role, display_name)
             self.inbox.register_agent(name)
-            await self.event_bus.emit("agent.spawned", {
+            await self._emit("agent.spawned", {
                 "agent": {"name": name, "role": role, "display_name": display_name, "status": "idle", "tasks_completed": 0}
             })
 
-        await self.event_bus.emit("swarm.phase_changed", {"phase": "spawning"})
-        await self.event_bus.emit(
+        await self._emit("swarm.phase_changed", {"phase": "spawning"})
+        await self._emit(
             "swarm.spawn_complete", {"agent_count": len(self.agents)}
         )
 
@@ -234,7 +252,7 @@ class SwarmOrchestrator:
         max_rounds = self.config.get("max_rounds", 3)
         timeout = self.config.get("timeout", 300)
 
-        await self.event_bus.emit("swarm.phase_changed", {"phase": "executing"})
+        await self._emit("swarm.phase_changed", {"phase": "executing"})
 
         for round_num in range(1, max_rounds + 1):
             if self._cancelled:
@@ -244,7 +262,7 @@ class SwarmOrchestrator:
             if not runnable:
                 break
 
-            await self.event_bus.emit(
+            await self._emit(
                 "swarm.round_start",
                 {"round": round_num, "runnable_count": len(runnable)},
             )
@@ -253,6 +271,12 @@ class SwarmOrchestrator:
             for task in runnable:
                 if task.worker_name not in assigned and task.worker_name in self.agents:
                     assigned[task.worker_name] = task
+
+            # Mark agents as working
+            for worker_name in assigned:
+                await self._emit("agent.status_changed", {
+                    "agent_name": worker_name, "status": "working",
+                })
 
             results = await asyncio.gather(
                 *[
@@ -271,17 +295,31 @@ class SwarmOrchestrator:
                     )
                     if current_task and current_task.status == TaskStatus.IN_PROGRESS:
                         await self.task_board.update_status(task.id, "failed", str(result))
-                    await self.event_bus.emit(
+                    await self._emit(
                         "swarm.task_failed",
                         {"task_id": task.id, "agent": worker_name, "error": str(result)},
                     )
+                    await self._emit("agent.status_changed", {
+                        "agent_name": worker_name, "status": "failed",
+                    })
+                else:
+                    # Count completed tasks for this agent
+                    all_tasks = await self.task_board.get_tasks()
+                    completed_count = sum(
+                        1 for t in all_tasks
+                        if t.worker_name == worker_name and t.status == TaskStatus.COMPLETED
+                    )
+                    await self._emit("agent.status_changed", {
+                        "agent_name": worker_name, "status": "idle",
+                        "tasks_completed": completed_count,
+                    })
 
             # Emit task.updated for all tasks that changed this round
             all_tasks = await self.task_board.get_tasks()
             for t in all_tasks:
-                await self.event_bus.emit("task.updated", {"task": t.to_dict()})
+                await self._emit("task.updated", {"task": t.to_dict()})
 
-            await self.event_bus.emit("swarm.round_end", {"round": round_num})
+            await self._emit("swarm.round_end", {"round": round_num})
 
     # ------------------------------------------------------------------
     # Phase 4: Synthesis (tool-based structured output)
@@ -294,16 +332,33 @@ class SwarmOrchestrator:
         Waits for turn_end/idle instead of a fixed timeout — the CLI emits
         session.idle when truly done, so we don't miss late responses.
         """
-        await self.event_bus.emit("swarm.phase_changed", {"phase": "synthesizing"})
+        await self._emit("swarm.phase_changed", {"phase": "synthesizing"})
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
             f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}"
             for t in all_tasks
         )
 
+        # Include work directory files so synthesis agent has full research content
+        work_dir_content = ""
+        if self.work_dir and self.work_dir.is_dir():
+            file_parts: list[str] = []
+            for f in sorted(self.work_dir.rglob("*.md")):
+                try:
+                    text = f.read_text(encoding="utf-8")
+                    if text.strip():
+                        file_parts.append(f"### File: {f.name}\n\n{text}")
+                except Exception:
+                    pass
+            if file_parts:
+                work_dir_content = (
+                    "\n\n---\n\n# Research Files from Work Directory\n\n"
+                    + "\n\n---\n\n".join(file_parts)
+                )
+
         synthesis_template = self.template.synthesis_prompt if self.template else SYNTHESIS_PROMPT_TEMPLATE
         synthesis_prompt = synthesis_template.format(
-            task_results=task_results,
+            task_results=task_results + work_dir_content,
             goal=goal,
         )
 
@@ -350,7 +405,7 @@ class SwarmOrchestrator:
 
         report = "\n".join(text_content) if text_content else "(Synthesis produced no output)"
 
-        await self.event_bus.emit("leader.report", {"content": report})
-        await self.event_bus.emit("swarm.phase_changed", {"phase": "complete"})
-        await self.event_bus.emit("swarm.synthesis_complete", {})
+        await self._emit("leader.report", {"content": report})
+        await self._emit("swarm.phase_changed", {"phase": "complete"})
+        await self._emit("swarm.synthesis_complete", {})
         return report
