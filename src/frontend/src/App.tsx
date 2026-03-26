@@ -6,7 +6,8 @@ import { TaskBoard } from './components/TaskBoard';
 import { AgentRoster } from './components/AgentRoster';
 import { ChatPanel } from './components/ChatPanel';
 import { InboxFeed } from './components/InboxFeed';
-import type { SwarmEvent } from './types/swarm';
+import { ToolCardList } from './components/ToolCard';
+import type { SwarmEvent, ActiveTool } from './types/swarm';
 import './App.css';
 
 export function getApiKey(): string {
@@ -96,6 +97,7 @@ function SwarmDashboard() {
       allOutputs[k] = v;
     }
   }
+  const allActiveTools: ActiveTool[] = Object.values(store.swarms).flatMap((s) => s.activeTools);
 
   // Header status: any connected, any thinking
   const anyConnected = store.activeSwarmIds.length > 0;
@@ -153,6 +155,7 @@ function SwarmDashboard() {
           <AgentRoster agents={allAgents} outputs={allOutputs} />
           <InboxFeed messages={allMessages} />
         </div>
+        <ToolCardList tools={allActiveTools.filter((t) => t.status === 'running')} />
         <div className="bottom-row">
           <TaskBoard tasks={allTasks} />
         </div>
