@@ -108,6 +108,9 @@ class TestCancelFlag:
         await orch.cancel()
 
         assert any(t == "swarm.cancelled" for t, _ in events)
+        # Frontend needs swarm.phase_changed with "cancelled" to update UI state
+        phase_changed = [(t, d) for t, d in events if t == "swarm.phase_changed"]
+        assert any(d.get("phase") == "cancelled" for _, d in phase_changed)
 
 
 # ---------------------------------------------------------------------------

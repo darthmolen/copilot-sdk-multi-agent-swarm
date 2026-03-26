@@ -110,7 +110,7 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
 }
 
 export function isThinking(phase: SwarmState['phase']): boolean {
-  return phase !== null && phase !== 'complete' && phase !== 'cancelled';
+  return phase !== null && phase !== 'complete' && phase !== 'cancelled' && phase !== 'failed';
 }
 
 export function useSwarmState() {
@@ -181,9 +181,9 @@ export function multiSwarmReducer(
 
       let { activeSwarmIds, completedSwarmIds } = state;
 
-      // Auto-transition: active → completed when phase is complete/cancelled
+      // Auto-transition: active → completed when phase is complete/cancelled/failed
       if (
-        (updated.phase === 'complete' || updated.phase === 'cancelled') &&
+        (updated.phase === 'complete' || updated.phase === 'cancelled' || updated.phase === 'failed') &&
         activeSwarmIds.includes(action.swarmId)
       ) {
         activeSwarmIds = activeSwarmIds.filter((id) => id !== action.swarmId);

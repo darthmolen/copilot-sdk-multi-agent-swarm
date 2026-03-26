@@ -19,7 +19,7 @@ from backend.swarm.prompts import (
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.template_loader import LoadedTemplate
-from backend.swarm.tools import create_plan_tool, create_report_tool
+from backend.swarm.tools import create_plan_tool
 
 log = structlog.get_logger()
 
@@ -95,6 +95,7 @@ class SwarmOrchestrator:
     async def cancel(self) -> None:
         """Cancel the swarm execution."""
         self._cancelled = True
+        await self._emit("swarm.phase_changed", {"phase": "cancelled"})
         await self._emit("swarm.cancelled", {})
 
     @property
