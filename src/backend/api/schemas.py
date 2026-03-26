@@ -22,3 +22,13 @@ class SwarmStatusResponse(BaseModel):
     agents: list[dict]
     inbox_recent: list[dict]
     round_number: int
+
+
+class UpdateTemplateFileRequest(BaseModel):
+    content: str
+
+
+class CreateTemplateRequest(BaseModel):
+    key: str
+    name: str = ""
+    description: str = ""

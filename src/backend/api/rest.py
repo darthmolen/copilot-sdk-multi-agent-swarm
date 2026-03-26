@@ -7,15 +7,22 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import shutil
+
 import structlog
+import yaml
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import JSONResponse
 
 from backend.api.schemas import (
+    CreateTemplateRequest,
     SwarmStartRequest,
     SwarmStartResponse,
     SwarmStatusResponse,
+    UpdateTemplateFileRequest,
 )
+from backend.swarm.template_validator import validate_template_file
 from backend.swarm.template_loader import TemplateLoader
 from backend.swarm.templates import format_goal
 from backend.swarm.templates import list_templates as _list_templates
@@ -147,3 +154,119 @@ async def list_templates() -> dict:
     if _template_loader:
         return {"templates": _template_loader.list_available()}
     return {"templates": _list_templates()}
+
+
+@router.get("/api/templates/{key}")
+async def get_template_details(key: str) -> dict:
+    """Return full template: metadata + list of files with content."""
+    templates_dir = Path("src/templates") / key
+    if not templates_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    files = []
+    for f in sorted(templates_dir.iterdir()):
+        if f.is_file():
+            files.append({
+                "filename": f.name,
+                "content": f.read_text(encoding="utf-8"),
+            })
+
+    # Read metadata from _template.yaml
+    meta_file = templates_dir / "_template.yaml"
+    meta: dict = {}
+    if meta_file.is_file():
+        text = meta_file.read_text(encoding="utf-8")
+        # Parse frontmatter
+        lines = text.split("\n")
+        if lines[0].strip() == "---":
+            close_idx = next(
+                (i for i in range(1, len(lines)) if lines[i].strip() == "---"),
+                None,
+            )
+            if close_idx:
+                meta = yaml.safe_load("\n".join(lines[1:close_idx])) or {}
+
+    return {
+        "key": key,
+        "name": meta.get("name", key),
+        "description": meta.get("description", ""),
+        "files": files,
+    }
+
+
+@router.put("/api/templates/{key}/files/{filename}")
+async def update_template_file(
+    key: str, filename: str, request: UpdateTemplateFileRequest,
+) -> dict:
+    """Update a template file. Validates before saving. Returns 422 if invalid."""
+    templates_dir = Path("src/templates") / key
+    if not templates_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    content = request.content
+    result = validate_template_file(filename, content)
+
+    if not result.valid:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "errors": [
+                    {"message": e.message, "line": e.line} for e in result.errors
+                ],
+            },
+        )
+
+    file_path = templates_dir / filename
+    file_path.write_text(content, encoding="utf-8")
+    return {"valid": True, "filename": filename}
+
+
+@router.post("/api/templates", status_code=201)
+async def create_template(request: CreateTemplateRequest) -> dict:
+    """Create a new template with scaffolded files."""
+    key = request.key
+    name = request.name or key
+    description = request.description
+
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required")
+
+    templates_dir = Path("src/templates") / key
+    if templates_dir.exists():
+        raise HTTPException(status_code=409, detail="Template already exists")
+
+    templates_dir.mkdir(parents=True)
+
+    # Scaffold files
+    (templates_dir / "_template.yaml").write_text(
+        f"---\nkey: {key}\nname: {name}\ndescription: {description}\n"
+        f'goal_template: "{{user_input}}"\n---\n',
+        encoding="utf-8",
+    )
+    (templates_dir / "leader.md").write_text(
+        "---\nname: leader\n---\n\nYou are the leader agent. Decompose the goal into tasks.\n",
+        encoding="utf-8",
+    )
+    (templates_dir / "synthesis.md").write_text(
+        "---\nname: synthesis\n---\n\nSynthesize the results into a comprehensive report.\n",
+        encoding="utf-8",
+    )
+    (templates_dir / "worker-default.md").write_text(
+        "---\nname: default-worker\ndisplayName: Default Worker\n"
+        "description: A general-purpose worker\n---\n\n"
+        "Complete the assigned task thoroughly.\n",
+        encoding="utf-8",
+    )
+
+    return {"key": key, "name": name, "description": description}
+
+
+@router.delete("/api/templates/{key}")
+async def delete_template(key: str) -> dict:
+    """Delete a template directory."""
+    templates_dir = Path("src/templates") / key
+    if not templates_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    shutil.rmtree(templates_dir)
+    return {"deleted": True, "key": key}

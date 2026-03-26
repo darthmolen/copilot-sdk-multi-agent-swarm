@@ -335,3 +335,137 @@ def test_websocket_receives_swarm_events() -> None:
         assert data["type"] == "phase_changed"
         assert data["phase"] == "planning"
         assert data["swarm_id"] == swarm_id
+
+
+# ---------------------------------------------------------------------------
+# Template CRUD tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_template_details_returns_files() -> None:
+    """GET /api/templates/{key} returns template metadata and file contents."""
+    client = TestClient(app)
+    response = client.get("/api/templates/deep-research")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["key"] == "deep-research"
+    assert "files" in body
+    assert isinstance(body["files"], list)
+    # Should have at least _template.yaml, leader.md, synthesis.md
+    filenames = [f["filename"] for f in body["files"]]
+    assert "_template.yaml" in filenames
+    assert "leader.md" in filenames
+    assert "synthesis.md" in filenames
+    # Each file should have content
+    for f in body["files"]:
+        assert "content" in f
+        assert len(f["content"]) > 0
+
+
+def test_get_template_details_404_for_unknown() -> None:
+    """GET /api/templates/{key} returns 404 for unknown template."""
+    client = TestClient(app)
+    response = client.get("/api/templates/nonexistent-template")
+    assert response.status_code == 404
+
+
+def test_update_template_file_validates() -> None:
+    """PUT /api/templates/{key}/files/{filename} validates and saves valid content."""
+    import shutil
+    from pathlib import Path
+    # Create a temp template
+    template_dir = Path("src/templates/_test-crud")
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "_template.yaml").write_text(
+        '---\nkey: _test-crud\nname: Test\ndescription: Test template\ngoal_template: "Do {user_input}"\n---\n'
+    )
+    (template_dir / "leader.md").write_text("---\nname: leader\n---\n\nYou are the leader.")
+    (template_dir / "synthesis.md").write_text("---\nname: synthesis\n---\n\nSynthesize results.")
+
+    client = TestClient(app)
+    try:
+        response = client.put(
+            "/api/templates/_test-crud/files/leader.md",
+            json={"content": "---\nname: leader\n---\n\nUpdated leader prompt."},
+        )
+        assert response.status_code == 200
+        assert response.json()["valid"] is True
+        # Verify file was actually written
+        assert "Updated leader prompt" in (template_dir / "leader.md").read_text()
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_update_template_file_rejects_invalid() -> None:
+    """PUT /api/templates/{key}/files/{filename} returns 422 for invalid content."""
+    import shutil
+    from pathlib import Path
+    template_dir = Path("src/templates/_test-invalid")
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "_template.yaml").write_text(
+        '---\nkey: _test-invalid\nname: Test\ndescription: Test\ngoal_template: "Do {user_input}"\n---\n'
+    )
+    (template_dir / "leader.md").write_text("---\nname: leader\n---\n\nOriginal content.")
+
+    client = TestClient(app)
+    try:
+        response = client.put(
+            "/api/templates/_test-invalid/files/leader.md",
+            json={"content": "No frontmatter at all"},
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert "errors" in body
+        assert len(body["errors"]) > 0
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_create_template_scaffolds_files() -> None:
+    """POST /api/templates creates a new template with scaffolded files."""
+    import shutil
+    from pathlib import Path
+
+    client = TestClient(app)
+    # Ensure it doesn't exist
+    template_dir = Path("src/templates/my-new-template")
+    shutil.rmtree(template_dir, ignore_errors=True)
+
+    try:
+        response = client.post(
+            "/api/templates",
+            json={"key": "my-new-template", "name": "My New Template", "description": "A test template"},
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["key"] == "my-new-template"
+        # Verify files were created
+        assert template_dir.is_dir()
+        assert (template_dir / "_template.yaml").is_file()
+        assert (template_dir / "leader.md").is_file()
+        assert (template_dir / "synthesis.md").is_file()
+        assert (template_dir / "worker-default.md").is_file()
+        # Verify _template.yaml has {user_input}
+        yaml_content = (template_dir / "_template.yaml").read_text()
+        assert "{user_input}" in yaml_content
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_delete_template_removes_directory() -> None:
+    """DELETE /api/templates/{key} removes the template directory."""
+    import shutil
+    from pathlib import Path
+    template_dir = Path("src/templates/_test-delete")
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "_template.yaml").write_text(
+        '---\nkey: _test-delete\nname: Del\ndescription: Del\ngoal_template: "{user_input}"\n---\n'
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.delete("/api/templates/_test-delete")
+        assert response.status_code == 200
+        assert not template_dir.exists()
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
