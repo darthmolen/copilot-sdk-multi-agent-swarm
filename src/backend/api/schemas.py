@@ -32,3 +32,13 @@ class SwarmStatusResponse(BaseModel):
     inbox_recent: list[dict]
     round_number: int
     report: str | None = None
+
+
+class UpdateTemplateFileRequest(BaseModel):
+    content: str
+
+
+class CreateTemplateRequest(BaseModel):
+    key: str
+    name: str = ""
+    description: str = ""
