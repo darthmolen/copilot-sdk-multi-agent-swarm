@@ -1279,3 +1279,272 @@
   background: #475569;
   color: #e2e8f0;
 }
+
+/* Template Editor */
+.template-editor-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.template-editor {
+  width: 95vw;
+  height: 90vh;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.template-editor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid #334155;
+  background: #1e293b;
+}
+
+.template-editor__header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #e2e8f0;
+}
+
+.template-editor__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.template-editor__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.template-editor__sidebar {
+  width: 240px;
+  border-right: 1px solid #334155;
+  padding: 12px;
+  overflow-y: auto;
+  background: #0f172a;
+}
+
+.template-editor__sidebar h3 {
+  margin: 0 0 12px 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.te-template-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.te-template-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.te-template-item:hover {
+  background: #1e293b;
+}
+
+.te-template-item--active {
+  background: #1e3a5f;
+  border: 1px solid #3b82f6;
+}
+
+.te-template-name {
+  display: block;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+}
+
+.te-template-key {
+  display: block;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-family: monospace;
+}
+
+.template-editor__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.te-file-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #334155;
+  background: #1e293b;
+  overflow-x: auto;
+}
+
+.te-file-tab {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-family: monospace;
+  cursor: pointer;
+}
+
+.te-file-tab:hover {
+  color: #e2e8f0;
+  background: #334155;
+}
+
+.te-file-tab--active {
+  color: #e2e8f0;
+  background: #0f172a;
+  border-color: #334155;
+  border-bottom-color: #0f172a;
+}
+
+.te-editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.te-editor-textarea {
+  flex: 1;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: none;
+  padding: 16px;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  tab-size: 2;
+}
+
+.te-errors {
+  padding: 8px 16px;
+  background: #1c1017;
+  border-top: 1px solid #ef4444;
+}
+
+.te-error {
+  color: #fca5a5;
+  font-size: 0.8rem;
+  padding: 2px 0;
+}
+
+.te-error-line {
+  color: #ef4444;
+  font-weight: bold;
+  margin-right: 8px;
+}
+
+.te-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid #334155;
+  background: #1e293b;
+}
+
+.te-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.te-btn:hover {
+  background: #334155;
+}
+
+.te-btn--save {
+  background: #1e40af;
+  border-color: #3b82f6;
+}
+
+.te-btn--save:hover {
+  background: #2563eb;
+}
+
+.te-btn--delete {
+  background: #7f1d1d;
+  border-color: #ef4444;
+  margin-left: auto;
+}
+
+.te-btn--delete:hover {
+  background: #991b1b;
+}
+
+.te-btn--create {
+  background: #14532d;
+  border-color: #22c55e;
+}
+
+.te-btn--create:hover {
+  background: #166534;
+}
+
+.te-btn--close {
+  background: #334155;
+}
+
+.te-status {
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.te-status--success {
+  color: #22c55e;
+}
+
+.te-status--error {
+  color: #ef4444;
+}
+
+.te-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #64748b;
+}
+
+.te-edit-btn {
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.te-edit-btn:hover {
+  background: #334155;
+  color: #e2e8f0;
+}

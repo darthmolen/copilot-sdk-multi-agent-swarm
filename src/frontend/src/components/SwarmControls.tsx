@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { TemplateEditor } from './TemplateEditor';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
@@ -17,6 +18,7 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
   const [template, setTemplate] = useState(TEMPLATES[0].value);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showEditor, setShowEditor] = useState(false);
 
   async function handleStart() {
     if (!goal.trim()) return;
@@ -73,11 +75,20 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
             </option>
           ))}
         </select>
+        <button
+          onClick={() => setShowEditor(true)}
+          className="te-edit-btn"
+          title="Edit templates"
+          aria-label="Edit templates"
+        >
+          &#9998;
+        </button>
         <button onClick={handleStart} disabled={loading || !goal.trim()} className="start-button">
           {loading ? 'Starting...' : 'Start Swarm'}
         </button>
       </div>
       {error && <p className="error-text">{error}</p>}
+      {showEditor && <TemplateEditor onClose={() => setShowEditor(false)} />}
     </div>
   );
 }
