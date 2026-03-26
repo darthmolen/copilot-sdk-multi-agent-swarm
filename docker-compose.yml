@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  swarm:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SWARM_API_KEY=${SWARM_API_KEY:-}
+      - ENVIRONMENT=production
+    volumes:
+      - ./workdir:/app/workdir
+      - ./logs:/app/logs
+    restart: unless-stopped
