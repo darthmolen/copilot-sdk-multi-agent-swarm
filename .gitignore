@@ -12,4 +12,4 @@ workdir/
 node_modules/
 .venv/
 venv/
-.env
+.env.claude/
