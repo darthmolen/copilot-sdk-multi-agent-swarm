@@ -764,3 +764,132 @@
   flex-direction: column;
   gap: 2px;
 }
+
+/* Markdown-rendered chat content */
+.chat-content--html {
+  white-space: normal;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.chat-content--html h1,
+.chat-content--html h2,
+.chat-content--html h3,
+.chat-content--html h4 {
+  margin: 1em 0 0.5em;
+  color: #e2e8f0;
+}
+
+.chat-content--html h1:first-child,
+.chat-content--html h2:first-child,
+.chat-content--html h3:first-child {
+  margin-top: 0;
+}
+
+.chat-content--html p {
+  margin: 0.5em 0;
+  line-height: 1.6;
+}
+
+.chat-content--html ul,
+.chat-content--html ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.chat-content--html code {
+  background: #0f172a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.chat-content--html pre {
+  background: #0f172a;
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.chat-content--html pre code {
+  background: none;
+  padding: 0;
+}
+
+.chat-content--html a {
+  color: #60a5fa;
+}
+
+.chat-content--html table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  width: 100%;
+}
+
+.chat-content--html th,
+.chat-content--html td {
+  border: 1px solid #334155;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.chat-content--html th {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+/* Mermaid Diagrams */
+.mermaid-container {
+  margin: 12px 0;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mermaid-diagram {
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-source {
+  padding: 12px;
+}
+
+.mermaid-source pre {
+  margin: 0;
+  background: #0f172a;
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.mermaid-source code {
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.mermaid-toggle {
+  display: block;
+  margin: 0;
+  padding: 4px 12px;
+  background: #334155;
+  border: none;
+  border-bottom: 1px solid #475569;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.mermaid-toggle:hover {
+  background: #475569;
+  color: #e2e8f0;
+}

@@ -1,9 +1,24 @@
+import { useRef, useMemo } from 'react';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { useMermaid } from '../hooks/useMermaid';
+
 interface ChatPanelProps {
   plan: string;
   report: string;
 }
 
+function renderMarkdown(source: string): string {
+  const raw = marked.parse(source, { async: false }) as string;
+  return DOMPurify.sanitize(raw);
+}
+
 export function ChatPanel({ plan, report }: ChatPanelProps) {
+  const reportRef = useRef<HTMLDivElement>(null);
+  const reportHtml = useMemo(() => (report ? renderMarkdown(report) : ''), [report]);
+
+  useMermaid(reportRef, [reportHtml]);
+
   return (
     <div className="chat-panel">
       <h2>Leader Output</h2>
@@ -16,7 +31,11 @@ export function ChatPanel({ plan, report }: ChatPanelProps) {
       {report && (
         <section className="chat-section">
           <h3>Synthesis Report</h3>
-          <pre className="chat-content">{report}</pre>
+          <div
+            ref={reportRef}
+            className="chat-content chat-content--html"
+            dangerouslySetInnerHTML={{ __html: reportHtml }}
+          />
         </section>
       )}
       {!plan && !report && (
