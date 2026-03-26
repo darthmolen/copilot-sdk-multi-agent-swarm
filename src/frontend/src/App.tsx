@@ -1,4 +1,4 @@
-import { useReducer, useCallback, useState } from 'react';
+import { useReducer, useCallback, useState, useEffect, useRef } from 'react';
 import { multiSwarmReducer, initialMultiSwarmState, isThinking } from './hooks/useSwarmState';
 import { chatReducer, initialChatStore, type ChatAction } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -10,7 +10,12 @@ import { InboxFeed } from './components/InboxFeed';
 import { ResizableLayout } from './components/ResizableLayout';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import type { SwarmEvent } from './types/swarm';
+import type { SwarmEvent, FileInfo } from './types/swarm';
+import { ArtifactList } from './components/ArtifactList';
+import { saveReport, getSavedReports, getReportById, truncateTitle } from './utils/savedReportStorage';
+import { parseSessionFromSearch } from './utils/urlSession';
+import { buildReportList } from './utils/buildReportList';
+import { ReportList } from './components/ReportList';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
@@ -84,7 +89,52 @@ function App() {
 function SwarmDashboard() {
   const [store, swarmDispatch] = useReducer(multiSwarmReducer, initialMultiSwarmState);
   const [chatStore, chatDispatch] = useReducer(chatReducer, initialChatStore);
-  const [reportSwarmId, setReportSwarmId] = useState<string | null>(null);
+  const [reportSwarmId, setReportSwarmId] = useState<string | null>(() => {
+    const sessionId = parseSessionFromSearch(window.location.search);
+    if (sessionId) {
+      // If in localStorage, show immediately
+      if (getReportById(sessionId)) return sessionId;
+      // Otherwise return the ID — useEffect below will try to fetch from backend
+      return sessionId;
+    }
+    return null;
+  });
+
+  // Artifact explorer state
+  const [swarmFiles, setSwarmFiles] = useState<FileInfo[]>([]);
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
+  const [activeFileContent, setActiveFileContent] = useState<string | null>(null);
+
+  // Fetch report from backend when URL has a session but localStorage is empty
+  const fetchedRef = useRef(false);
+  useEffect(() => {
+    if (fetchedRef.current) return;
+    const sessionId = parseSessionFromSearch(window.location.search);
+    if (!sessionId || getReportById(sessionId)) return;
+    fetchedRef.current = true;
+
+    const apiKey = getApiKey();
+    fetch(`${API_BASE}/api/swarm/${sessionId}/status`, {
+      headers: apiKey ? { 'X-API-Key': apiKey } : {},
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.report) {
+          const firstLine = data.report.split('\n')[0].replace(/^#+\s*/, '');
+          saveReport({
+            swarmId: sessionId,
+            title: truncateTitle(firstLine),
+            timestamp: Date.now(),
+            report: data.report,
+            phase: data.phase ?? 'complete',
+          });
+          setReportSwarmId(sessionId);
+        }
+      })
+      .catch(() => {
+        // Backend unreachable or swarm not found — stay on dashboard
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSwarmEvent = useCallback(
     (swarmId: string, event: SwarmEvent) => {
@@ -129,7 +179,90 @@ function SwarmDashboard() {
     swarmDispatch({ type: 'swarm.add', swarmId });
   }
 
-  async function handleSendChat(swarmId: string, message: string) {
+  // Auto-save completed reports to localStorage
+  useEffect(() => {
+    for (const id of store.completedSwarmIds) {
+      const swarm = store.swarms[id];
+      if (swarm?.leaderReport && swarm.phase === 'complete') {
+        const firstLine = swarm.leaderReport.split('\n')[0].replace(/^#+\s*/, '');
+        saveReport({
+          swarmId: id,
+          title: truncateTitle(firstLine),
+          timestamp: Date.now(),
+          report: swarm.leaderReport,
+          phase: swarm.phase,
+        });
+      }
+    }
+  }, [store.completedSwarmIds, store.swarms]);
+
+  // When entering report view: ensure report on server + fetch file list
+  const artifactFetchedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!reportSwarmId || artifactFetchedRef.current === reportSwarmId) return;
+    artifactFetchedRef.current = reportSwarmId;
+
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
+
+    // Step 1: Ensure the synthesis report exists on disk
+    const reportText = store.swarms[reportSwarmId]?.leaderReport || getReportById(reportSwarmId)?.report;
+    const ensurePromise = reportText
+      ? fetch(`${API_BASE}/api/swarm/${reportSwarmId}/files/ensure-report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ report: reportText }),
+        }).catch(() => null)
+      : Promise.resolve(null);
+
+    // Step 2: After ensure, fetch file list
+    ensurePromise.then(() =>
+      fetch(`${API_BASE}/api/swarm/${reportSwarmId}/files`, { headers })
+    )
+      .then((res) => (res.ok ? res.json() : { files: [] }))
+      .then((data) => {
+        const files: FileInfo[] = data.files ?? [];
+        setSwarmFiles(files);
+        // Default to synthesis_report.md if it exists
+        const defaultFile = files.find((f: FileInfo) => f.name === 'synthesis_report.md')?.path
+          ?? files[0]?.path ?? null;
+        setActiveFilePath(defaultFile);
+        // Fetch the default file content
+        if (defaultFile) {
+          fetch(`${API_BASE}/api/swarm/${reportSwarmId}/files/${defaultFile}`, { headers })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d?.content) setActiveFileContent(d.content); })
+            .catch(() => null);
+        }
+      })
+      .catch(() => null);
+  }, [reportSwarmId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch file content when active file changes
+  function handleSelectArtifact(path: string) {
+    if (!reportSwarmId || path === activeFilePath) return;
+    setActiveFilePath(path);
+    setActiveFileContent(null); // clear while loading
+
+    const apiKey = getApiKey();
+    fetch(`${API_BASE}/api/swarm/${reportSwarmId}/files/${path}`, {
+      headers: apiKey ? { 'X-API-Key': apiKey } : {},
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data?.content) setActiveFileContent(data.content); })
+      .catch(() => null);
+  }
+
+  // Sync URL with current report view
+  useEffect(() => {
+    if (reportSwarmId) {
+      window.history.replaceState(null, '', `?session=${reportSwarmId}`);
+    } else {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, [reportSwarmId]);
+
+  async function handleSendChat(swarmId: string, message: string, activeFile?: string | null) {
     // Optimistically add user message
     chatDispatch({
       type: 'chat.user_send',
@@ -144,7 +277,7 @@ function SwarmDashboard() {
         'Content-Type': 'application/json',
         ...(apiKey ? { 'X-API-Key': apiKey } : {}),
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, active_file: activeFile ?? null }),
     });
   }
 
@@ -164,16 +297,17 @@ function SwarmDashboard() {
   const anyThinking = Object.values(store.swarms).some((s) => isThinking(s.phase));
   const anyError = Object.values(store.swarms).find((s) => s.error)?.error ?? null;
 
-  // Reports from completed swarms
-  const swarmReports = [...store.activeSwarmIds, ...store.completedSwarmIds]
-    .filter((id) => store.swarms[id]?.leaderReport)
-    .map((id) => ({ id, report: store.swarms[id].leaderReport }));
-
-  const currentReport = reportSwarmId ? store.swarms[reportSwarmId]?.leaderReport : null;
+  // Unified report list from live swarms + localStorage
+  const savedReports = getSavedReports();
+  const reportListItems = buildReportList(
+    store.activeSwarmIds, store.completedSwarmIds, store.swarms, savedReports,
+  );
+  const currentReport = reportSwarmId
+    ? (store.swarms[reportSwarmId]?.leaderReport || getReportById(reportSwarmId)?.report || null)
+    : null;
   const currentChatState = reportSwarmId ? chatStore.chats[reportSwarmId] : null;
-  const isSwarmComplete = reportSwarmId
-    ? store.swarms[reportSwarmId]?.phase === 'complete'
-    : false;
+  // Chat is always enabled — backend can resume_session for any past swarm
+  const chatEnabled = !!reportSwarmId;
 
   // Full-screen report + chat view
   if (reportSwarmId && currentReport) {
@@ -200,29 +334,42 @@ function SwarmDashboard() {
         {store.activeSwarmIds.map((id) => (
           <SwarmConnection key={id} swarmId={id} onEvent={handleSwarmEvent} />
         ))}
-        {/* Also connect to completed swarms for chat */}
-        {store.completedSwarmIds
-          .filter((id) => id === reportSwarmId)
-          .map((id) => (
-            <SwarmConnection key={`chat-${id}`} swarmId={id} onEvent={handleSwarmEvent} />
-          ))}
+        {/* Always connect WS for the current report — needed for saved/resumed sessions */}
+        {reportSwarmId && !store.activeSwarmIds.includes(reportSwarmId) && (
+          <SwarmConnection key={`chat-${reportSwarmId}`} swarmId={reportSwarmId} onEvent={handleSwarmEvent} />
+        )}
 
         <ResizableLayout
           left={
             <div className="report-view">
               <div
                 className="report-content"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(currentReport) }}
+                dangerouslySetInnerHTML={{
+                  __html: renderMarkdown(activeFileContent ?? currentReport),
+                }}
               />
             </div>
           }
           right={
-            <ChatPanel
-              messages={currentChatState?.messages ?? []}
-              streamingMessage={currentChatState?.streamingMessage ?? null}
-              onSend={(msg) => handleSendChat(reportSwarmId, msg)}
-              chatEnabled={isSwarmComplete}
-            />
+            <div className="right-panel">
+              <ArtifactList
+                files={swarmFiles}
+                activeFile={activeFilePath}
+                onSelect={handleSelectArtifact}
+              />
+              {activeFilePath && (
+                <div className="active-file-indicator">
+                  Active: {activeFilePath}
+                </div>
+              )}
+              <ChatPanel
+                messages={currentChatState?.messages ?? []}
+                streamingMessage={currentChatState?.streamingMessage ?? null}
+                sessionStarting={currentChatState?.sessionStarting ?? false}
+                onSend={(msg) => handleSendChat(reportSwarmId, msg, activeFilePath)}
+                chatEnabled={chatEnabled}
+              />
+            </div>
           }
           defaultLeftPercent={55}
         />
@@ -253,15 +400,11 @@ function SwarmDashboard() {
       </header>
 
       <div className="controls-row">
-        {swarmReports.map((r) => (
-          <button
-            key={r.id}
-            className="report-button active"
-            onClick={() => setReportSwarmId(r.id)}
-          >
-            📄 {r.id.slice(0, 8)}
-          </button>
-        ))}
+        <ReportList
+          items={reportListItems}
+          activeId={reportSwarmId}
+          onSelect={setReportSwarmId}
+        />
         <SwarmControls onStart={handleStartSwarm} />
       </div>
 

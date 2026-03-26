@@ -52,6 +52,7 @@ export interface ChatMessage {
 export interface ChatState {
   messages: ChatMessage[];
   streamingMessage: { id: string; content: string } | null;
+  sessionStarting: boolean;
   activeTools: Array<{
     toolCallId: string;
     toolName: string;
@@ -62,6 +63,20 @@ export interface ChatState {
 export interface ChatStore {
   chats: Record<string, ChatState>;
   activeSwarmId: string | null;
+}
+
+export interface FileInfo {
+  name: string;
+  path: string;
+  size: number;
+}
+
+export interface SavedReport {
+  swarmId: string;
+  title: string;
+  timestamp: number;
+  report: string;
+  phase: SwarmPhase;
 }
 
 export interface SwarmEvent {

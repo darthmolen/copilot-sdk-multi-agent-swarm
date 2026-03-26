@@ -3,6 +3,7 @@ import type { ChatMessage, ChatState, ChatStore } from '../types/swarm';
 const emptyChatState: ChatState = {
   messages: [],
   streamingMessage: null,
+  sessionStarting: false,
   activeTools: [],
 };
 
@@ -35,6 +36,7 @@ export function chatReducer(state: ChatStore, action: ChatAction): ChatStore {
       const streaming = chat.streamingMessage;
       return setChatState(state, action.swarmId, {
         ...chat,
+        sessionStarting: false,
         streamingMessage: {
           id: streaming?.id ?? action.messageId,
           content: (streaming?.content ?? '') + action.delta,
@@ -51,6 +53,7 @@ export function chatReducer(state: ChatStore, action: ChatAction): ChatStore {
       };
       return setChatState(state, action.swarmId, {
         ...chat,
+        sessionStarting: false,
         messages: [...chat.messages, msg],
         streamingMessage: null,
       });
@@ -60,6 +63,7 @@ export function chatReducer(state: ChatStore, action: ChatAction): ChatStore {
       const chat = getChatState(state, action.swarmId);
       return setChatState(state, action.swarmId, {
         ...chat,
+        sessionStarting: true,
         messages: [...chat.messages, action.message],
       });
     }

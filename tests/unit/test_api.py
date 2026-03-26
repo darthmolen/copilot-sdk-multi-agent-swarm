@@ -158,6 +158,42 @@ def test_get_swarm_status_returns_state() -> None:
     assert body["round_number"] == 0
 
 
+def test_get_swarm_status_returns_report_when_complete() -> None:
+    """GET /api/swarm/{id}/status includes report text when swarm is complete."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/api/swarm/start", json={"goal": "Test report"}
+    )
+    swarm_id = create_resp.json()["swarm_id"]
+
+    # Simulate completion with a report
+    swarm_store[swarm_id]["phase"] = "complete"
+    swarm_store[swarm_id]["report"] = "# Final Report\n\nAll done."
+
+    response = client.get(f"/api/swarm/{swarm_id}/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"] == "# Final Report\n\nAll done."
+
+
+def test_get_swarm_status_returns_null_report_when_incomplete() -> None:
+    """GET /api/swarm/{id}/status returns null report when swarm is still running."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/api/swarm/start", json={"goal": "Test"}
+    )
+    swarm_id = create_resp.json()["swarm_id"]
+
+    response = client.get(f"/api/swarm/{swarm_id}/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"] is None
+
+
 def test_get_swarm_status_unknown_returns_404() -> None:
     """GET status for a nonexistent swarm_id returns 404."""
     _clear_swarm_store()
@@ -307,15 +343,16 @@ def test_ws_accepted_with_correct_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_chat_returns_404_for_unknown_swarm() -> None:
-    """POST /api/swarm/{id}/chat returns 404 for nonexistent swarm."""
+def test_chat_returns_400_when_no_client_configured() -> None:
+    """POST /api/swarm/{id}/chat returns 400 when no copilot client is available."""
     _clear_swarm_store()
     client = TestClient(app)
     response = client.post(
         "/api/swarm/nonexistent/chat",
         json={"message": "Hello"},
     )
-    assert response.status_code == 404
+    # No copilot client configured in test — returns 400 not 404
+    assert response.status_code == 400
 
 
 def test_chat_returns_409_for_incomplete_swarm() -> None:
@@ -370,6 +407,197 @@ def test_chat_returns_401_when_auth_required() -> None:
         json={"message": "Hello"},
     )
     assert response.status_code == 401
+
+
+def test_chat_resumes_session_for_unknown_swarm() -> None:
+    """POST /api/swarm/{id}/chat creates orchestrator on-the-fly for swarms not in store."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Inject a mock copilot client + event bus so on-the-fly orchestrator can be created
+    from unittest.mock import MagicMock, AsyncMock
+    from backend.events import EventBus
+    import backend.api.rest as rest_mod
+    old_client, old_bus = rest_mod._copilot_client, rest_mod._event_bus
+
+    mock_client = MagicMock()
+
+    # Session that fires idle on send() so chat() completes
+    class _ResumedSession:
+        def __init__(self):
+            self._handlers = []
+        def on(self, handler):
+            self._handlers.append(handler)
+            return lambda: None
+        async def send(self, prompt, **kw):
+            from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
+            for h in self._handlers:
+                h(SessionEvent(type=SessionEventType.SESSION_IDLE, data=SessionEventData(turn_id="t1")))
+            return "msg-1"
+
+    mock_client.resume_session = AsyncMock(return_value=_ResumedSession())
+    rest_mod._copilot_client = mock_client
+    rest_mod._event_bus = EventBus()
+
+    try:
+        # No swarm created — chat with a swarm_id that only exists as a past session
+        response = client.post(
+            "/api/swarm/old-swarm-123/chat",
+            json={"message": "Summarize findings"},
+        )
+        # Should return 200 (streaming), not 404
+        assert response.status_code == 200
+        assert response.json()["status"] == "streaming"
+
+        # Orchestrator should be cached in swarm_store for subsequent messages
+        assert "old-swarm-123" in swarm_store
+        orch = swarm_store["old-swarm-123"]["orchestrator"]
+        assert orch.synthesis_session_id == "synth-old-swarm-123"
+    finally:
+        rest_mod._copilot_client = old_client
+        rest_mod._event_bus = old_bus
+
+
+# ---------------------------------------------------------------------------
+# File endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_list_files_returns_empty_for_missing_workdir() -> None:
+    """GET /api/swarm/{id}/files returns empty list when workdir doesn't exist."""
+    client = TestClient(app)
+    response = client.get("/api/swarm/nonexistent-swarm/files")
+    assert response.status_code == 200
+    assert response.json()["files"] == []
+
+
+def test_list_files_returns_files_in_workdir(tmp_path: pytest.fixture) -> None:
+    """GET /api/swarm/{id}/files lists files in workdir."""
+    import backend.api.rest as rest_mod
+
+    # Create a temp workdir with files
+    swarm_id = "test-files-swarm"
+    work_dir = tmp_path / swarm_id
+    work_dir.mkdir()
+    (work_dir / "report.md").write_text("# Report")
+    (work_dir / "notes.md").write_text("# Notes")
+
+    # Patch the workdir base path
+    original_list = rest_mod.router
+    client = TestClient(app)
+
+    # We need to create files in the actual workdir path the endpoint uses
+    from pathlib import Path
+    actual_dir = Path("workdir") / swarm_id
+    actual_dir.mkdir(parents=True, exist_ok=True)
+    (actual_dir / "report.md").write_text("# Report")
+    (actual_dir / "notes.md").write_text("# Notes")
+
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files")
+        assert response.status_code == 200
+        files = response.json()["files"]
+        assert len(files) == 2
+        names = {f["name"] for f in files}
+        assert "report.md" in names
+        assert "notes.md" in names
+    finally:
+        import shutil
+        shutil.rmtree(actual_dir, ignore_errors=True)
+
+
+def test_get_file_returns_content() -> None:
+    """GET /api/swarm/{id}/files/{path} returns file content."""
+    from pathlib import Path
+    swarm_id = "test-read-swarm"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "test.md").write_text("Hello world")
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/test.md")
+        assert response.status_code == 200
+        assert response.json()["content"] == "Hello world"
+    finally:
+        import shutil
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_get_file_404_for_missing() -> None:
+    """GET /api/swarm/{id}/files/{path} returns 404 for nonexistent file."""
+    client = TestClient(app)
+    response = client.get("/api/swarm/no-swarm/files/missing.md")
+    assert response.status_code == 404
+
+
+def test_get_file_403_for_path_traversal() -> None:
+    """Path traversal via symlink or encoded path is blocked."""
+    from pathlib import Path
+    import shutil
+    # Create a workdir with a symlink pointing outside
+    swarm_id = "test-traversal"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    symlink = work_dir / "escape"
+    try:
+        symlink.symlink_to("/etc/hostname")
+    except OSError:
+        # Can't create symlinks — skip
+        shutil.rmtree(work_dir, ignore_errors=True)
+        return
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/escape")
+        # Symlink resolves outside workdir — should be 403
+        assert response.status_code == 403
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_ensure_report_creates_file_when_missing() -> None:
+    """POST /api/swarm/{id}/files/ensure-report creates the file if missing."""
+    from pathlib import Path
+    import shutil
+    swarm_id = "test-ensure-swarm"
+    work_dir = Path("workdir") / swarm_id
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            f"/api/swarm/{swarm_id}/files/ensure-report",
+            json={"report": "# My Report\n\nContent here"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["created"] is True
+        assert (work_dir / "synthesis_report.md").read_text() == "# My Report\n\nContent here"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_ensure_report_does_not_overwrite_existing() -> None:
+    """POST /api/swarm/{id}/files/ensure-report leaves existing file alone."""
+    from pathlib import Path
+    import shutil
+    swarm_id = "test-ensure-existing"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "synthesis_report.md").write_text("Original content")
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            f"/api/swarm/{swarm_id}/files/ensure-report",
+            json={"report": "New content"},
+        )
+        assert response.status_code == 200
+        assert response.json()["created"] is False
+        assert (work_dir / "synthesis_report.md").read_text() == "Original content"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def test_websocket_receives_swarm_events() -> None:

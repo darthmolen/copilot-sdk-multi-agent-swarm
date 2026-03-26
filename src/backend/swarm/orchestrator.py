@@ -108,18 +108,24 @@ class SwarmOrchestrator:
     def is_cancelled(self) -> bool:
         return self._cancelled
 
-    async def chat(self, message: str) -> str:
+    async def chat(self, message: str, active_file: str | None = None) -> str:
         """Resume synthesis session and send a refinement message."""
         if not self.synthesis_session_id:
             raise ValueError("No synthesis session available")
 
+        log.info("chat_start", swarm_id=self.swarm_id,
+                 session_id=self.synthesis_session_id, message_len=len(message))
+
         async with self._chat_lock:
+            log.info("chat_resuming_session", session_id=self.synthesis_session_id)
             try:
                 session = await self.client.resume_session(
                     self.synthesis_session_id,
                     on_permission_request=_approve_all,
                 )
-            except (TypeError, AttributeError):
+                log.info("chat_session_resumed", session_id=self.synthesis_session_id)
+            except (TypeError, AttributeError) as exc:
+                log.warning("chat_resume_fallback", error=str(exc))
                 # Mock fallback — create a new session for testing
                 session = await _create_session_with_tools(
                     self.client,
@@ -134,9 +140,12 @@ class SwarmOrchestrator:
             def _on_event(event: Any) -> None:
                 raw = getattr(event, "type", "")
                 et = getattr(raw, "value", str(raw)).lower()
+                log.debug("chat_sdk_event", event_type=et, swarm_id=self.swarm_id)
                 if "idle" in et:
+                    log.info("chat_session_idle", swarm_id=self.swarm_id)
                     done.set()
                 elif "session" in et and "error" in et:
+                    log.error("chat_session_error", event_type=et, swarm_id=self.swarm_id)
                     done.set()
                 if "assistant.message" in et and "delta" not in et:
                     data = getattr(event, "data", None)
@@ -175,14 +184,33 @@ class SwarmOrchestrator:
             timeout = self.config.get("timeout", 300)
 
             try:
-                await session.send(message)
+                refinement_prompt = (
+                    "You are in REFINEMENT MODE. You are the synthesis agent. "
+                    "You CANNOT spawn other agents or delegate to a team. "
+                    "Answer the user's question directly using the report and worker outputs "
+                    "already in your conversation context. "
+                    "If you need to revise a section, produce the revised text directly.\n\n"
+                    f"User feedback: {message}"
+                )
+                if active_file:
+                    file_path = f"workdir/{self.swarm_id}/{active_file}"
+                    refinement_prompt += (
+                        f"\n\nThe user has '{active_file}' open. "
+                        f"The file is at '{file_path}'. "
+                        "Read it if relevant to their question."
+                    )
+                log.info("chat_sending", swarm_id=self.swarm_id, timeout=timeout)
+                await session.send(refinement_prompt)
+                log.info("chat_send_returned", swarm_id=self.swarm_id)
                 await asyncio.wait_for(done.wait(), timeout=timeout)
             except (TimeoutError, asyncio.TimeoutError):
-                log.warning("chat_timeout", timeout=timeout)
+                log.warning("chat_timeout", swarm_id=self.swarm_id, timeout=timeout)
             finally:
                 unsubscribe()
 
             response = "\n".join(text_content) if text_content else ""
+            log.info("chat_complete", swarm_id=self.swarm_id,
+                     response_len=len(response), chunks=len(text_content))
             await self._emit("leader.chat_message", {
                 "content": response,
                 "message_id": message_id,
@@ -478,6 +506,15 @@ class SwarmOrchestrator:
                 done.set()
             elif "session" in et and "error" in et:
                 done.set()
+            # Stream deltas to frontend
+            if "assistant.message_delta" in et:
+                data = getattr(event, "data", None)
+                delta = getattr(data, "content", "") or getattr(data, "delta_content", "")
+                if delta:
+                    self.event_bus.emit_sync("leader.report_delta", {
+                        "delta": str(delta),
+                        "swarm_id": self.swarm_id,
+                    })
             # Capture assistant text
             if "assistant.message" in et and "delta" not in et:
                 data = getattr(event, "data", None)

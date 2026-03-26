@@ -132,6 +132,23 @@ describe('swarmReducer', () => {
     expect(result.leaderReport).toBe('Final report');
   });
 
+  it('handles leader.report_delta by accumulating into leaderReport', () => {
+    const e1: SwarmEvent = { type: 'leader.report_delta', data: { delta: 'Hello ' } };
+    const s1 = swarmReducer(initialState, e1);
+    expect(s1.leaderReport).toBe('Hello ');
+
+    const e2: SwarmEvent = { type: 'leader.report_delta', data: { delta: 'World' } };
+    const s2 = swarmReducer(s1, e2);
+    expect(s2.leaderReport).toBe('Hello World');
+  });
+
+  it('leader.report replaces accumulated deltas', () => {
+    const withDeltas: SwarmState = { ...initialState, leaderReport: 'partial...' };
+    const event: SwarmEvent = { type: 'leader.report', data: { content: 'Final report' } };
+    const result = swarmReducer(withDeltas, event);
+    expect(result.leaderReport).toBe('Final report');
+  });
+
   it('handles round.started', () => {
     const event: SwarmEvent = { type: 'round.started', data: { round: 3 } };
     const result = swarmReducer(initialState, event);

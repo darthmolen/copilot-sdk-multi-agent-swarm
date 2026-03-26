@@ -9,6 +9,7 @@ import type { ChatMessage } from '../types/swarm';
 interface ChatPanelProps {
   messages: ChatMessage[];
   streamingMessage: { id: string; content: string } | null;
+  sessionStarting: boolean;
   onSend: (message: string) => void;
   chatEnabled: boolean;
 }
@@ -41,11 +42,15 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 export function ChatPanel({
   messages,
   streamingMessage,
+  sessionStarting,
   onSend,
   chatEnabled,
 }: ChatPanelProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
   useAutoScroll(messagesRef, [messages.length, streamingMessage?.content]);
+
+  const lastMsg = messages[messages.length - 1];
+  const waitingForResponse = lastMsg?.role === 'user' && !streamingMessage && !sessionStarting;
 
   return (
     <div className="chat-panel-v2">
@@ -75,7 +80,19 @@ export function ChatPanel({
           </div>
         )}
       </div>
-      <ChatInput onSend={onSend} disabled={!chatEnabled || !!streamingMessage} />
+      {sessionStarting && (
+        <div className="chat-thinking">
+          <span className="thinking-icon">🧠</span>
+          <span className="thinking-text">Starting session...</span>
+        </div>
+      )}
+      {waitingForResponse && (
+        <div className="chat-thinking">
+          <span className="thinking-icon">🧠</span>
+          <span className="thinking-text">Thinking...</span>
+        </div>
+      )}
+      <ChatInput onSend={onSend} disabled={!chatEnabled} />
     </div>
   );
 }

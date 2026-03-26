@@ -91,6 +91,9 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
     case 'leader.plan':
       return { ...state, leaderPlan: event.data.content as string };
 
+    case 'leader.report_delta':
+      return { ...state, leaderReport: state.leaderReport + (event.data.delta as string) };
+
     case 'leader.report':
       return { ...state, leaderReport: event.data.content as string };
 

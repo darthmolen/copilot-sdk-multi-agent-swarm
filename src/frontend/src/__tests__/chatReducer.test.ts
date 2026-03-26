@@ -79,6 +79,36 @@ describe('chatReducer', () => {
     expect(state.chats['s2'].messages[0].content).toBe('For swarm 2');
   });
 
+  it('chat.user_send sets sessionStarting to true', () => {
+    const msg: ChatMessage = { id: 'u1', role: 'user', content: 'Hi' };
+    const state = chatReducer(initialChatStore, {
+      type: 'chat.user_send', swarmId: 's1', message: msg,
+    });
+    expect(state.chats['s1'].sessionStarting).toBe(true);
+  });
+
+  it('chat.delta clears sessionStarting', () => {
+    let state = chatReducer(initialChatStore, {
+      type: 'chat.user_send', swarmId: 's1',
+      message: { id: 'u1', role: 'user', content: 'Hi' },
+    });
+    state = chatReducer(state, {
+      type: 'chat.delta', swarmId: 's1', delta: 'Hello', messageId: 'msg-1',
+    });
+    expect(state.chats['s1'].sessionStarting).toBe(false);
+  });
+
+  it('chat.message clears sessionStarting', () => {
+    let state = chatReducer(initialChatStore, {
+      type: 'chat.user_send', swarmId: 's1',
+      message: { id: 'u1', role: 'user', content: 'Hi' },
+    });
+    state = chatReducer(state, {
+      type: 'chat.message', swarmId: 's1', content: 'Response', messageId: 'msg-1',
+    });
+    expect(state.chats['s1'].sessionStarting).toBe(false);
+  });
+
   it('chat.tool_start adds tool to activeTools', () => {
     const state = chatReducer(initialChatStore, {
       type: 'chat.tool_start', swarmId: 's1',

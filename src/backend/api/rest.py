@@ -13,6 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from backend.api.schemas import (
     ChatRequest,
+    EnsureReportRequest,
     SwarmStartRequest,
     SwarmStartResponse,
     SwarmStatusResponse,
@@ -127,6 +128,7 @@ async def get_swarm_status(swarm_id: str) -> SwarmStatusResponse:
         agents=state["agents"],
         inbox_recent=state["inbox_recent"],
         round_number=state["round_number"],
+        report=state.get("report"),
     )
 
 
@@ -146,17 +148,81 @@ async def cancel_swarm(swarm_id: str) -> dict:
 async def chat_with_swarm(
     swarm_id: str, request: ChatRequest, background_tasks: BackgroundTasks,
 ) -> dict:
-    """Send a chat message to a completed swarm's synthesis agent."""
-    if swarm_id not in swarm_store:
-        raise HTTPException(status_code=404, detail="Swarm not found")
-    state = swarm_store[swarm_id]
-    if state["phase"] != "complete":
-        raise HTTPException(status_code=409, detail="Swarm not yet complete")
-    orch = state.get("orchestrator")
+    """Send a chat message to a swarm's synthesis agent.
+
+    Works for both live swarms in memory and past sessions that can be
+    resumed via the SDK's resume_session (session ID is deterministic:
+    ``synth-{swarm_id}``).
+    """
+    orch = None
+
+    if swarm_id in swarm_store:
+        state = swarm_store[swarm_id]
+        if state["phase"] != "complete":
+            raise HTTPException(status_code=409, detail="Swarm not yet complete")
+        orch = state.get("orchestrator")
+
+    # Create a lightweight orchestrator on-the-fly for past sessions
     if not orch or not getattr(orch, "synthesis_session_id", None):
-        raise HTTPException(status_code=400, detail="No synthesis session available")
-    background_tasks.add_task(orch.chat, request.message)
+        if _copilot_client is None or _event_bus is None:
+            raise HTTPException(status_code=400, detail="No synthesis session available")
+        log.info("chat_creating_on_the_fly", swarm_id=swarm_id,
+                 session_id=f"synth-{swarm_id}")
+        from backend.swarm.orchestrator import SwarmOrchestrator
+        orch = SwarmOrchestrator(
+            client=_copilot_client, event_bus=_event_bus, swarm_id=swarm_id,
+        )
+        orch.synthesis_session_id = f"synth-{swarm_id}"
+        # Cache it so subsequent messages reuse the same orchestrator
+        if swarm_id not in swarm_store:
+            _create_swarm_state(swarm_id, "(resumed)", None)
+            swarm_store[swarm_id]["phase"] = "complete"
+        swarm_store[swarm_id]["orchestrator"] = orch
+
+    background_tasks.add_task(orch.chat, request.message, active_file=request.active_file)
     return {"status": "streaming"}
+
+
+@router.get("/api/swarm/{swarm_id}/files")
+async def list_swarm_files(swarm_id: str) -> dict:
+    """List files in a swarm's work directory."""
+    work_dir = Path("workdir") / swarm_id
+    if not work_dir.is_dir():
+        return {"files": []}
+    files = []
+    for f in sorted(work_dir.rglob("*")):
+        if f.is_file():
+            files.append({
+                "name": f.name,
+                "path": str(f.relative_to(work_dir)),
+                "size": f.stat().st_size,
+            })
+    return {"files": files}
+
+
+@router.get("/api/swarm/{swarm_id}/files/{file_path:path}")
+async def get_swarm_file(swarm_id: str, file_path: str) -> dict:
+    """Read a file from a swarm's work directory."""
+    base = Path("workdir").resolve()
+    target = (Path("workdir") / swarm_id / file_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"content": target.read_text(encoding="utf-8", errors="replace")}
+
+
+@router.post("/api/swarm/{swarm_id}/files/ensure-report")
+async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
+    """Ensure the synthesis report file exists in the workdir, creating it from localStorage if needed."""
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    report_path = work_dir / "synthesis_report.md"
+    created = False
+    if not report_path.exists():
+        report_path.write_text(request.report, encoding="utf-8")
+        created = True
+    return {"created": created, "path": "synthesis_report.md"}
 
 
 @router.get("/api/templates")

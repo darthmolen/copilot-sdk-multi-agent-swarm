@@ -46,17 +46,21 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
 
   return (
     <div className="swarm-controls">
-      <h2>Swarm Controls</h2>
-      <div className="controls-row">
-        <input
-          type="text"
-          placeholder="Enter your goal..."
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleStart()}
-          disabled={loading}
-          className="goal-input"
-        />
+      <textarea
+        placeholder="Enter your goal..."
+        value={goal}
+        onChange={(e) => setGoal(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleStart();
+          }
+        }}
+        disabled={loading}
+        className="goal-input goal-input--textarea"
+        rows={3}
+      />
+      <div className="swarm-controls__actions">
         <select
           value={template}
           onChange={(e) => setTemplate(e.target.value)}
