@@ -323,3 +323,81 @@ describe('isThinking', () => {
     expect(isThinking('cancelled')).toBe(false);
   });
 });
+
+describe('activeTools tracking', () => {
+  it('agent.tool_call adds a running tool to activeTools', () => {
+    const event: SwarmEvent = {
+      type: 'agent.tool_call',
+      data: { agent_name: 'worker-1', tool_name: 'web_search', tool_call_id: 'tc-1' },
+    };
+    const result = swarmReducer(initialState, event);
+    expect(result.activeTools).toHaveLength(1);
+    expect(result.activeTools[0]).toEqual({
+      toolCallId: 'tc-1',
+      toolName: 'web_search',
+      agentName: 'worker-1',
+      status: 'running',
+    });
+  });
+
+  it('agent.tool_result marks tool as complete when success=true', () => {
+    const stateWithTool: SwarmState = {
+      ...initialState,
+      activeTools: [{ toolCallId: 'tc-1', toolName: 'web_search', agentName: 'worker-1', status: 'running' }],
+    };
+    const event: SwarmEvent = {
+      type: 'agent.tool_result',
+      data: { agent_name: 'worker-1', tool_call_id: 'tc-1', success: true },
+    };
+    const result = swarmReducer(stateWithTool, event);
+    expect(result.activeTools[0].status).toBe('complete');
+  });
+
+  it('agent.tool_result marks tool as failed when success=false', () => {
+    const stateWithTool: SwarmState = {
+      ...initialState,
+      activeTools: [{ toolCallId: 'tc-1', toolName: 'web_search', agentName: 'worker-1', status: 'running' }],
+    };
+    const event: SwarmEvent = {
+      type: 'agent.tool_result',
+      data: { agent_name: 'worker-1', tool_call_id: 'tc-1', success: false },
+    };
+    const result = swarmReducer(stateWithTool, event);
+    expect(result.activeTools[0].status).toBe('failed');
+  });
+
+  it('multiple tool calls accumulate in activeTools', () => {
+    let state = swarmReducer(initialState, {
+      type: 'agent.tool_call',
+      data: { agent_name: 'worker-1', tool_name: 'web_search', tool_call_id: 'tc-1' },
+    });
+    state = swarmReducer(state, {
+      type: 'agent.tool_call',
+      data: { agent_name: 'worker-1', tool_name: 'read_file', tool_call_id: 'tc-2' },
+    });
+    expect(state.activeTools).toHaveLength(2);
+    expect(state.activeTools[0].toolName).toBe('web_search');
+    expect(state.activeTools[1].toolName).toBe('read_file');
+  });
+
+  it('completing one tool does not affect others', () => {
+    const stateWithTools: SwarmState = {
+      ...initialState,
+      activeTools: [
+        { toolCallId: 'tc-1', toolName: 'web_search', agentName: 'worker-1', status: 'running' },
+        { toolCallId: 'tc-2', toolName: 'read_file', agentName: 'worker-1', status: 'running' },
+      ],
+    };
+    const event: SwarmEvent = {
+      type: 'agent.tool_result',
+      data: { agent_name: 'worker-1', tool_call_id: 'tc-1', success: true },
+    };
+    const result = swarmReducer(stateWithTools, event);
+    expect(result.activeTools[0].status).toBe('complete');
+    expect(result.activeTools[1].status).toBe('running');
+  });
+
+  it('initialState includes empty activeTools array', () => {
+    expect(initialState.activeTools).toEqual([]);
+  });
+});

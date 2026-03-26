@@ -1,6 +1,6 @@
 import { useReducer, useCallback, useState, useEffect, useRef } from 'react';
 import { multiSwarmReducer, initialMultiSwarmState, isThinking } from './hooks/useSwarmState';
-import { chatReducer, initialChatStore, type ChatAction } from './hooks/useChatState';
+import { chatReducer, initialChatStore } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SwarmControls } from './components/SwarmControls';
 import { TaskBoard } from './components/TaskBoard';
@@ -8,9 +8,11 @@ import { AgentRoster } from './components/AgentRoster';
 import { ChatPanel } from './components/ChatPanel';
 import { InboxFeed } from './components/InboxFeed';
 import { ResizableLayout } from './components/ResizableLayout';
+import { ToolCardList } from './components/ToolCard';
+import { useMermaid } from './hooks/useMermaid';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import type { SwarmEvent, FileInfo } from './types/swarm';
+import type { SwarmEvent, FileInfo, ActiveTool } from './types/swarm';
 import { ArtifactList } from './components/ArtifactList';
 import { saveReport, getSavedReports, getReportById, truncateTitle } from './utils/savedReportStorage';
 import { parseSessionFromSearch } from './utils/urlSession';
@@ -291,6 +293,7 @@ function SwarmDashboard() {
       allOutputs[k] = v;
     }
   }
+  const allActiveTools: ActiveTool[] = Object.values(store.swarms).flatMap((s) => s.activeTools);
 
   // Header status
   const anyConnected = store.activeSwarmIds.length > 0;
@@ -308,6 +311,10 @@ function SwarmDashboard() {
   const currentChatState = reportSwarmId ? chatStore.chats[reportSwarmId] : null;
   // Chat is always enabled — backend can resume_session for any past swarm
   const chatEnabled = !!reportSwarmId;
+
+  // Mermaid diagram rendering for report view
+  const reportContentRef = useRef<HTMLDivElement>(null);
+  useMermaid(reportContentRef, [activeFileContent, currentReport]);
 
   // Full-screen report + chat view
   if (reportSwarmId && currentReport) {
@@ -343,6 +350,7 @@ function SwarmDashboard() {
           left={
             <div className="report-view">
               <div
+                ref={reportContentRef}
                 className="report-content"
                 dangerouslySetInnerHTML={{
                   __html: renderMarkdown(activeFileContent ?? currentReport),
@@ -366,6 +374,7 @@ function SwarmDashboard() {
                 messages={currentChatState?.messages ?? []}
                 streamingMessage={currentChatState?.streamingMessage ?? null}
                 sessionStarting={currentChatState?.sessionStarting ?? false}
+                activeTools={currentChatState?.activeTools ?? []}
                 onSend={(msg) => handleSendChat(reportSwarmId, msg, activeFilePath)}
                 chatEnabled={chatEnabled}
               />
@@ -418,6 +427,7 @@ function SwarmDashboard() {
           <AgentRoster agents={allAgents} outputs={allOutputs} />
           <InboxFeed messages={allMessages} />
         </div>
+        <ToolCardList tools={allActiveTools.filter((t) => t.status === 'running')} />
         <div className="bottom-row">
           <TaskBoard tasks={allTasks} />
         </div>

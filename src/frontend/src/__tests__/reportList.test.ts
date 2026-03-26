@@ -10,6 +10,7 @@ const baseSwarm: SwarmState = {
   leaderPlan: '',
   leaderReport: '',
   agentOutputs: {},
+  activeTools: [],
   roundNumber: 0,
   error: null,
 };

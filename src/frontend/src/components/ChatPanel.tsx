@@ -2,14 +2,17 @@ import { useRef } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { useAutoScroll } from '../hooks/useAutoScroll';
+import { useMermaid } from '../hooks/useMermaid';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ChatInput } from './ChatInput';
-import type { ChatMessage } from '../types/swarm';
+import { ToolCardList } from './ToolCard';
+import type { ChatMessage, ActiveTool } from '../types/swarm';
 
 interface ChatPanelProps {
   messages: ChatMessage[];
   streamingMessage: { id: string; content: string } | null;
   sessionStarting: boolean;
+  activeTools: ActiveTool[];
   onSend: (message: string) => void;
   chatEnabled: boolean;
 }
@@ -43,11 +46,13 @@ export function ChatPanel({
   messages,
   streamingMessage,
   sessionStarting,
+  activeTools,
   onSend,
   chatEnabled,
 }: ChatPanelProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
   useAutoScroll(messagesRef, [messages.length, streamingMessage?.content]);
+  useMermaid(messagesRef, [messages.length, streamingMessage?.content]);
 
   const lastMsg = messages[messages.length - 1];
   const waitingForResponse = lastMsg?.role === 'user' && !streamingMessage && !sessionStarting;
@@ -68,6 +73,7 @@ export function ChatPanel({
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
+        <ToolCardList tools={activeTools} />
         {streamingMessage && (
           <div className="chat-bubble chat-bubble--assistant chat-bubble--streaming">
             <div className="chat-bubble__header">Synthesis Agent</div>
