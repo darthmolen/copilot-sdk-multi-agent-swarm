@@ -152,6 +152,13 @@ class SwarmOrchestrator:
                     content = getattr(data, "content", None)
                     if content and str(content).strip():
                         text_content.append(str(content))
+                        # Also emit as delta so frontend gets streaming content
+                        # even when SDK only sends complete messages (no deltas)
+                        self.event_bus.emit_sync("leader.chat_delta", {
+                            "delta": str(content),
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        })
                 # Stream deltas via EventBus.emit_sync (same pattern as agent.py:84)
                 if "assistant.message_delta" in et:
                     data = getattr(event, "data", None)

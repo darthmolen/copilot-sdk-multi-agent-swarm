@@ -559,6 +559,37 @@ class TestGranularEvents:
         assert "synthesizing" in phases
         assert "complete" in phases
 
+    async def test_chat_emits_delta_from_assistant_message(self, event_bus: EventBus) -> None:
+        """When SDK sends assistant.message (no deltas), orchestrator emits leader.chat_delta so frontend sees streaming."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-stream", synthesis_report="Original report")
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        # Run synthesis to store session_id
+        await orch._synthesize("goal")
+        events.clear()
+
+        # Chat — mock only fires assistant.message (no deltas)
+        await orch.chat("Make the summary shorter")
+
+        # Allow emit_sync scheduled tasks to execute
+        import asyncio
+        await asyncio.sleep(0.05)
+
+        # Should emit leader.chat_delta from the assistant.message content
+        delta_events = [(t, d) for t, d in events if t == "leader.chat_delta"]
+        assert len(delta_events) >= 1, f"Expected at least 1 chat_delta from assistant.message, got {delta_events}"
+        assert delta_events[0][1]["swarm_id"] == "swarm-stream"
+        # The delta content should contain the response text
+        delta_content = "".join(d["delta"] for _, d in delta_events)
+        assert len(delta_content) > 0, "Delta content should not be empty"
+
 
     async def test_synthesize_emits_report_deltas(self, event_bus: EventBus) -> None:
         """Synthesis streams leader.report_delta events as the report is being written."""
