@@ -9,6 +9,42 @@ import { InboxFeed } from './components/InboxFeed';
 import type { SwarmEvent } from './types/swarm';
 import './App.css';
 
+export function getApiKey(): string {
+  return sessionStorage.getItem('swarm_api_key') ?? '';
+}
+
+function AuthGate({ onAuth }: { onAuth: () => void }) {
+  const [key, setKey] = useState('');
+  const [error, setError] = useState('');
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!key.trim()) { setError('API key is required'); return; }
+    sessionStorage.setItem('swarm_api_key', key.trim());
+    onAuth();
+  }
+
+  return (
+    <div className="auth-gate">
+      <form className="auth-form" onSubmit={handleSubmit} autoComplete="off">
+        <h2>Multi-Agent Swarm</h2>
+        <p>Enter your API key to continue</p>
+        <input
+          type="password"
+          placeholder="API Key"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          autoFocus
+          autoComplete="off"
+          className="auth-input"
+        />
+        <button type="submit" className="auth-button">Connect</button>
+        {error && <p className="error-text">{error}</p>}
+      </form>
+    </div>
+  );
+}
+
 /** Invisible component that owns a WS connection for one swarm. */
 function SwarmConnection({
   swarmId,
@@ -26,6 +62,16 @@ function SwarmConnection({
 }
 
 function App() {
+  const [authed, setAuthed] = useState(() => !!sessionStorage.getItem('swarm_api_key'));
+
+  if (!authed) {
+    return <AuthGate onAuth={() => setAuthed(true)} />;
+  }
+
+  return <SwarmDashboard />;
+}
+
+function SwarmDashboard() {
   const [store, dispatch] = useReducer(multiSwarmReducer, initialMultiSwarmState);
   const [reportSwarmId, setReportSwarmId] = useState<string | null>(null);
 

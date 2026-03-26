@@ -48,7 +48,8 @@ export function useWebSocket(
     let active = true;
 
     function connect() {
-      const url = `${WS_BASE}/ws/${swarmId}`;
+      const key = sessionStorage.getItem('swarm_api_key') ?? '';
+      const url = `${WS_BASE}/ws/${swarmId}?key=${encodeURIComponent(key)}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
 

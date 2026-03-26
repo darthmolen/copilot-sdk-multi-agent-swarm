@@ -16,6 +16,20 @@ from backend.main import app, manager
 # ---------------------------------------------------------------------------
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_state():
+    """Reset auth to dev-mode defaults before/after every test."""
+    import backend.main as main_mod
+    main_mod.ENVIRONMENT = "development"
+    main_mod.SWARM_API_KEY = ""
+    yield
+    main_mod.ENVIRONMENT = "development"
+    main_mod.SWARM_API_KEY = ""
+
+
 def _clear_swarm_store() -> None:
     """Reset global swarm state between tests."""
     swarm_store.clear()
@@ -171,6 +185,121 @@ def test_list_templates_returns_templates() -> None:
         "Deep Research Team",
         "Warehouse Optimization Team",
     }
+
+
+# ---------------------------------------------------------------------------
+# Auth tests
+# ---------------------------------------------------------------------------
+
+
+def _set_auth(environment: str, api_key: str) -> None:
+    """Helper to set auth config for tests."""
+    import backend.main as main_mod
+    main_mod.ENVIRONMENT = environment
+    main_mod.SWARM_API_KEY = api_key
+
+
+def _clear_auth() -> None:
+    """Reset auth to dev-mode defaults after test."""
+    import backend.main as main_mod
+    main_mod.ENVIRONMENT = "development"
+    main_mod.SWARM_API_KEY = ""
+
+
+def test_api_returns_401_without_key_when_configured() -> None:
+    """POST /api/swarm/start returns 401 when SWARM_API_KEY is set but no header sent."""
+    _clear_swarm_store()
+    _set_auth("production", "test-secret-123")
+
+    client = TestClient(app)
+    response = client.post("/api/swarm/start", json={"goal": "Test"})
+    assert response.status_code == 401
+
+
+
+
+def test_api_returns_200_with_correct_key() -> None:
+    """POST /api/swarm/start returns 200 when correct X-API-Key header is sent."""
+    _clear_swarm_store()
+    _set_auth("production", "test-secret-123")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/swarm/start",
+        json={"goal": "Test"},
+        headers={"X-API-Key": "test-secret-123"},
+    )
+    assert response.status_code == 200
+
+
+
+
+def test_api_returns_401_with_wrong_key() -> None:
+    """POST /api/swarm/start returns 401 when wrong key is sent."""
+    _clear_swarm_store()
+    _set_auth("production", "correct-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/swarm/start",
+        json={"goal": "Test"},
+        headers={"X-API-Key": "wrong-key"},
+    )
+    assert response.status_code == 401
+
+
+
+
+def test_auth_disabled_in_development_with_no_key() -> None:
+    """In development mode with no key, requests pass without auth."""
+    _clear_swarm_store()
+    _set_auth("development", "")
+
+    client = TestClient(app)
+    response = client.post("/api/swarm/start", json={"goal": "Test"})
+    assert response.status_code == 200
+
+
+
+
+def test_production_without_key_returns_500() -> None:
+    """Non-development environment with empty SWARM_API_KEY returns 500 — forces configuration."""
+    _clear_swarm_store()
+    _set_auth("production", "")
+
+    client = TestClient(app)
+    response = client.post("/api/swarm/start", json={"goal": "Test"})
+    assert response.status_code == 500
+    assert "SWARM_API_KEY not configured" in response.json()["detail"]
+
+
+
+
+def test_ws_rejected_with_wrong_key() -> None:
+    """WS connection is rejected when wrong key query param is provided."""
+    _clear_swarm_store()
+    _set_auth("production", "ws-secret")
+
+    client = TestClient(app)
+    try:
+        with client.websocket_connect("/ws/test-swarm?key=wrong") as ws:
+            assert False, "WS should have been rejected"
+    except Exception:
+        pass
+
+
+
+
+def test_ws_accepted_with_correct_key() -> None:
+    """WS connection succeeds with correct key query param."""
+    _clear_swarm_store()
+    _set_auth("production", "ws-secret")
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/test-swarm?key=ws-secret") as ws:
+        pass
+
+
 
 
 def test_websocket_receives_swarm_events() -> None:

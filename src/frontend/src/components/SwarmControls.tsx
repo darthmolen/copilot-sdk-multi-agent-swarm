@@ -23,9 +23,13 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
     setLoading(true);
     setError(null);
     try {
+      const apiKey = sessionStorage.getItem('swarm_api_key') ?? '';
       const res = await fetch(`${API_BASE}/api/swarm/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+        },
         body: JSON.stringify({ goal: goal.trim(), template }),
       });
       if (!res.ok) {

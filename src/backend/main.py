@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
 import structlog
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.rest import configure, router, swarm_store
@@ -31,6 +32,37 @@ log = structlog.get_logger(__name__)
 
 manager = ConnectionManager()
 event_bus = EventBus()
+ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "").lower()
+SWARM_API_KEY: str = os.environ.get("SWARM_API_KEY", "")
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+
+def _auth_required() -> bool:
+    """Auth is required unless ENVIRONMENT=development AND no key is set."""
+    if ENVIRONMENT == "development" and not SWARM_API_KEY:
+        return False
+    return True
+
+
+async def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")) -> None:
+    """Validate API key on REST endpoints.
+
+    Auth is only disabled when ENVIRONMENT=development and SWARM_API_KEY is empty.
+    In any other configuration, a valid key is required — missing key = 401.
+    """
+    if not _auth_required():
+        return
+    if not SWARM_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="SWARM_API_KEY not configured. Set it in .env or set ENVIRONMENT=development to disable auth.",
+        )
+    if x_api_key != SWARM_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 # ---------------------------------------------------------------------------
@@ -142,12 +174,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+app.include_router(router, dependencies=[Depends(verify_api_key)])
 
 
 @app.websocket("/ws/{swarm_id}")
-async def websocket_endpoint(websocket: WebSocket, swarm_id: str) -> None:
+async def websocket_endpoint(websocket: WebSocket, swarm_id: str, key: str = Query("")) -> None:
     """WebSocket endpoint for streaming swarm events to clients."""
+    if _auth_required() and key != SWARM_API_KEY:
+        await websocket.close(code=4001, reason="Invalid API key")
+        return
     await manager.connect(websocket, swarm_id)
     try:
         while True:
