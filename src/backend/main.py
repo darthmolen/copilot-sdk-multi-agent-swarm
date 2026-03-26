@@ -11,6 +11,7 @@ from typing import AsyncGenerator
 import structlog
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.api.rest import configure, router, swarm_store
 from backend.api.websocket import ConnectionManager
@@ -175,6 +176,11 @@ app.add_middleware(
 )
 
 app.include_router(router, dependencies=[Depends(verify_api_key)])
+
+# Serve frontend static files in production (when built frontend exists)
+_static_dir = Path("static")
+if _static_dir.is_dir():
+    app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 @app.websocket("/ws/{swarm_id}")

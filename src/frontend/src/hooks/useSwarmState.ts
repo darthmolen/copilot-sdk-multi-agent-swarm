@@ -1,5 +1,5 @@
 import { useReducer } from 'react';
-import type { SwarmState, SwarmEvent, Task, AgentInfo } from '../types/swarm';
+import type { SwarmState, SwarmEvent, Task, AgentInfo, ActiveTool } from '../types/swarm';
 
 export const initialState: SwarmState = {
   phase: null,
@@ -9,6 +9,7 @@ export const initialState: SwarmState = {
   leaderPlan: '',
   leaderReport: '',
   agentOutputs: {},
+  activeTools: [],
   roundNumber: 0,
   error: null,
 };
@@ -91,6 +92,9 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
     case 'leader.plan':
       return { ...state, leaderPlan: event.data.content as string };
 
+    case 'leader.report_delta':
+      return { ...state, leaderReport: state.leaderReport + (event.data.delta as string) };
+
     case 'leader.report':
       return { ...state, leaderReport: event.data.content as string };
 
@@ -103,6 +107,29 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
 
     case 'swarm.error':
       return { ...state, error: event.data.message as string };
+
+    case 'agent.tool_call': {
+      const tool: ActiveTool = {
+        toolCallId: event.data.tool_call_id as string,
+        toolName: event.data.tool_name as string,
+        agentName: event.data.agent_name as string,
+        status: 'running',
+      };
+      return { ...state, activeTools: [...state.activeTools, tool] };
+    }
+
+    case 'agent.tool_result': {
+      const callId = event.data.tool_call_id as string;
+      const success = event.data.success as boolean;
+      return {
+        ...state,
+        activeTools: state.activeTools.map((t) =>
+          t.toolCallId === callId
+            ? { ...t, status: success ? 'complete' as const : 'failed' as const }
+            : t,
+        ),
+      };
+    }
 
     default:
       return state;

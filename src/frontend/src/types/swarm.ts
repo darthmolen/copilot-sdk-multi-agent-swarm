@@ -31,6 +31,13 @@ export interface InboxMessage {
   swarm_id?: string;
 }
 
+export interface ActiveTool {
+  toolCallId: string;
+  toolName: string;
+  agentName?: string;
+  status: 'running' | 'complete' | 'failed';
+}
+
 export interface SwarmState {
   phase: SwarmPhase | null;
   tasks: Task[];
@@ -39,8 +46,41 @@ export interface SwarmState {
   leaderPlan: string;
   leaderReport: string;
   agentOutputs: Record<string, string>;
+  activeTools: ActiveTool[];
   roundNumber: number;
   error: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatState {
+  messages: ChatMessage[];
+  streamingMessage: { id: string; content: string } | null;
+  sessionStarting: boolean;
+  activeTools: ActiveTool[];
+}
+
+export interface ChatStore {
+  chats: Record<string, ChatState>;
+  activeSwarmId: string | null;
+}
+
+export interface FileInfo {
+  name: string;
+  path: string;
+  size: number;
+}
+
+export interface SavedReport {
+  swarmId: string;
+  title: string;
+  timestamp: number;
+  report: string;
+  phase: SwarmPhase;
 }
 
 export interface SwarmEvent {

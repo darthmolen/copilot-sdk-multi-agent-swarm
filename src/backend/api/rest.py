@@ -7,15 +7,24 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import shutil
+
 import structlog
+import yaml
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import JSONResponse
 
 from backend.api.schemas import (
+    ChatRequest,
+    CreateTemplateRequest,
+    EnsureReportRequest,
     SwarmStartRequest,
     SwarmStartResponse,
     SwarmStatusResponse,
+    UpdateTemplateFileRequest,
 )
+from backend.swarm.template_validator import validate_template_file
 from backend.swarm.template_loader import TemplateLoader
 from backend.swarm.templates import format_goal
 from backend.swarm.templates import list_templates as _list_templates
@@ -126,6 +135,7 @@ async def get_swarm_status(swarm_id: str) -> SwarmStatusResponse:
         agents=state["agents"],
         inbox_recent=state["inbox_recent"],
         round_number=state["round_number"],
+        report=state.get("report"),
     )
 
 
@@ -141,9 +151,229 @@ async def cancel_swarm(swarm_id: str) -> dict:
     return {"status": "cancelled"}
 
 
+@router.post("/api/swarm/{swarm_id}/chat")
+async def chat_with_swarm(
+    swarm_id: str, request: ChatRequest, background_tasks: BackgroundTasks,
+) -> dict:
+    """Send a chat message to a swarm's synthesis agent.
+
+    Works for both live swarms in memory and past sessions that can be
+    resumed via the SDK's resume_session (session ID is deterministic:
+    ``synth-{swarm_id}``).
+    """
+    orch = None
+
+    if swarm_id in swarm_store:
+        state = swarm_store[swarm_id]
+        if state["phase"] != "complete":
+            raise HTTPException(status_code=409, detail="Swarm not yet complete")
+        orch = state.get("orchestrator")
+
+    # Create a lightweight orchestrator on-the-fly for past sessions
+    if not orch or not getattr(orch, "synthesis_session_id", None):
+        if _copilot_client is None or _event_bus is None:
+            raise HTTPException(status_code=400, detail="No synthesis session available")
+        log.info("chat_creating_on_the_fly", swarm_id=swarm_id,
+                 session_id=f"synth-{swarm_id}")
+        from backend.swarm.orchestrator import SwarmOrchestrator
+        orch = SwarmOrchestrator(
+            client=_copilot_client, event_bus=_event_bus, swarm_id=swarm_id,
+        )
+        orch.synthesis_session_id = f"synth-{swarm_id}"
+        # Cache it so subsequent messages reuse the same orchestrator
+        if swarm_id not in swarm_store:
+            _create_swarm_state(swarm_id, "(resumed)", None)
+            swarm_store[swarm_id]["phase"] = "complete"
+        swarm_store[swarm_id]["orchestrator"] = orch
+
+    background_tasks.add_task(orch.chat, request.message, active_file=request.active_file)
+    return {"status": "streaming"}
+
+
+@router.get("/api/swarm/{swarm_id}/files")
+async def list_swarm_files(swarm_id: str) -> dict:
+    """List files in a swarm's work directory."""
+    work_dir = Path("workdir") / swarm_id
+    if not work_dir.is_dir():
+        return {"files": []}
+    files = []
+    for f in sorted(work_dir.rglob("*")):
+        if f.is_file():
+            files.append({
+                "name": f.name,
+                "path": str(f.relative_to(work_dir)),
+                "size": f.stat().st_size,
+            })
+    return {"files": files}
+
+
+@router.get("/api/swarm/{swarm_id}/files/{file_path:path}")
+async def get_swarm_file(swarm_id: str, file_path: str) -> dict:
+    """Read a file from a swarm's work directory."""
+    base = Path("workdir").resolve()
+    target = (Path("workdir") / swarm_id / file_path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"content": target.read_text(encoding="utf-8", errors="replace")}
+
+
+@router.post("/api/swarm/{swarm_id}/files/ensure-report")
+async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
+    """Ensure the synthesis report file exists in the workdir, creating it from localStorage if needed."""
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    report_path = work_dir / "synthesis_report.md"
+    created = False
+    if not report_path.exists():
+        report_path.write_text(request.report, encoding="utf-8")
+        created = True
+    return {"created": created, "path": "synthesis_report.md"}
+
+
+def _safe_template_path(key: str) -> Path:
+    """Resolve a template key to a safe directory path. Raises 403 on traversal."""
+    base = Path("src/templates").resolve()
+    target = (Path("src/templates") / key).resolve()
+    if not str(target).startswith(str(base) + "/") and target != base:
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    return target
+
+
+def _safe_template_file_path(key: str, filename: str) -> Path:
+    """Resolve a template file path safely. Raises 403 on traversal."""
+    template_dir = _safe_template_path(key)
+    base = template_dir.resolve()
+    target = (template_dir / filename).resolve()
+    if not str(target).startswith(str(base) + "/") and target != base:
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    return target
+
+
 @router.get("/api/templates")
 async def list_templates() -> dict:
     """Return available swarm templates."""
     if _template_loader:
         return {"templates": _template_loader.list_available()}
     return {"templates": _list_templates()}
+
+
+@router.get("/api/templates/{key}")
+async def get_template_details(key: str) -> dict:
+    """Return full template: metadata + list of files with content."""
+    templates_dir = _safe_template_path(key)
+    if not templates_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    files = []
+    for f in sorted(templates_dir.iterdir()):
+        if f.is_file():
+            files.append({
+                "filename": f.name,
+                "content": f.read_text(encoding="utf-8"),
+            })
+
+    # Read metadata from _template.yaml
+    meta_file = templates_dir / "_template.yaml"
+    meta: dict = {}
+    if meta_file.is_file():
+        text = meta_file.read_text(encoding="utf-8")
+        # Parse frontmatter
+        lines = text.split("\n")
+        if lines[0].strip() == "---":
+            close_idx = next(
+                (i for i in range(1, len(lines)) if lines[i].strip() == "---"),
+                None,
+            )
+            if close_idx:
+                meta = yaml.safe_load("\n".join(lines[1:close_idx])) or {}
+
+    return {
+        "key": key,
+        "name": meta.get("name", key),
+        "description": meta.get("description", ""),
+        "files": files,
+    }
+
+
+@router.put("/api/templates/{key}/files/{filename}")
+async def update_template_file(
+    key: str, filename: str, request: UpdateTemplateFileRequest,
+) -> dict:
+    """Update a template file. Validates before saving. Returns 422 if invalid."""
+    templates_dir = _safe_template_path(key)
+    if not templates_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    content = request.content
+    result = validate_template_file(filename, content)
+
+    if not result.valid:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "errors": [
+                    {"message": e.message, "line": e.line} for e in result.errors
+                ],
+            },
+        )
+
+    file_path = _safe_template_file_path(key, filename)
+    file_path.write_text(content, encoding="utf-8")
+    return {"valid": True, "filename": filename}
+
+
+@router.post("/api/templates", status_code=201)
+async def create_template(request: CreateTemplateRequest) -> dict:
+    """Create a new template with scaffolded files."""
+    key = request.key
+    name = request.name or key
+    description = request.description
+
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required")
+
+    # Reject keys with path separators or traversal components
+    if "/" in key or "\\" in key or ".." in key:
+        raise HTTPException(status_code=400, detail="Invalid template key")
+
+    templates_dir = _safe_template_path(key)
+    if templates_dir.exists():
+        raise HTTPException(status_code=409, detail="Template already exists")
+
+    templates_dir.mkdir(parents=True)
+
+    # Scaffold files
+    (templates_dir / "_template.yaml").write_text(
+        f"---\nkey: {key}\nname: {name}\ndescription: {description}\n"
+        f'goal_template: "{{user_input}}"\n---\n',
+        encoding="utf-8",
+    )
+    (templates_dir / "leader.md").write_text(
+        "---\nname: leader\n---\n\nYou are the leader agent. Decompose the goal into tasks.\n",
+        encoding="utf-8",
+    )
+    (templates_dir / "synthesis.md").write_text(
+        "---\nname: synthesis\n---\n\nSynthesize the results into a comprehensive report.\n",
+        encoding="utf-8",
+    )
+    (templates_dir / "worker-default.md").write_text(
+        "---\nname: default-worker\ndisplayName: Default Worker\n"
+        "description: A general-purpose worker\n---\n\n"
+        "Complete the assigned task thoroughly.\n",
+        encoding="utf-8",
+    )
+
+    return {"key": key, "name": name, "description": description}
+
+
+@router.delete("/api/templates/{key}")
+async def delete_template(key: str) -> dict:
+    """Delete a template directory."""
+    templates_dir = _safe_template_path(key)
+    if not templates_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    shutil.rmtree(templates_dir)
+    return {"deleted": True, "key": key}

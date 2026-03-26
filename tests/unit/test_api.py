@@ -158,6 +158,42 @@ def test_get_swarm_status_returns_state() -> None:
     assert body["round_number"] == 0
 
 
+def test_get_swarm_status_returns_report_when_complete() -> None:
+    """GET /api/swarm/{id}/status includes report text when swarm is complete."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/api/swarm/start", json={"goal": "Test report"}
+    )
+    swarm_id = create_resp.json()["swarm_id"]
+
+    # Simulate completion with a report
+    swarm_store[swarm_id]["phase"] = "complete"
+    swarm_store[swarm_id]["report"] = "# Final Report\n\nAll done."
+
+    response = client.get(f"/api/swarm/{swarm_id}/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"] == "# Final Report\n\nAll done."
+
+
+def test_get_swarm_status_returns_null_report_when_incomplete() -> None:
+    """GET /api/swarm/{id}/status returns null report when swarm is still running."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/api/swarm/start", json={"goal": "Test"}
+    )
+    swarm_id = create_resp.json()["swarm_id"]
+
+    response = client.get(f"/api/swarm/{swarm_id}/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"] is None
+
+
 def test_get_swarm_status_unknown_returns_404() -> None:
     """GET status for a nonexistent swarm_id returns 404."""
     _clear_swarm_store()
@@ -302,6 +338,268 @@ def test_ws_accepted_with_correct_key() -> None:
 
 
 
+# ---------------------------------------------------------------------------
+# Chat endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_chat_returns_400_when_no_client_configured() -> None:
+    """POST /api/swarm/{id}/chat returns 400 when no copilot client is available."""
+    _clear_swarm_store()
+    client = TestClient(app)
+    response = client.post(
+        "/api/swarm/nonexistent/chat",
+        json={"message": "Hello"},
+    )
+    # No copilot client configured in test — returns 400 not 404
+    assert response.status_code == 400
+
+
+def test_chat_returns_409_for_incomplete_swarm() -> None:
+    """POST /api/swarm/{id}/chat returns 409 when swarm hasn't completed."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Create a swarm (it will be in "starting" phase)
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    response = client.post(
+        f"/api/swarm/{swarm_id}/chat",
+        json={"message": "Hello"},
+    )
+    assert response.status_code == 409
+
+
+def test_chat_returns_200_for_complete_swarm() -> None:
+    """POST /api/swarm/{id}/chat returns 200 when swarm is complete with synthesis session."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Create a swarm and manually set it to complete with a mock orchestrator
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    # Simulate completion
+    from unittest.mock import AsyncMock, MagicMock
+    mock_orch = MagicMock()
+    mock_orch.synthesis_session_id = "synth-test"
+    mock_orch.chat = AsyncMock(return_value="Refined response")
+    swarm_store[swarm_id]["phase"] = "complete"
+    swarm_store[swarm_id]["orchestrator"] = mock_orch
+
+    response = client.post(
+        f"/api/swarm/{swarm_id}/chat",
+        json={"message": "Refine this"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "streaming"
+
+
+def test_chat_returns_401_when_auth_required() -> None:
+    """POST /api/swarm/{id}/chat requires X-API-Key when configured."""
+    _clear_swarm_store()
+    _set_auth("production", "secret-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/swarm/test-id/chat",
+        json={"message": "Hello"},
+    )
+    assert response.status_code == 401
+
+
+def test_chat_resumes_session_for_unknown_swarm() -> None:
+    """POST /api/swarm/{id}/chat creates orchestrator on-the-fly for swarms not in store."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Inject a mock copilot client + event bus so on-the-fly orchestrator can be created
+    from unittest.mock import MagicMock, AsyncMock
+    from backend.events import EventBus
+    import backend.api.rest as rest_mod
+    old_client, old_bus = rest_mod._copilot_client, rest_mod._event_bus
+
+    mock_client = MagicMock()
+
+    # Session that fires idle on send() so chat() completes
+    class _ResumedSession:
+        def __init__(self):
+            self._handlers = []
+        def on(self, handler):
+            self._handlers.append(handler)
+            return lambda: None
+        async def send(self, prompt, **kw):
+            from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
+            for h in self._handlers:
+                h(SessionEvent(type=SessionEventType.SESSION_IDLE, data=SessionEventData(turn_id="t1")))
+            return "msg-1"
+
+    mock_client.resume_session = AsyncMock(return_value=_ResumedSession())
+    rest_mod._copilot_client = mock_client
+    rest_mod._event_bus = EventBus()
+
+    try:
+        # No swarm created — chat with a swarm_id that only exists as a past session
+        response = client.post(
+            "/api/swarm/old-swarm-123/chat",
+            json={"message": "Summarize findings"},
+        )
+        # Should return 200 (streaming), not 404
+        assert response.status_code == 200
+        assert response.json()["status"] == "streaming"
+
+        # Orchestrator should be cached in swarm_store for subsequent messages
+        assert "old-swarm-123" in swarm_store
+        orch = swarm_store["old-swarm-123"]["orchestrator"]
+        assert orch.synthesis_session_id == "synth-old-swarm-123"
+    finally:
+        rest_mod._copilot_client = old_client
+        rest_mod._event_bus = old_bus
+
+
+# ---------------------------------------------------------------------------
+# File endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_list_files_returns_empty_for_missing_workdir() -> None:
+    """GET /api/swarm/{id}/files returns empty list when workdir doesn't exist."""
+    client = TestClient(app)
+    response = client.get("/api/swarm/nonexistent-swarm/files")
+    assert response.status_code == 200
+    assert response.json()["files"] == []
+
+
+def test_list_files_returns_files_in_workdir(tmp_path: pytest.fixture) -> None:
+    """GET /api/swarm/{id}/files lists files in workdir."""
+    import backend.api.rest as rest_mod
+
+    # Create a temp workdir with files
+    swarm_id = "test-files-swarm"
+    work_dir = tmp_path / swarm_id
+    work_dir.mkdir()
+    (work_dir / "report.md").write_text("# Report")
+    (work_dir / "notes.md").write_text("# Notes")
+
+    # Patch the workdir base path
+    original_list = rest_mod.router
+    client = TestClient(app)
+
+    # We need to create files in the actual workdir path the endpoint uses
+    from pathlib import Path
+    actual_dir = Path("workdir") / swarm_id
+    actual_dir.mkdir(parents=True, exist_ok=True)
+    (actual_dir / "report.md").write_text("# Report")
+    (actual_dir / "notes.md").write_text("# Notes")
+
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files")
+        assert response.status_code == 200
+        files = response.json()["files"]
+        assert len(files) == 2
+        names = {f["name"] for f in files}
+        assert "report.md" in names
+        assert "notes.md" in names
+    finally:
+        import shutil
+        shutil.rmtree(actual_dir, ignore_errors=True)
+
+
+def test_get_file_returns_content() -> None:
+    """GET /api/swarm/{id}/files/{path} returns file content."""
+    from pathlib import Path
+    swarm_id = "test-read-swarm"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "test.md").write_text("Hello world")
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/test.md")
+        assert response.status_code == 200
+        assert response.json()["content"] == "Hello world"
+    finally:
+        import shutil
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_get_file_404_for_missing() -> None:
+    """GET /api/swarm/{id}/files/{path} returns 404 for nonexistent file."""
+    client = TestClient(app)
+    response = client.get("/api/swarm/no-swarm/files/missing.md")
+    assert response.status_code == 404
+
+
+def test_get_file_403_for_path_traversal() -> None:
+    """Path traversal via symlink or encoded path is blocked."""
+    from pathlib import Path
+    import shutil
+    # Create a workdir with a symlink pointing outside
+    swarm_id = "test-traversal"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    symlink = work_dir / "escape"
+    try:
+        symlink.symlink_to("/etc/hostname")
+    except OSError:
+        # Can't create symlinks — skip
+        shutil.rmtree(work_dir, ignore_errors=True)
+        return
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/escape")
+        # Symlink resolves outside workdir — should be 403
+        assert response.status_code == 403
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_ensure_report_creates_file_when_missing() -> None:
+    """POST /api/swarm/{id}/files/ensure-report creates the file if missing."""
+    from pathlib import Path
+    import shutil
+    swarm_id = "test-ensure-swarm"
+    work_dir = Path("workdir") / swarm_id
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            f"/api/swarm/{swarm_id}/files/ensure-report",
+            json={"report": "# My Report\n\nContent here"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["created"] is True
+        assert (work_dir / "synthesis_report.md").read_text() == "# My Report\n\nContent here"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_ensure_report_does_not_overwrite_existing() -> None:
+    """POST /api/swarm/{id}/files/ensure-report leaves existing file alone."""
+    from pathlib import Path
+    import shutil
+    swarm_id = "test-ensure-existing"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "synthesis_report.md").write_text("Original content")
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            f"/api/swarm/{swarm_id}/files/ensure-report",
+            json={"report": "New content"},
+        )
+        assert response.status_code == 200
+        assert response.json()["created"] is False
+        assert (work_dir / "synthesis_report.md").read_text() == "Original content"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def test_websocket_receives_swarm_events() -> None:
     """Start a swarm, connect WS, emit a phase_changed event, verify receipt."""
     _clear_swarm_store()
@@ -335,3 +633,186 @@ def test_websocket_receives_swarm_events() -> None:
         assert data["type"] == "phase_changed"
         assert data["phase"] == "planning"
         assert data["swarm_id"] == swarm_id
+
+
+# ---------------------------------------------------------------------------
+# Template CRUD tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_template_details_returns_files() -> None:
+    """GET /api/templates/{key} returns template metadata and file contents."""
+    client = TestClient(app)
+    response = client.get("/api/templates/deep-research")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["key"] == "deep-research"
+    assert "files" in body
+    assert isinstance(body["files"], list)
+    # Should have at least _template.yaml, leader.md, synthesis.md
+    filenames = [f["filename"] for f in body["files"]]
+    assert "_template.yaml" in filenames
+    assert "leader.md" in filenames
+    assert "synthesis.md" in filenames
+    # Each file should have content
+    for f in body["files"]:
+        assert "content" in f
+        assert len(f["content"]) > 0
+
+
+def test_get_template_details_404_for_unknown() -> None:
+    """GET /api/templates/{key} returns 404 for unknown template."""
+    client = TestClient(app)
+    response = client.get("/api/templates/nonexistent-template")
+    assert response.status_code == 404
+
+
+def test_update_template_file_validates() -> None:
+    """PUT /api/templates/{key}/files/{filename} validates and saves valid content."""
+    import shutil
+    from pathlib import Path
+    # Create a temp template
+    template_dir = Path("src/templates/_test-crud")
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "_template.yaml").write_text(
+        '---\nkey: _test-crud\nname: Test\ndescription: Test template\ngoal_template: "Do {user_input}"\n---\n'
+    )
+    (template_dir / "leader.md").write_text("---\nname: leader\n---\n\nYou are the leader.")
+    (template_dir / "synthesis.md").write_text("---\nname: synthesis\n---\n\nSynthesize results.")
+
+    client = TestClient(app)
+    try:
+        response = client.put(
+            "/api/templates/_test-crud/files/leader.md",
+            json={"content": "---\nname: leader\n---\n\nUpdated leader prompt."},
+        )
+        assert response.status_code == 200
+        assert response.json()["valid"] is True
+        # Verify file was actually written
+        assert "Updated leader prompt" in (template_dir / "leader.md").read_text()
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_update_template_file_rejects_invalid() -> None:
+    """PUT /api/templates/{key}/files/{filename} returns 422 for invalid content."""
+    import shutil
+    from pathlib import Path
+    template_dir = Path("src/templates/_test-invalid")
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "_template.yaml").write_text(
+        '---\nkey: _test-invalid\nname: Test\ndescription: Test\ngoal_template: "Do {user_input}"\n---\n'
+    )
+    (template_dir / "leader.md").write_text("---\nname: leader\n---\n\nOriginal content.")
+
+    client = TestClient(app)
+    try:
+        response = client.put(
+            "/api/templates/_test-invalid/files/leader.md",
+            json={"content": "No frontmatter at all"},
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert "errors" in body
+        assert len(body["errors"]) > 0
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_create_template_scaffolds_files() -> None:
+    """POST /api/templates creates a new template with scaffolded files."""
+    import shutil
+    from pathlib import Path
+
+    client = TestClient(app)
+    # Ensure it doesn't exist
+    template_dir = Path("src/templates/my-new-template")
+    shutil.rmtree(template_dir, ignore_errors=True)
+
+    try:
+        response = client.post(
+            "/api/templates",
+            json={"key": "my-new-template", "name": "My New Template", "description": "A test template"},
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["key"] == "my-new-template"
+        # Verify files were created
+        assert template_dir.is_dir()
+        assert (template_dir / "_template.yaml").is_file()
+        assert (template_dir / "leader.md").is_file()
+        assert (template_dir / "synthesis.md").is_file()
+        assert (template_dir / "worker-default.md").is_file()
+        # Verify _template.yaml has {user_input}
+        yaml_content = (template_dir / "_template.yaml").read_text()
+        assert "{user_input}" in yaml_content
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_delete_template_removes_directory() -> None:
+    """DELETE /api/templates/{key} removes the template directory."""
+    import shutil
+    from pathlib import Path
+    template_dir = Path("src/templates/_test-delete")
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "_template.yaml").write_text(
+        '---\nkey: _test-delete\nname: Del\ndescription: Del\ngoal_template: "{user_input}"\n---\n'
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.delete("/api/templates/_test-delete")
+        assert response.status_code == 200
+        assert not template_dir.exists()
+    finally:
+        shutil.rmtree(template_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Template path traversal tests
+# ---------------------------------------------------------------------------
+
+
+def test_safe_template_path_rejects_traversal() -> None:
+    """_safe_template_path raises 403 for path traversal attempts."""
+    from backend.api.rest import _safe_template_path
+    from fastapi import HTTPException
+    # ".." resolves to parent of templates dir
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_template_path("../../etc")
+    assert exc_info.value.status_code == 403
+
+    # Single ".." also escapes
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_template_path("..")
+    assert exc_info.value.status_code == 403
+
+
+def test_safe_template_file_path_rejects_traversal() -> None:
+    """_safe_template_file_path raises 403 for filename traversal."""
+    from backend.api.rest import _safe_template_file_path
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_template_file_path("deep-research", "../../etc/passwd")
+    assert exc_info.value.status_code == 403
+
+
+def test_create_template_400_for_path_traversal_key() -> None:
+    """POST /api/templates rejects traversal in key (from JSON body)."""
+    client = TestClient(app)
+    response = client.post(
+        "/api/templates",
+        json={"key": "../../../tmp/evil", "name": "Evil", "description": "Bad"},
+    )
+    assert response.status_code == 400
+
+
+def test_create_template_400_for_key_with_slashes() -> None:
+    """POST /api/templates rejects keys containing path separators."""
+    client = TestClient(app)
+    response = client.post(
+        "/api/templates",
+        json={"key": "foo/bar", "name": "Foo", "description": "Slash in key"},
+    )
+    assert response.status_code == 400
