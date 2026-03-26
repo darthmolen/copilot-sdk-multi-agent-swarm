@@ -12,6 +12,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from backend.api.schemas import (
+    ChatRequest,
     SwarmStartRequest,
     SwarmStartResponse,
     SwarmStatusResponse,
@@ -139,6 +140,23 @@ async def cancel_swarm(swarm_id: str) -> dict:
         await orch.cancel()
     swarm_store[swarm_id]["phase"] = "cancelled"
     return {"status": "cancelled"}
+
+
+@router.post("/api/swarm/{swarm_id}/chat")
+async def chat_with_swarm(
+    swarm_id: str, request: ChatRequest, background_tasks: BackgroundTasks,
+) -> dict:
+    """Send a chat message to a completed swarm's synthesis agent."""
+    if swarm_id not in swarm_store:
+        raise HTTPException(status_code=404, detail="Swarm not found")
+    state = swarm_store[swarm_id]
+    if state["phase"] != "complete":
+        raise HTTPException(status_code=409, detail="Swarm not yet complete")
+    orch = state.get("orchestrator")
+    if not orch or not getattr(orch, "synthesis_session_id", None):
+        raise HTTPException(status_code=400, detail="No synthesis session available")
+    background_tasks.add_task(orch.chat, request.message)
+    return {"status": "streaming"}
 
 
 @router.get("/api/templates")

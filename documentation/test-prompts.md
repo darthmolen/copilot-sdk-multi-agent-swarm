@@ -9,3 +9,5 @@ Research how RAG, Vector based, and Memory based pre-fill for system prompts wor
 Compare autonomous agent architectures: ReAct, Plan-and-Execute, and Tree of Thoughts. Analyze each framework's decision-making loop, failure recovery mechanisms, and token efficiency. Include a decision matrix for when to use each pattern in production systems.
 
 Compare A2A against a simple inbox pattern and a third commonly used pattern for communication among agent teams of your choice. Compare and contrast the differences and the pros and cons of each.
+
+Compare and contrast three approaches to fine-tuning large language models: Full Fine-Tuning, LoRA/QLoRA (parameter-efficient), and RLHF/DPO (alignment-based). For each method, explain how it works mechanically, what data requirements and compute costs look like, and where it excels vs. falls short. Include a decision matrix for when to use each based on dataset size, budget, and use case. Provide concrete testing and evaluation recommendations for each approach — how to detect overfitting, catastrophic forgetting, and alignment drift, with specific metrics and benchmark strategies.

@@ -377,6 +377,43 @@ class TestSynthesize:
         report = await orch._synthesize("Build something great")
         assert report == "The final synthesis report"
 
+    async def test_synthesize_stores_session_id(self, event_bus: EventBus) -> None:
+        """After synthesis, orchestrator stores synthesis_session_id."""
+        orch = make_orchestrator(event_bus, swarm_id="swarm-abc", synthesis_report="Report")
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        await orch._synthesize("goal")
+        assert orch.synthesis_session_id == "synth-swarm-abc"
+
+    async def test_chat_emits_leader_chat_message(self, event_bus: EventBus) -> None:
+        """chat() resumes synthesis session and emits leader.chat_message."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-chat", synthesis_report="Original report")
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        # Run synthesis to store session_id
+        await orch._synthesize("goal")
+        events.clear()
+
+        # Chat with the synthesis agent
+        response = await orch.chat("Make the summary shorter")
+        assert len(response) > 0
+
+        chat_events = [(t, d) for t, d in events if t == "leader.chat_message"]
+        assert len(chat_events) == 1
+        assert chat_events[0][1]["content"] == response
+        assert chat_events[0][1]["swarm_id"] == "swarm-chat"
+
     async def test_synthesize_does_not_use_send_and_wait(self, event_bus: EventBus) -> None:
         """Synthesis must NOT use send_and_wait (it times out). Uses send() + on() instead."""
         orch = make_orchestrator(event_bus, synthesis_report="Report text")

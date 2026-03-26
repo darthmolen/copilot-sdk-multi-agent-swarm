@@ -43,6 +43,27 @@ export interface SwarmState {
   error: string | null;
 }
 
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatState {
+  messages: ChatMessage[];
+  streamingMessage: { id: string; content: string } | null;
+  activeTools: Array<{
+    toolCallId: string;
+    toolName: string;
+    status: 'running' | 'complete' | 'failed';
+  }>;
+}
+
+export interface ChatStore {
+  chats: Record<string, ChatState>;
+  activeSwarmId: string | null;
+}
+
 export interface SwarmEvent {
   type: string;
   data: Record<string, unknown>;

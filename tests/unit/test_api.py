@@ -302,6 +302,76 @@ def test_ws_accepted_with_correct_key() -> None:
 
 
 
+# ---------------------------------------------------------------------------
+# Chat endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_chat_returns_404_for_unknown_swarm() -> None:
+    """POST /api/swarm/{id}/chat returns 404 for nonexistent swarm."""
+    _clear_swarm_store()
+    client = TestClient(app)
+    response = client.post(
+        "/api/swarm/nonexistent/chat",
+        json={"message": "Hello"},
+    )
+    assert response.status_code == 404
+
+
+def test_chat_returns_409_for_incomplete_swarm() -> None:
+    """POST /api/swarm/{id}/chat returns 409 when swarm hasn't completed."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Create a swarm (it will be in "starting" phase)
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    response = client.post(
+        f"/api/swarm/{swarm_id}/chat",
+        json={"message": "Hello"},
+    )
+    assert response.status_code == 409
+
+
+def test_chat_returns_200_for_complete_swarm() -> None:
+    """POST /api/swarm/{id}/chat returns 200 when swarm is complete with synthesis session."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Create a swarm and manually set it to complete with a mock orchestrator
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    # Simulate completion
+    from unittest.mock import AsyncMock, MagicMock
+    mock_orch = MagicMock()
+    mock_orch.synthesis_session_id = "synth-test"
+    mock_orch.chat = AsyncMock(return_value="Refined response")
+    swarm_store[swarm_id]["phase"] = "complete"
+    swarm_store[swarm_id]["orchestrator"] = mock_orch
+
+    response = client.post(
+        f"/api/swarm/{swarm_id}/chat",
+        json={"message": "Refine this"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "streaming"
+
+
+def test_chat_returns_401_when_auth_required() -> None:
+    """POST /api/swarm/{id}/chat requires X-API-Key when configured."""
+    _clear_swarm_store()
+    _set_auth("production", "secret-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/swarm/test-id/chat",
+        json={"message": "Hello"},
+    )
+    assert response.status_code == 401
+
+
 def test_websocket_receives_swarm_events() -> None:
     """Start a swarm, connect WS, emit a phase_changed event, verify receipt."""
     _clear_swarm_store()

@@ -37,14 +37,18 @@ async def _create_session_with_tools(
     client: Any,
     system_prompt: str,
     tools: list[Any],
+    session_id: str | None = None,
 ) -> Any:
     """Create a session with the given tools, compatible with real SDK and mocks."""
     try:
-        return await client.create_session(
-            on_permission_request=_approve_all,
-            system_message={"mode": "replace", "content": system_prompt},
-            tools=tools,
-        )
+        kwargs: dict[str, Any] = {
+            "on_permission_request": _approve_all,
+            "system_message": {"mode": "replace", "content": system_prompt},
+            "tools": tools,
+        }
+        if session_id:
+            kwargs["session_id"] = session_id
+        return await client.create_session(**kwargs)
     except TypeError:
         # Fallback for mocks that don't accept all SDK kwargs
         return await client.create_session(tools=tools)
@@ -80,6 +84,8 @@ class SwarmOrchestrator:
         self.work_dir: Path | None = None
         if swarm_id and work_base:
             self.work_dir = work_base / swarm_id
+        self.synthesis_session_id: str | None = None
+        self._chat_lock = asyncio.Lock()
         self._cancelled = False
 
     # ------------------------------------------------------------------
@@ -101,6 +107,87 @@ class SwarmOrchestrator:
     @property
     def is_cancelled(self) -> bool:
         return self._cancelled
+
+    async def chat(self, message: str) -> str:
+        """Resume synthesis session and send a refinement message."""
+        if not self.synthesis_session_id:
+            raise ValueError("No synthesis session available")
+
+        async with self._chat_lock:
+            try:
+                session = await self.client.resume_session(
+                    self.synthesis_session_id,
+                    on_permission_request=_approve_all,
+                )
+            except (TypeError, AttributeError):
+                # Mock fallback — create a new session for testing
+                session = await _create_session_with_tools(
+                    self.client,
+                    "You are a synthesis agent. Refine the report based on user feedback.",
+                    [],
+                )
+
+            done = asyncio.Event()
+            text_content: list[str] = []
+            message_id = f"chat-{id(message)}"
+
+            def _on_event(event: Any) -> None:
+                raw = getattr(event, "type", "")
+                et = getattr(raw, "value", str(raw)).lower()
+                if "idle" in et:
+                    done.set()
+                elif "session" in et and "error" in et:
+                    done.set()
+                if "assistant.message" in et and "delta" not in et:
+                    data = getattr(event, "data", None)
+                    content = getattr(data, "content", None)
+                    if content and str(content).strip():
+                        text_content.append(str(content))
+                # Stream deltas via EventBus.emit_sync (same pattern as agent.py:84)
+                if "assistant.message_delta" in et:
+                    data = getattr(event, "data", None)
+                    delta = getattr(data, "content", "")
+                    if delta:
+                        self.event_bus.emit_sync("leader.chat_delta", {
+                            "delta": str(delta),
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        })
+                # Tool events
+                if "tool.execution_start" in et:
+                    data = getattr(event, "data", None)
+                    self.event_bus.emit_sync("leader.chat_tool_start", {
+                        "tool_name": getattr(data, "tool_name", ""),
+                        "tool_call_id": getattr(data, "tool_call_id", ""),
+                        "message_id": message_id,
+                        "swarm_id": self.swarm_id,
+                    })
+                if "tool.execution_complete" in et:
+                    data = getattr(event, "data", None)
+                    self.event_bus.emit_sync("leader.chat_tool_result", {
+                        "tool_call_id": getattr(data, "tool_call_id", ""),
+                        "success": str(getattr(data, "success", "")).lower() == "true",
+                        "message_id": message_id,
+                        "swarm_id": self.swarm_id,
+                    })
+
+            unsubscribe = session.on(_on_event)
+            timeout = self.config.get("timeout", 300)
+
+            try:
+                await session.send(message)
+                await asyncio.wait_for(done.wait(), timeout=timeout)
+            except (TimeoutError, asyncio.TimeoutError):
+                log.warning("chat_timeout", timeout=timeout)
+            finally:
+                unsubscribe()
+
+            response = "\n".join(text_content) if text_content else ""
+            await self._emit("leader.chat_message", {
+                "content": response,
+                "message_id": message_id,
+            })
+            return response
 
     async def run(self, goal: str) -> str:
         """Full swarm lifecycle. Returns final report."""
@@ -368,10 +455,15 @@ class SwarmOrchestrator:
             else "You are a synthesis agent. Provide a comprehensive report."
         )
 
+        synthesis_session_id = f"synth-{self.swarm_id}" if self.swarm_id else None
         try:
-            session = await _create_session_with_tools(self.client, synthesis_system, [])
+            session = await _create_session_with_tools(
+                self.client, synthesis_system, [],
+                session_id=synthesis_session_id,
+            )
         except TypeError:
             session = await self.client.create_session()
+        self.synthesis_session_id = synthesis_session_id
 
         # Event-driven: capture text from assistant.message, wait for session.idle
         # NOT turn_end — agents do multiple turns per task; idle = truly done

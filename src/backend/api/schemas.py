@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SwarmStartRequest(BaseModel):
@@ -13,6 +13,10 @@ class SwarmStartRequest(BaseModel):
 class SwarmStartResponse(BaseModel):
     swarm_id: str
     status: str = "starting"
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=10000)
 
 
 class SwarmStatusResponse(BaseModel):
