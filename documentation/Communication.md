@@ -2,199 +2,162 @@
 
 ## Overview
 
-The swarm system consists of seven principal actors that communicate through a layered event-driven architecture. The **React UI** initiates swarm runs via REST calls to **FastAPI**, which creates a **SwarmOrchestrator** and returns a `swarm_id`. The UI then opens a **WebSocket** connection to receive real-time updates. The orchestrator manages the full lifecycle by delegating planning and synthesis to a **Leader Session** (a Copilot CLI process) and distributing work to one or more **Worker Sessions** (also Copilot CLI processes). Workers mutate shared state on the **TaskBoard** through tool calls, while all significant state transitions flow through the **EventBus**, a publish-subscribe bus that bridges backend events to the WebSocket layer and ultimately to the UI.
+The swarm system communicates through a layered event-driven architecture with per-swarm routing. The **React UI** initiates swarm runs via authenticated REST calls to **FastAPI**, which creates a **SwarmOrchestrator** and returns a `swarm_id`. The UI opens a **WebSocket** connection (with API key) to receive real-time updates scoped to that swarm. The orchestrator manages the full lifecycle by delegating planning to a **Leader Session** (via tool-based structured output) and distributing work to **Worker Sessions** (event-driven, waiting for `session.idle`). Workers mutate shared state on the **TaskBoard** through defensive tool handlers, while all state transitions flow through the **EventBus** tagged with `swarm_id` for per-swarm routing.
 
 ## Full Swarm Lifecycle
 
 ```mermaid
 sequenceDiagram
     participant User as User (React UI)
+    participant Auth as AuthGate
     participant FastAPI
     participant Orch as SwarmOrchestrator
     participant Leader as Leader Session (Copilot CLI)
-    participant W1 as Worker Session 1 (Copilot CLI)
-    participant W2 as Worker Session 2 (Copilot CLI)
+    participant W1 as Worker Session 1
+    participant W2 as Worker Session 2
     participant TB as TaskBoard
     participant EB as EventBus
     participant WS as WebSocket
 
-    %% (a) User sends goal
-    User->>FastAPI: POST /api/swarm/start {goal, template?}
+    %% Auth
+    User->>Auth: Enter API key
+    Auth->>Auth: Store in sessionStorage
 
-    %% (b) FastAPI creates orchestrator, returns swarm_id
-    FastAPI->>FastAPI: generate swarm_id (uuid4)
-    FastAPI->>Orch: create SwarmOrchestrator(client, event_bus)
+    %% Start swarm
+    User->>FastAPI: POST /api/swarm/start {goal, template}<br/>X-API-Key header
+    FastAPI->>FastAPI: verify_api_key()
+    FastAPI->>Orch: create SwarmOrchestrator(swarm_id, work_base)
     FastAPI-->>User: {swarm_id, status: "starting"}
 
-    %% (c) User connects WebSocket
-    User->>WS: connect /ws/{swarm_id}
+    %% Connect WebSocket
+    User->>WS: connect /ws/{swarm_id}?key=...
+    WS->>WS: verify key
     WS-->>User: connection established
 
-    %% (d) Orchestrator creates leader session
-    Orch->>Leader: client.create_session(system_prompt=LEADER_SYSTEM_PROMPT)
+    %% Create work directory
+    Orch->>Orch: mkdir workdir/{swarm_id}/
 
-    %% (e) Leader decomposes goal into JSON plan
-    Orch->>Leader: session.send_and_wait(goal)
-    Leader-->>Orch: JSON plan {tasks: [...]}
+    %% Plan phase (tool-based)
+    Orch->>Leader: create_session(system_message=LEADER_PROMPT, tools=[create_plan])
+    Orch->>Leader: session.send(goal)
+    Leader->>Leader: calls create_plan tool with SwarmPlan schema
+    Leader-->>Orch: plan captured via tool handler
 
-    %% (f) Orchestrator creates tasks on TaskBoard
+    %% Create tasks
+    Orch->>EB: _emit("swarm.phase_changed", {phase: "planning", swarm_id})
     loop for each task in plan
-        Orch->>TB: add_task(id, subject, description, worker_role, worker_name, blocked_by)
+        Orch->>TB: add_task(id, subject, description, blocked_by)
+        Orch->>EB: _emit("task.created", {task, swarm_id})
     end
+    EB->>WS: broadcast to swarm_id connections
+    WS-->>User: task.created events
 
-    %% (g) EventBus emits swarm.plan_complete
-    Orch->>EB: emit("swarm.plan_complete", {task_count})
-    EB->>WS: broadcast {type: "swarm.plan_complete", data}
-    WS-->>User: swarm.plan_complete
-
-    %% (h) Orchestrator spawns worker sessions
-    loop for each unique worker in plan
-        Orch->>W1: SwarmAgent.create_session(client) [worker 1]
-        Orch->>W2: SwarmAgent.create_session(client) [worker 2]
+    %% Spawn workers
+    loop for each unique worker
+        Orch->>W1: SwarmAgent.create_session(system_message=mode:replace, model=gemini-3-pro-preview, work_dir)
     end
+    Orch->>EB: _emit("agent.spawned", {agent, swarm_id})
+    EB->>WS: broadcast agent.spawned
+    WS-->>User: agent cards appear
 
-    %% (i) EventBus emits swarm.spawn_complete
-    Orch->>EB: emit("swarm.spawn_complete", {agent_count})
-    EB->>WS: broadcast {type: "swarm.spawn_complete", data}
-    WS-->>User: swarm.spawn_complete
+    %% Execute round 1
+    Orch->>EB: _emit("agent.status_changed", {status: "working", swarm_id})
+    Orch->>W1: session.send("Your task ID is: task-0\nSubject: ...\n\nDescription")
+    Orch->>W2: session.send("Your task ID is: task-1\n...")
 
-    %% (j) Round 1: orchestrator sends tasks to workers
-    Orch->>EB: emit("swarm.round_start", {round: 1, runnable_count})
-    EB->>WS: broadcast swarm.round_start
-    WS-->>User: swarm.round_start
-    Orch->>W1: session.send(task.description)
-    Orch->>W2: session.send(task.description)
+    %% Worker calls task_update
+    W1->>TB: task_update(task_id="task-0", status="in_progress")
+    W1->>EB: tool event → "task.updated" {task, swarm_id}
+    EB->>WS: broadcast task.updated (real-time status change)
+    WS-->>User: task moves to In Progress column
 
-    %% (k) Worker calls task_update tool -> TaskBoard mutates
-    W1->>TB: task_update(task_id, status="completed", result)
-    TB-->>W1: {ok: true}
+    %% Worker completes
+    W1->>TB: task_update(task_id="task-0", status="completed", result="...")
+    W1->>EB: tool event → "task.updated" {task, swarm_id}
+    W1-->>Orch: SessionEvent(session.idle)
+    Note over Orch: SwarmAgent._handler sets done event
 
-    %% (l) Worker fires assistant.turn_end -> orchestrator detects completion
-    W1-->>Orch: SessionEvent(ASSISTANT_TURN_END)
-    Note over Orch,W1: SwarmAgent._handler sets done event
+    Orch->>EB: _emit("agent.status_changed", {status: "idle", tasks_completed: 1, swarm_id})
 
-    %% (m) EventBus emits task.updated
-    Orch->>EB: emit("task.updated", {task})
-    EB->>WS: broadcast task.updated
-    WS-->>User: task.updated
-
-    W2->>TB: task_update(task_id, status="completed", result)
-    W2-->>Orch: SessionEvent(ASSISTANT_TURN_END)
-    Orch->>EB: emit("swarm.round_end", {round: 1})
-
-    %% (n) Round 2: blocked task unblocks, executes
-    Orch->>TB: get_runnable_tasks()
-    TB-->>Orch: [previously blocked task]
-    Orch->>EB: emit("swarm.round_start", {round: 2, runnable_count: 1})
-    EB->>WS: broadcast swarm.round_start
-    WS-->>User: swarm.round_start
-    Orch->>W1: session.send(blocked_task.description)
-    W1->>TB: task_update(task_id, status="completed", result)
-    W1-->>Orch: SessionEvent(ASSISTANT_TURN_END)
-    Orch->>EB: emit("swarm.round_end", {round: 2})
-
-    %% (o) Orchestrator sends synthesis prompt to leader
-    Orch->>Leader: client.create_session(system_prompt="You are a synthesis agent.")
-    Orch->>Leader: session.send_and_wait(SYNTHESIS_PROMPT_TEMPLATE)
-
-    %% (p) Leader returns final report
-    Leader-->>Orch: final report text
-
-    %% (q) EventBus emits swarm.complete
-    Orch->>EB: emit("swarm.synthesis_complete", {})
-    EB->>WS: broadcast swarm.synthesis_complete
-    WS-->>User: swarm.complete
+    %% Synthesis
+    Orch->>Orch: Read all .md files from workdir/{swarm_id}/
+    Orch->>Leader: create_session(synthesis_prompt + task_results + work_dir_content)
+    Orch->>Leader: session.send(synthesis_prompt)
+    Leader-->>Orch: assistant.message text captured via session.on()
+    Orch->>EB: _emit("leader.report", {content: report, swarm_id})
+    EB->>WS: broadcast leader.report
+    WS-->>User: report modal auto-pops
 ```
 
-## Event Flow Detail: The `tool_requests` One-Step-Off Pattern
+## Event Routing
 
-When a Copilot CLI session processes a task, the assistant often responds with a message that contains both text content and `tool_requests`. The SDK emits an `assistant.message` event for this response, but the content at this point is not the final answer -- it is intermediate reasoning before the tool executes. Only after the tool completes and the assistant responds again (this time without `tool_requests`) does the message contain the actual final content.
+All events carry `swarm_id`. The WebSocket forwarder in `main.py` uses `data.get("swarm_id")` (non-destructive) to route events to the correct WS connections via `ConnectionManager.broadcast(swarm_id, ...)`.
 
-The `bridge_sdk_event` function in `event_bridge.py` handles this by splitting `assistant.message` into two cases:
-
-1. **`assistant.message` WITH `tool_requests`**: The content is suppressed (not forwarded to the UI). Instead, an `agent.message_finalize` event is emitted, signaling that the agent is about to execute tools.
-2. **`assistant.message` WITHOUT `tool_requests`**: The content is the final output. An `agent.message` event is emitted with the full content, which the UI renders as the agent's response.
-
-This prevents the UI from displaying stale intermediate text that would be immediately superseded by the post-tool response.
-
-```mermaid
-sequenceDiagram
-    participant W as Worker Session
-    participant EB as Event Bridge
-    participant UI as React UI
-
-    W->>EB: assistant.message (with tool_requests)
-    Note over EB: Content suppressed
-    EB-->>UI: agent.message_finalize {agent_name, message_id}
-
-    W->>EB: tool.execution_start
-    EB-->>UI: agent.tool_call {agent_name, tool_name, tool_call_id}
-
-    W->>EB: tool.execution_complete
-    EB-->>UI: agent.tool_result {agent_name, tool_call_id, success}
-
-    W->>EB: assistant.message (no tool_requests)
-    Note over EB: Final content forwarded
-    EB-->>UI: agent.message {agent_name, content}
-
-    W->>EB: assistant.turn_end
-    EB-->>UI: agent.status_changed {name, status: "ready"}
-    Note over W: SwarmAgent detects ASSISTANT_TURN_END,<br/>marks task completed
-```
+The frontend's `SwarmConnection` component tags each incoming WS event with the `swarmId` from the connection URL, then dispatches to the `multiSwarmReducer` which routes to the correct per-swarm state.
 
 ## WebSocket Event Taxonomy
 
-The following table lists all event types emitted over the WebSocket, their source, and data shape.
-
 ### Orchestrator Events
 
-These are emitted directly by `SwarmOrchestrator` and `TaskBoard` through the `EventBus`.
+Emitted by `SwarmOrchestrator._emit()` — all include `swarm_id`.
 
 | Event Type | Description | Data Shape |
-|---|---|---|
-| `swarm.plan_complete` | Leader finished decomposing the goal into tasks | `{ task_count: number }` |
-| `swarm.spawn_complete` | All worker sessions have been created | `{ agent_count: number }` |
-| `swarm.round_start` | A new execution round is beginning | `{ round: number, runnable_count: number }` |
-| `swarm.round_end` | An execution round has finished | `{ round: number }` |
-| `swarm.synthesis_complete` | Leader finished producing the final report | `{}` |
-| `swarm.error` | The swarm encountered a fatal error | `{ message: string }` |
-| `swarm.cancelled` | The swarm was cancelled by the user | `{}` |
-| `swarm.task_failed` | A specific task failed during execution | `{ task_id: string, agent: string, error: string }` |
+| --- | --- | --- |
+| `swarm.phase_changed` | Phase transition | `{ phase, swarm_id }` |
+| `swarm.plan_complete` | Leader finished task decomposition | `{ task_count, swarm_id }` |
+| `swarm.spawn_complete` | All worker sessions created | `{ agent_count, swarm_id }` |
+| `swarm.round_start` | Execution round beginning | `{ round, runnable_count, swarm_id }` |
+| `swarm.round_end` | Execution round finished | `{ round, swarm_id }` |
+| `swarm.synthesis_complete` | Final report produced | `{ swarm_id }` |
+| `swarm.error` | Fatal error | `{ message, swarm_id }` |
+| `swarm.cancelled` | User cancelled | `{ swarm_id }` |
+| `swarm.task_failed` | Task execution failed | `{ task_id, agent, error, swarm_id }` |
 
-### Agent Events (via Event Bridge)
+### Task and Agent Events
 
-These are produced by `bridge_sdk_event` in `event_bridge.py`, which maps raw Copilot SDK `SessionEvent` types to the WebSocket taxonomy.
-
-| Event Type | SDK Source | Description | Data Shape |
-|---|---|---|---|
-| `agent.status_changed` | `assistant.turn_start` | Agent began thinking | `{ name: string, status: "thinking" }` |
-| `agent.status_changed` | `assistant.turn_end` | Agent finished its turn | `{ name: string, status: "ready" }` |
-| `agent.status_changed` | `subagent.started` | Sub-agent is working | `{ name: string, status: "working" }` |
-| `agent.status_changed` | `subagent.completed` | Sub-agent finished | `{ name: string, status: "idle" }` |
-| `agent.reasoning_delta` | `assistant.reasoning_delta` | Streaming reasoning token | `{ agent_name: string, reasoning_id: string, delta: string }` |
-| `agent.reasoning` | `assistant.reasoning` | Complete reasoning block | `{ agent_name: string, reasoning_id: string, content: string }` |
-| `agent.message_delta` | `assistant.message_delta` | Streaming message token | `{ agent_name: string, delta: string, message_id: string }` |
-| `agent.message` | `assistant.message` (no tool_requests) | Final message content from agent | `{ agent_name: string, content: string }` |
-| `agent.message_finalize` | `assistant.message` (with tool_requests) | Intermediate message suppressed; tools pending | `{ agent_name: string, message_id: string }` |
-| `agent.tool_call` | `tool.execution_start` | Agent is invoking a tool | `{ agent_name: string, tool_name: string, tool_call_id: string }` |
-| `agent.tool_output` | `tool.execution_partial_result` | Partial output from a running tool | `{ agent_name: string, tool_call_id: string, output: string }` |
-| `agent.tool_result` | `tool.execution_complete` | Tool execution finished | `{ agent_name: string, tool_call_id: string, success: boolean }` |
-| `agent.usage` | `assistant.usage` | Token usage statistics | `{ agent_name: string, usage: object }` |
-| `agent.error` | `subagent.failed` or `session.error` | Agent or session error | `{ name: string, error: string }` |
+| Event Type | Source | Description | Data Shape |
+| --- | --- | --- | --- |
+| `task.created` | Orchestrator plan phase | New task added to board | `{ task: {id, subject, status, ...}, swarm_id }` |
+| `task.updated` | Tool handler + orchestrator | Task status/result changed | `{ task: {id, status, result, ...}, swarm_id }` |
+| `agent.spawned` | Orchestrator spawn phase | New agent registered | `{ agent: {name, role, display_name, status, tasks_completed}, swarm_id }` |
+| `agent.status_changed` | Orchestrator execute phase | Agent working/idle/failed | `{ agent_name, status, tasks_completed?, swarm_id }` |
+| `inbox.message` | Tool handler (inbox_send) | Inter-agent message | `{ sender, recipient, content, timestamp, swarm_id }` |
+| `leader.plan` | Orchestrator plan phase | Raw plan text | `{ content, swarm_id }` |
+| `leader.report` | Orchestrator synthesis phase | Final report | `{ content, swarm_id }` |
 
 ### Frontend Reducer Events
 
-The `useSwarmState` reducer additionally handles these event types, which may be emitted by higher-level orchestration logic or future extensions:
+The `multiSwarmReducer` handles routing; the inner `swarmReducer` handles these per-swarm:
 
-| Event Type | Description | State Effect |
-|---|---|---|
-| `swarm.phase_changed` | Swarm phase transition | Sets `phase` |
-| `task.created` | A new task was added | Appends to `tasks` |
-| `task.updated` | A task changed status or result | Updates matching task in `tasks` |
-| `agent.spawned` | A new agent was registered | Appends to `agents` |
-| `inbox.message` | An inter-agent message was sent | Appends to `messages` |
-| `leader.plan` | Leader's raw plan text | Sets `leaderPlan` |
-| `leader.report` | Leader's synthesis report | Sets `leaderReport` |
-| `round.started` | Alias for `swarm.round_start` | Sets `roundNumber` |
-| `swarm.complete` | Swarm run finished successfully | Sets `phase` to `"complete"` |
-| `swarm.error` | Swarm run failed | Sets `error` |
+| Event Type | State Effect |
+| --- | --- |
+| `swarm.phase_changed` | Sets `phase` |
+| `task.created` | Appends to `tasks` with `swarm_id` from event data |
+| `task.updated` | Updates matching task by `id` |
+| `agent.spawned` | Appends to `agents` with `swarm_id` from event data |
+| `agent.status_changed` | Updates agent status and `tasks_completed` |
+| `inbox.message` | Appends to `messages` with `swarm_id` from event data |
+| `leader.report` | Sets `leaderReport` |
+| `round.started` / `swarm.round_start` | Sets `roundNumber` |
+| `swarm.complete` | Sets `phase` to `"complete"` |
+| `swarm.error` | Sets `error` |
+
+### Multi-Swarm Store Actions
+
+| Action Type | Effect |
+| --- | --- |
+| `swarm.add` | Creates new per-swarm state, adds to `activeSwarmIds` |
+| `swarm.remove` | Frees all data for that swarm |
+| `swarm.event` | Routes inner event to correct swarm's reducer |
+
+Auto-transitions: When a swarm's phase becomes `complete` or `cancelled`, it moves from `activeSwarmIds` to `completedSwarmIds` (WS disconnects, data retained for report viewing). Hard cap of 10 swarms with oldest-completed auto-eviction.
+
+## System Prompt Architecture
+
+Worker prompts are assembled from three layers by `assemble_worker_prompt()`:
+
+1. **System preamble** (`src/templates/system-prompt.md`) — Mandatory coordination protocol with tool usage instructions. YAML frontmatter declares the 4 coordination tools. Includes anti-polling instruction for `inbox_receive`.
+2. **Work directory directive** — Injected when `work_dir` is set: "Your work directory is: `/path/`. Write ALL output files here."
+3. **Template prompt** — Domain expertise from the worker's `.md` file in the template directory. `{display_name}` and `{role}` placeholders are expanded.
+
+This separation ensures template authors cannot accidentally remove coordination tool mandates.

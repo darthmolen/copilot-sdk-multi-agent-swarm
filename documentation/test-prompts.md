@@ -1,5 +1,7 @@
 # Test Prompts
 
+Here are some prompts we used to generate some of the documents seen in documentation/example_research_output.
+
 ## Deep Research
 
 Research how RAG, Vector based, and Memory based pre-fill for system prompts work. Give a Summary of how each works with diagrams, Give pros and cons of each approach. Give a combined strResearch how RAG, Vector based, and Memory based pre-fill for system prompts work. Give a Summary of how each works with diagrams, Give pros and cons of each approach. Give a combined strategy for using all three.

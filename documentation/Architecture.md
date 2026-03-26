@@ -1,152 +1,139 @@
 # Architecture Overview
 
-This system implements a multi-agent swarm pattern on top of the Copilot CLI SDK. A leader session decomposes a user goal into a dependency graph of tasks, spawns one headless Copilot CLI session per worker agent, and executes tasks concurrently across rounds. A FastAPI backend exposes REST endpoints for swarm lifecycle management and a WebSocket endpoint for real-time event streaming to a React frontend. All coordination between agents happens through shared, lock-protected data structures (TaskBoard, InboxSystem, TeamRegistry) rather than direct inter-process communication.
+This system implements a multi-agent swarm pattern on top of the Copilot CLI SDK. A leader session decomposes a user goal into a dependency graph of tasks, spawns one headless Copilot CLI session per worker agent, and executes tasks concurrently across rounds. A FastAPI backend exposes REST endpoints for swarm lifecycle management and a WebSocket endpoint for real-time event streaming to a React frontend. All coordination between agents happens through shared, lock-protected data structures (TaskBoard, InboxSystem, TeamRegistry) rather than direct inter-process communication. Multiple swarms run concurrently with isolated state and per-swarm event routing.
 
 ## Component Diagram
 
 ```mermaid
 graph TD
     subgraph Frontend["React Frontend"]
+        AUTH[AuthGate]
         SC[SwarmControls]
         TB_UI[TaskBoard]
         AR[AgentRoster]
         IF[InboxFeed]
         CP[ChatPanel]
+        MSR[MultiSwarmReducer]
     end
 
     subgraph Backend["FastAPI Backend"]
         REST[REST API<br/>/api/swarm/*]
-        WS[WebSocket Endpoint<br/>/ws/swarm_id]
+        AUTHM[API Key Middleware]
+        WS[WebSocket Endpoint<br/>/ws/swarm_id?key=]
         CM[ConnectionManager]
     end
 
-    subgraph Orchestration["SwarmOrchestrator"]
-        PLAN[Plan Phase]
+    subgraph Orchestration["SwarmOrchestrator (per swarm)"]
+        PLAN[Plan Phase<br/>tool-based structured output]
         SPAWN[Spawn Phase]
-        EXEC[Execute Phase]
-        SYNTH[Synthesize Phase]
+        EXEC[Execute Phase<br/>round-based]
+        SYNTH[Synthesize Phase<br/>event-driven]
         PLAN --> SPAWN --> EXEC --> SYNTH
     end
 
     subgraph Sessions["Copilot CLI Sessions"]
         LS[Leader Session]
-        W1[Worker Session 1]
+        W1[Worker Session 1<br/>gemini-3-pro-preview]
         W2[Worker Session 2]
         WN[Worker Session N]
     end
 
-    subgraph SharedState["Shared State"]
+    subgraph SharedState["Shared State (per swarm)"]
         TBoard[TaskBoard<br/>asyncio.Lock]
         Inbox[InboxSystem<br/>asyncio.Lock]
         Registry[TeamRegistry<br/>asyncio.Lock]
+        WorkDir[Work Directory<br/>workdir/swarm_id/]
     end
 
-    EB[EventBus<br/>async + sync emit]
-    Bridge[Event Bridge<br/>SDK event mapping]
+    EB[EventBus<br/>async + sync emit<br/>swarm_id routing]
 
-    Frontend -- "POST /api/swarm/start" --> REST
-    Frontend -- "GET /api/swarm/id/status" --> REST
-    Frontend <-- "JSON frames" --> WS
+    AUTH --> SC
+    Frontend -- "POST /api/swarm/start<br/>X-API-Key header" --> AUTHM --> REST
+    Frontend -- "JSON frames" --> WS
     WS --- CM
 
     REST -- "background task" --> PLAN
-    PLAN -- "send_and_wait" --> LS
-    SPAWN -- "create_session per worker" --> W1 & W2 & WN
-    EXEC -- "session.send + session.on" --> W1 & W2 & WN
+    PLAN -- "session.send + session.on<br/>create_plan tool" --> LS
+    SPAWN -- "create_session per worker<br/>system_message mode:replace" --> W1 & W2 & WN
+    EXEC -- "session.send + session.on<br/>wait for session.idle" --> W1 & W2 & WN
 
-    W1 & W2 & WN -- "swarm tools" --> TBoard & Inbox
-    W1 & W2 & WN -- "SDK events" --> Bridge
-    Bridge -- "mapped events" --> EB
-    EB -- "broadcast" --> CM
+    W1 & W2 & WN -- "swarm tools<br/>task_update, inbox_send" --> TBoard & Inbox
+    W1 & W2 & WN -- "file output" --> WorkDir
+    W1 & W2 & WN -- "tool events<br/>with swarm_id" --> EB
+    EB -- "broadcast by swarm_id" --> CM
 
     EXEC -- "get_runnable_tasks" --> TBoard
     SPAWN -- "register" --> Registry
-    SYNTH -- "get_tasks" --> TBoard
-    SYNTH -- "send_and_wait" --> LS
+    SYNTH -- "get_tasks + read WorkDir files" --> TBoard & WorkDir
+    SYNTH -- "session.send + session.on" --> LS
+
+    MSR -- "per-swarm state isolation" --> TB_UI & AR & IF & CP
 ```
 
 ## Component Descriptions
 
 ### SwarmOrchestrator
 
-The orchestrator drives the four-phase swarm lifecycle. In the **plan** phase, it creates a leader session and asks it to decompose the user goal into a JSON task graph with dependency edges. In the **spawn** phase, it creates one `SwarmAgent` per unique worker name in the plan, each backed by its own Copilot CLI session. The **execute** phase runs rounds: each round queries the TaskBoard for runnable (unblocked) tasks, assigns at most one task per worker, and executes all assignments concurrently via `asyncio.gather`. The **synthesize** phase creates a fresh session that reads all task results and produces a final report. The orchestrator supports cancellation at any point between rounds.
+The orchestrator drives the four-phase swarm lifecycle. Each orchestrator instance has a `swarm_id` — all events emitted via `_emit()` are tagged with it for per-swarm routing.
+
+In the **plan** phase, it creates a leader session and sends the goal. The leader calls `create_plan` (a Pydantic-schema tool) to submit a structured plan — no JSON parsing from text. In the **spawn** phase, it creates one `SwarmAgent` per unique worker name, each configured with `system_message: mode:"replace"` (no `customAgents` — empirically proven to suppress tool compliance). The **execute** phase runs rounds: each round queries the TaskBoard for runnable tasks, assigns at most one per worker, emits `agent.status_changed` with `"working"`, and executes all assignments via `asyncio.gather`. The **synthesize** phase creates a session that receives all task results plus the contents of all `.md` files from the work directory, then produces a final report via event-driven text capture.
+
+The orchestrator creates `workdir/<swarm_id>/` at the start of `run()` and passes the path to all agents via their system prompt.
 
 ### SwarmAgent
 
-Each SwarmAgent wraps a single Copilot CLI session configured with `custom_agents` (providing agent identity without replacing the system message) and four closure-captured swarm tools. Task execution is event-driven: the agent calls `session.send()` to begin work, then subscribes to session events via `session.on()` with a handler that sets an `asyncio.Event` on `ASSISTANT_TURN_END` or `SESSION_ERROR`. The agent waits on that event with a configurable timeout. SDK events are forwarded to the EventBus through `_on_event`. The `finally` block always calls `unsubscribe()` to prevent listener leaks.
+Each SwarmAgent wraps a single Copilot CLI session configured with `system_message: {mode: "replace", content: full_prompt}` and four closure-captured swarm tools. The full prompt is assembled from three layers: system preamble (coordination protocol from `system-prompt.md`), work directory directive, and template prompt (domain expertise).
+
+Task execution is event-driven: the agent calls `session.send()` with the task ID and description, then subscribes to events via `session.on()`. A handler sets an `asyncio.Event` on `session.idle` (not `turn_end` — agents do multiple turns per task). The agent captures text from `assistant.message` and `assistant.reasoning` events as fallback results. Tool events are forwarded to the EventBus with `swarm_id` attached.
+
+### Tool Handlers
+
+The `create_swarm_tools` factory produces four tools with defensive error handling:
+
+- **task_update** — Validates `task_id` and `status` fields exist, returns error result (not crash) for malformed args. Emits `task.updated` with full task dict for real-time frontend updates.
+- **inbox_send** — Validates `to` and `message` fields. Includes ISO timestamp in event payload.
+- **inbox_receive** — No required params. Returns messages with timestamps.
+- **task_list** — Optional `owner` filter. Handles `None` arguments gracefully.
+
+All handlers wrap in try/except, log actual arguments on failure via structlog, and return `ToolResult` with `result_type="error"` instead of raising.
 
 ### TaskBoard
 
-The TaskBoard manages tasks with dependency resolution. Each task has a `blocked_by` list of prerequisite task IDs. When a task is added with non-empty `blocked_by`, it starts in `BLOCKED` status. When a task completes, `_resolve_dependencies` removes its ID from every other task's `blocked_by` list; tasks whose list becomes empty transition from `BLOCKED` to `PENDING`. All mutations are protected by a single `asyncio.Lock`. The orchestrator calls `get_runnable_tasks()` each round to find `PENDING` tasks ready for execution.
+Manages tasks with dependency resolution. Each task has a `blocked_by` list. When a task completes, `_resolve_dependencies` removes its ID from downstream tasks; tasks with empty `blocked_by` transition from `BLOCKED` to `PENDING`. All mutations protected by `asyncio.Lock`.
 
 ### InboxSystem
 
-The InboxSystem provides point-to-point and broadcast messaging between agents. `send()` delivers a timestamped message to a specific recipient's inbox. `broadcast()` delivers to all registered agents except the sender and an optional exclusion list. `receive()` performs a destructive read, returning and clearing all messages for an agent. `peek()` provides non-destructive inspection. All operations are protected by an `asyncio.Lock`. Agents access the inbox through the `inbox_send` and `inbox_receive` swarm tools.
-
-### TeamRegistry
-
-The TeamRegistry tracks metadata for all spawned agents, including name, role, display name, status (`idle`, `working`, `done`, `error`), and a `tasks_completed` counter. The orchestrator registers agents during the spawn phase. Status updates and counter increments are exposed as async methods, all guarded by an `asyncio.Lock`.
+Point-to-point messaging between agents. `send()` delivers a timestamped message. `receive()` performs destructive read. The system prompt instructs agents to call `inbox_receive` once (not poll) to prevent runaway loops.
 
 ### EventBus
 
-The EventBus is a publish-subscribe hub that decouples event producers from consumers. `subscribe()` returns an unsubscribe callable. `emit()` delivers events to all subscribers from async contexts, catching and logging individual subscriber errors so one failure does not block others. `emit_sync()` bridges synchronous SDK callbacks into the async world by scheduling `emit()` on the event loop via `call_soon_threadsafe`. The WebSocket forwarder subscribes during app lifespan startup and broadcasts events to connected clients grouped by swarm ID.
+Publish-subscribe hub with both `emit()` (async) and `emit_sync()` (bridges synchronous SDK callbacks). The WebSocket forwarder subscribes during app lifespan and routes events by `swarm_id`. Events without `swarm_id` broadcast to all connections.
 
-### Event Bridge
+### Multi-Swarm Frontend
 
-The `bridge_sdk_event` function maps the 14 `SessionEventType` variants (representing ~70 distinct SDK event shapes) into a normalized WebSocket event taxonomy (`agent.status_changed`, `agent.message_delta`, `agent.message`, `agent.tool_call`, `agent.tool_result`, `agent.error`, etc.). It handles the **tool_requests one-step-off pattern**: when an `assistant.message` event carries both content and `tool_requests`, the content is suppressed (it will be superseded by tool output) and an `agent.message_finalize` event is emitted instead. Messages with content but no tool requests emit `agent.message` normally. Messages with neither are suppressed entirely.
+The frontend maintains a `MultiSwarmStore` with per-swarm `SwarmState` keyed by `swarm_id`:
 
-### Swarm Tools
+- `multiSwarmReducer` routes events to the correct swarm's state via `swarm.event` actions
+- `SwarmConnection` components (one per active swarm) each own a `useWebSocket` hook
+- `useWebSocket` includes an `active` guard to prevent duplicate events from React Strict Mode's double-invoke
+- Dashboard merges all swarms' data via `flatMap` with composite React keys (`swarm_id-task.id`)
+- Completed swarms move from `activeSwarmIds` to `completedSwarmIds` (WS disconnects, data retained)
+- Hard cap of 10 swarms with auto-eviction of oldest completed
 
-The `create_swarm_tools` factory produces four tools that close over the agent name, TaskBoard, and InboxSystem: **task_update** (transition a task's status and optionally record a result), **inbox_send** (send a message to another agent), **inbox_receive** (destructive read of the agent's inbox), and **task_list** (list tasks, optionally filtered by owner). All tools set `skip_permission=True` to avoid interactive approval prompts in headless mode. The closure pattern ensures each agent's tools operate with the correct identity without global state.
+### Authentication
+
+API key middleware (`verify_api_key`) checks `X-API-Key` header on REST endpoints. WebSocket endpoint checks `?key=` query param. Auth behavior depends on `ENVIRONMENT`:
+
+- `development` + no key = auth disabled
+- Any other environment + no key = 500 error (forces configuration)
+- Key set in any environment = auth enforced
 
 ## Key Design Decisions
 
-- **One session per worker**: Each worker agent gets its own Copilot CLI session, enabling true concurrent execution via `asyncio.gather` rather than sequential turns on a shared session.
-- **`custom_agents` config instead of system message replacement**: Agent identity (name, role, description) is injected through the SDK's `custom_agents` parameter, preserving the default system prompt and its capabilities.
-- **Event-driven execution instead of `send_and_wait`**: Workers use `session.send()` + `session.on()` with an `asyncio.Event` rather than blocking `send_and_wait()`, allowing SDK events to stream in real time to the frontend while the agent works.
-- **`asyncio.Lock` on all shared state**: TaskBoard, InboxSystem, and TeamRegistry each hold a single `asyncio.Lock` protecting all mutations, preventing race conditions when multiple workers complete tasks or send messages simultaneously.
-- **Closure-captured tools**: Swarm tools capture `agent_name`, `task_board`, and `inbox` via closures at creation time, avoiding global mutable state and ensuring each agent's tool calls are correctly attributed.
-- **Round-based execution with dependency resolution**: The orchestrator runs discrete rounds rather than free-running execution, giving a natural point to resolve dependencies, check cancellation, and emit progress events.
-
-## Directory Layout
-
-```
-src/
-  backend/
-    main.py                  # FastAPI app, lifespan, WebSocket endpoint
-    events.py                # EventBus (async/sync pub-sub)
-    config.py                # Application configuration
-    api/
-      rest.py                # REST endpoints: start, status, cancel, templates
-      schemas.py             # Pydantic request/response models
-      websocket.py           # ConnectionManager (per-swarm WS connections)
-    swarm/
-      orchestrator.py        # SwarmOrchestrator (plan/spawn/execute/synthesize)
-      agent.py               # SwarmAgent (event-driven session wrapper)
-      task_board.py           # TaskBoard (dependency resolution, async-safe)
-      inbox_system.py         # InboxSystem (point-to-point + broadcast)
-      team_registry.py        # TeamRegistry (agent metadata tracking)
-      tools.py                # Swarm tool factory (4 closure-captured tools)
-      event_bridge.py         # SDK-to-WebSocket event mapping
-      models.py               # Data models (Task, AgentInfo, InboxMessage)
-      prompts.py              # System prompts (leader, synthesis)
-      templates.py            # Goal templates
-  frontend/
-    index.html
-    vite.config.ts
-    tsconfig.json
-    src/
-      main.tsx               # App entry point
-      App.tsx                 # Root component
-      types/
-        swarm.ts             # TypeScript types (SwarmState, SwarmEvent, Task, AgentInfo)
-      hooks/
-        useSwarmState.ts     # Reducer for swarm state from WebSocket events
-        useWebSocket.ts      # WebSocket connection with exponential backoff reconnect
-      components/
-        SwarmControls.tsx    # Goal input, template selection, start/cancel
-        TaskBoard.tsx        # Task dependency visualization
-        AgentRoster.tsx      # Agent status display
-        InboxFeed.tsx        # Inter-agent message feed
-        ChatPanel.tsx        # Agent output streaming
-```
+- **`system_message: mode:"replace"` instead of `customAgents`**: Empirically proven across 8 models that `customAgents` suppresses custom tool compliance. Direct system message replacement works reliably with Gemini 3 Pro Preview.
+- **`session.idle` instead of `turn_end`**: Agents do multiple turns per task. `turn_end` fires per-turn; `session.idle` fires when truly done.
+- **Event-driven synthesis instead of `send_and_wait`**: `send_and_wait` times out at 300s but the CLI keeps working. Event-driven pattern captures the response regardless of timing.
+- **Per-swarm `_emit()` helper**: All orchestrator events go through `_emit()` which attaches `swarm_id`. Prevents accidental broadcast events.
+- **Defensive tool handlers**: SDK catches handler exceptions and returns opaque "Tool execution failed". Our try/except returns helpful error messages the agent can act on.
+- **Work directory per swarm**: Agents write files to `workdir/<swarm_id>/`. Synthesis reads all `.md` files from this directory to get full research content, not just task_update summaries.
+- **Credit/debit prompt architecture**: System preamble (mandatory coordination protocol) is separated from template prompts (domain expertise). This separation of concerns means template authors can't accidentally remove tool mandates.
