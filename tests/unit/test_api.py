@@ -767,3 +767,52 @@ def test_delete_template_removes_directory() -> None:
         assert not template_dir.exists()
     finally:
         shutil.rmtree(template_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Template path traversal tests
+# ---------------------------------------------------------------------------
+
+
+def test_safe_template_path_rejects_traversal() -> None:
+    """_safe_template_path raises 403 for path traversal attempts."""
+    from backend.api.rest import _safe_template_path
+    from fastapi import HTTPException
+    # ".." resolves to parent of templates dir
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_template_path("../../etc")
+    assert exc_info.value.status_code == 403
+
+    # Single ".." also escapes
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_template_path("..")
+    assert exc_info.value.status_code == 403
+
+
+def test_safe_template_file_path_rejects_traversal() -> None:
+    """_safe_template_file_path raises 403 for filename traversal."""
+    from backend.api.rest import _safe_template_file_path
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_template_file_path("deep-research", "../../etc/passwd")
+    assert exc_info.value.status_code == 403
+
+
+def test_create_template_400_for_path_traversal_key() -> None:
+    """POST /api/templates rejects traversal in key (from JSON body)."""
+    client = TestClient(app)
+    response = client.post(
+        "/api/templates",
+        json={"key": "../../../tmp/evil", "name": "Evil", "description": "Bad"},
+    )
+    assert response.status_code == 400
+
+
+def test_create_template_400_for_key_with_slashes() -> None:
+    """POST /api/templates rejects keys containing path separators."""
+    client = TestClient(app)
+    response = client.post(
+        "/api/templates",
+        json={"key": "foo/bar", "name": "Foo", "description": "Slash in key"},
+    )
+    assert response.status_code == 400

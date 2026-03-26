@@ -14,13 +14,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps
+# Copy source and install Python deps
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
-
-# Copy backend source
 COPY src/backend/ src/backend/
 COPY src/templates/ src/templates/
+RUN pip install --no-cache-dir .
 
 # Copy built frontend
 COPY --from=frontend-builder /app/frontend/dist static/

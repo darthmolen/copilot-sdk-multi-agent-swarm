@@ -232,6 +232,25 @@ async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
     return {"created": created, "path": "synthesis_report.md"}
 
 
+def _safe_template_path(key: str) -> Path:
+    """Resolve a template key to a safe directory path. Raises 403 on traversal."""
+    base = Path("src/templates").resolve()
+    target = (Path("src/templates") / key).resolve()
+    if not str(target).startswith(str(base) + "/") and target != base:
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    return target
+
+
+def _safe_template_file_path(key: str, filename: str) -> Path:
+    """Resolve a template file path safely. Raises 403 on traversal."""
+    template_dir = _safe_template_path(key)
+    base = template_dir.resolve()
+    target = (template_dir / filename).resolve()
+    if not str(target).startswith(str(base) + "/") and target != base:
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    return target
+
+
 @router.get("/api/templates")
 async def list_templates() -> dict:
     """Return available swarm templates."""
@@ -243,7 +262,7 @@ async def list_templates() -> dict:
 @router.get("/api/templates/{key}")
 async def get_template_details(key: str) -> dict:
     """Return full template: metadata + list of files with content."""
-    templates_dir = Path("src/templates") / key
+    templates_dir = _safe_template_path(key)
     if not templates_dir.is_dir():
         raise HTTPException(status_code=404, detail="Template not found")
 
@@ -283,7 +302,7 @@ async def update_template_file(
     key: str, filename: str, request: UpdateTemplateFileRequest,
 ) -> dict:
     """Update a template file. Validates before saving. Returns 422 if invalid."""
-    templates_dir = Path("src/templates") / key
+    templates_dir = _safe_template_path(key)
     if not templates_dir.is_dir():
         raise HTTPException(status_code=404, detail="Template not found")
 
@@ -300,7 +319,7 @@ async def update_template_file(
             },
         )
 
-    file_path = templates_dir / filename
+    file_path = _safe_template_file_path(key, filename)
     file_path.write_text(content, encoding="utf-8")
     return {"valid": True, "filename": filename}
 
@@ -315,7 +334,11 @@ async def create_template(request: CreateTemplateRequest) -> dict:
     if not key:
         raise HTTPException(status_code=400, detail="key is required")
 
-    templates_dir = Path("src/templates") / key
+    # Reject keys with path separators or traversal components
+    if "/" in key or "\\" in key or ".." in key:
+        raise HTTPException(status_code=400, detail="Invalid template key")
+
+    templates_dir = _safe_template_path(key)
     if templates_dir.exists():
         raise HTTPException(status_code=409, detail="Template already exists")
 
@@ -348,7 +371,7 @@ async def create_template(request: CreateTemplateRequest) -> dict:
 @router.delete("/api/templates/{key}")
 async def delete_template(key: str) -> dict:
     """Delete a template directory."""
-    templates_dir = Path("src/templates") / key
+    templates_dir = _safe_template_path(key)
     if not templates_dir.is_dir():
         raise HTTPException(status_code=404, detail="Template not found")
 
