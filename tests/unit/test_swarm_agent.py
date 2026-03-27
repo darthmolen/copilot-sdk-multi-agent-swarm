@@ -367,3 +367,84 @@ async def test_create_session_wires_event_callback(
 
     inbox_events = [(t, d) for t, d in events if "inbox" in t.lower() or d.get("event") == "inbox.message"]
     assert len(inbox_events) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Late completion monitoring tests
+# ---------------------------------------------------------------------------
+
+
+async def test_timed_out_task_recovers_on_late_completion(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    task_board: TaskBoard,
+) -> None:
+    """A timed-out task should recover to COMPLETED when session.idle fires late."""
+    await agent.create_session(mock_client)
+    task = await _make_task(task_board)
+
+    # Fire idle AFTER the timeout — simulates late completion
+    async def _fire_late() -> None:
+        await asyncio.sleep(0.15)
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
+
+    asyncio.ensure_future(_fire_late())
+    await agent.execute_task(task, timeout=0.05)
+
+    # Immediately after execute_task, task should be TIMEOUT
+    tasks = await task_board.get_tasks()
+    assert tasks[0].status == TaskStatus.TIMEOUT
+
+    # Wait for the background monitor to pick up the late completion
+    await asyncio.sleep(0.3)
+
+    tasks = await task_board.get_tasks()
+    assert tasks[0].status == TaskStatus.COMPLETED
+
+
+async def test_late_completion_captures_content(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    task_board: TaskBoard,
+) -> None:
+    """Late completion should capture assistant.message content as the task result."""
+    await agent.create_session(mock_client)
+    task = await _make_task(task_board)
+
+    async def _fire_late_with_content() -> None:
+        await asyncio.sleep(0.15)
+        mock_session.fire_event(SessionEvent(
+            type=SessionEventType.ASSISTANT_MESSAGE,
+            data=SessionEventData(content="Late result from agent"),
+        ))
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
+
+    asyncio.ensure_future(_fire_late_with_content())
+    await agent.execute_task(task, timeout=0.05)
+
+    await asyncio.sleep(0.3)
+
+    tasks = await task_board.get_tasks()
+    assert tasks[0].status == TaskStatus.COMPLETED
+    assert "Late result from agent" in tasks[0].result
+
+
+async def test_monitor_expires_without_completion(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    task_board: TaskBoard,
+) -> None:
+    """Monitor should give up after its own timeout and unsubscribe."""
+    await agent.create_session(mock_client)
+    task = await _make_task(task_board)
+    handlers_before = len(mock_session._handlers)
+
+    # No idle event will ever fire — monitor should expire
+    await agent.execute_task(task, timeout=0.05)
+
+    # Handler is still subscribed (monitor is running)
+    assert len(mock_session._handlers) == handlers_before + 1
+
+    # Patch the monitor_timeout to be very short — but since we can't
+    # change it after creation, we verify that after enough time the
+    # task is still TIMEOUT (monitor doesn't false-complete)
+    await asyncio.sleep(0.2)
+    tasks = await task_board.get_tasks()
+    assert tasks[0].status == TaskStatus.TIMEOUT

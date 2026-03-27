@@ -6,6 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, Callable
 
+import structlog
+
 from backend.events import EventBus
 from backend.swarm.event_bridge import SessionEvent, SessionEventType
 from backend.swarm.inbox_system import InboxSystem
@@ -13,6 +15,8 @@ from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.tools import create_swarm_tools
+
+log = structlog.get_logger()
 
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_MODEL = "gemini-3-pro-preview"
@@ -67,6 +71,7 @@ class SwarmAgent:
         self.work_dir = work_dir
         self.swarm_id = swarm_id
         self.session: Any = None  # Set by create_session
+        self._monitor_tasks: list[asyncio.Task[None]] = []
 
     async def create_session(self, client: Any) -> None:
         """Create a CopilotSession with system_message mode:replace.
@@ -164,6 +169,7 @@ class SwarmAgent:
 
         unsubscribe: Callable[[], None] = self.session.on(_handler)
 
+        monitoring = False
         try:
             task_prompt = (
                 f"Your task ID is: {task.id}\n"
@@ -176,6 +182,11 @@ class SwarmAgent:
                 await asyncio.wait_for(done.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 await self.task_board.update_status(task.id, "timeout")
+                monitoring = True
+                t = asyncio.create_task(self._monitor_late_completion(
+                    task, done, text_content, delta_parts, unsubscribe,
+                ))
+                self._monitor_tasks.append(t)
                 return
 
             if error_holder:
@@ -194,5 +205,43 @@ class SwarmAgent:
                     else ""
                 )
                 await self.task_board.update_status(task.id, "completed", result)
+        finally:
+            if not monitoring:
+                unsubscribe()
+
+    async def _monitor_late_completion(
+        self,
+        task: Task,
+        done: asyncio.Event,
+        text_content: list[str],
+        delta_parts: list[str],
+        unsubscribe: Callable[[], None],
+        monitor_timeout: float = 3600,
+    ) -> None:
+        """Background monitor: wait for a timed-out task's SDK session to complete."""
+        try:
+            await asyncio.wait_for(done.wait(), timeout=monitor_timeout)
+
+            # Session completed — recover the work
+            current_tasks = await self.task_board.get_tasks()
+            current = next((t for t in current_tasks if t.id == task.id), None)
+            if current and current.status == TaskStatus.TIMEOUT:
+                result = (
+                    "\n".join(text_content) if text_content
+                    else "".join(delta_parts) if delta_parts
+                    else ""
+                )
+                updated = await self.task_board.update_status(task.id, "completed", result)
+                log.info("task_late_completed", task_id=task.id, agent=self.name,
+                         result_len=len(result))
+                if self.swarm_id:
+                    await self.event_bus.emit("task.updated", {
+                        "task": updated.to_dict(),
+                        "swarm_id": self.swarm_id,
+                    })
+        except asyncio.CancelledError:
+            log.info("monitor_cancelled", task_id=task.id, agent=self.name)
+        except asyncio.TimeoutError:
+            log.info("monitor_expired", task_id=task.id, agent=self.name)
         finally:
             unsubscribe()
