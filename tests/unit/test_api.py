@@ -458,6 +458,36 @@ def test_chat_resumes_session_for_unknown_swarm() -> None:
         rest_mod._event_bus = old_bus
 
 
+def test_chat_endpoint_logs_request_received(caplog: pytest.fixture) -> None:
+    """POST /api/swarm/{id}/chat logs chat_request_received with swarm_id and message_length."""
+    import logging
+    from unittest.mock import MagicMock, AsyncMock
+
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    # Create a swarm and set it to complete with a mock orchestrator
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    mock_orch = MagicMock()
+    mock_orch.synthesis_session_id = "synth-test"
+    mock_orch.chat = AsyncMock(return_value="Refined response")
+    swarm_store[swarm_id]["phase"] = "complete"
+    swarm_store[swarm_id]["orchestrator"] = mock_orch
+
+    with caplog.at_level(logging.INFO, logger="backend.api.rest"):
+        response = client.post(
+            f"/api/swarm/{swarm_id}/chat",
+            json={"message": "Refine this"},
+        )
+
+    assert response.status_code == 200
+    request_records = [r for r in caplog.records if "chat_request_received" in r.message]
+    assert len(request_records) == 1, f"Expected chat_request_received, got: {[r.message for r in caplog.records]}"
+    assert swarm_id in request_records[0].message
+
+
 # ---------------------------------------------------------------------------
 # File endpoint tests
 # ---------------------------------------------------------------------------
@@ -596,6 +626,112 @@ def test_ensure_report_does_not_overwrite_existing() -> None:
         assert response.status_code == 200
         assert response.json()["created"] is False
         assert (work_dir / "synthesis_report.md").read_text() == "Original content"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_download_zip_returns_zip_for_existing_workdir() -> None:
+    """GET /api/swarm/{id}/files/download-zip returns a valid ZIP with all files."""
+    import io
+    import zipfile
+    from pathlib import Path
+    import shutil
+
+    swarm_id = "test-zip-download"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "report.md").write_text("# Report content")
+    (work_dir / "notes.txt").write_text("Some notes")
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/download-zip")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/zip"
+        assert f'filename="{swarm_id}.zip"' in response.headers["content-disposition"]
+
+        # Verify zip contents
+        buf = io.BytesIO(response.content)
+        with zipfile.ZipFile(buf) as zf:
+            names = set(zf.namelist())
+            assert names == {"report.md", "notes.txt"}
+            assert zf.read("report.md").decode() == "# Report content"
+            assert zf.read("notes.txt").decode() == "Some notes"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_download_zip_returns_empty_zip_for_missing_workdir() -> None:
+    """GET /api/swarm/{id}/files/download-zip returns empty ZIP when workdir doesn't exist."""
+    import io
+    import zipfile
+
+    client = TestClient(app)
+    response = client.get("/api/swarm/nonexistent-zip-swarm/files/download-zip")
+    assert response.status_code == 200
+
+    buf = io.BytesIO(response.content)
+    with zipfile.ZipFile(buf) as zf:
+        assert len(zf.namelist()) == 0
+
+
+def test_download_zip_excludes_symlinks_outside_workdir() -> None:
+    """Symlinks resolving outside workdir are excluded from the ZIP."""
+    import io
+    import zipfile
+    from pathlib import Path
+    import shutil
+
+    swarm_id = "test-zip-traversal"
+    work_dir = Path("workdir") / swarm_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "safe.md").write_text("Safe content")
+    symlink = work_dir / "escape"
+    try:
+        symlink.symlink_to("/etc/hostname")
+    except OSError:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        return  # Can't create symlinks — skip
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/download-zip")
+        assert response.status_code == 200
+
+        buf = io.BytesIO(response.content)
+        with zipfile.ZipFile(buf) as zf:
+            names = set(zf.namelist())
+            assert "safe.md" in names
+            assert "escape" not in names
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_download_zip_includes_nested_files() -> None:
+    """Nested files in subdirectories are included with correct paths."""
+    import io
+    import zipfile
+    from pathlib import Path
+    import shutil
+
+    swarm_id = "test-zip-nested"
+    work_dir = Path("workdir") / swarm_id
+    sub_dir = work_dir / "subdir"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    (work_dir / "top.md").write_text("Top level")
+    (sub_dir / "deep.md").write_text("Nested file")
+
+    client = TestClient(app)
+    try:
+        response = client.get(f"/api/swarm/{swarm_id}/files/download-zip")
+        assert response.status_code == 200
+
+        buf = io.BytesIO(response.content)
+        with zipfile.ZipFile(buf) as zf:
+            names = set(zf.namelist())
+            assert "top.md" in names
+            assert "subdir/deep.md" in names
+            assert zf.read("subdir/deep.md").decode() == "Nested file"
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 

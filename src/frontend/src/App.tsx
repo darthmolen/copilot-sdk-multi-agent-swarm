@@ -364,6 +364,7 @@ function SwarmDashboard() {
                 files={swarmFiles}
                 activeFile={activeFilePath}
                 onSelect={handleSelectArtifact}
+                swarmId={reportSwarmId}
               />
               {activeFilePath && (
                 <div className="active-file-indicator">

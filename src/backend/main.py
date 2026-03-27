@@ -135,7 +135,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 return
 
             swarm_id = data.get("swarm_id", None)
-            log.info("event_forwarded", event_type=event_type, swarm_id=swarm_id or "broadcast")
+            extra_log: dict[str, str] = {}
+            if event_type == "leader.chat_tool_start":
+                extra_log["tool_name"] = data.get("tool_name", "")
+            log.info("event_forwarded", event_type=event_type, swarm_id=swarm_id or "broadcast", **extra_log)
 
             if swarm_id:
                 await manager.broadcast(

@@ -963,3 +963,122 @@ class TestLogging:
         all_tasks = await orch.task_board.get_tasks()
         t0 = next(t for t in all_tasks if t.id == "task-0")
         assert t0.status == TaskStatus.FAILED
+
+    async def test_chat_logs_tool_names_at_info(self, event_bus: EventBus, caplog: pytest.LogCaptureFixture) -> None:
+        """Chat tool events should be logged at INFO with tool_name."""
+        import logging
+
+        # Create a mock client that fires tool events during chat
+        class ToolFiringSession:
+            def __init__(self) -> None:
+                self._handlers: list[Any] = []
+                self._tools: list[Any] = []
+
+            def on(self, handler: Any) -> Any:
+                self._handlers.append(handler)
+                return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+            async def send(self, prompt: str, **kw: Any) -> str:
+                for h in list(self._handlers):
+                    h(SessionEvent(
+                        type=SessionEventType.TOOL_EXECUTION_START,
+                        data=SessionEventData(tool_name="read_file", tool_call_id="tc-1"),
+                    ))
+                for h in list(self._handlers):
+                    h(SessionEvent(
+                        type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                        data=SessionEventData(tool_call_id="tc-1", success=True),
+                    ))
+                for h in list(self._handlers):
+                    h(SessionEvent(
+                        type=SessionEventType.ASSISTANT_MESSAGE,
+                        data=SessionEventData(content="Done"),
+                    ))
+                for h in list(self._handlers):
+                    h(SessionEvent(
+                        type=SessionEventType.SESSION_IDLE,
+                        data=SessionEventData(turn_id="turn-1"),
+                    ))
+                return "msg-1"
+
+        client = MockCopilotClient(synthesis_report="Report")
+        original_create = client.create_session
+
+        async def _create_with_tools(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names or "task_update" in tool_names:
+                return await original_create(**kwargs)
+            return ToolFiringSession()
+
+        client.create_session = _create_with_tools  # type: ignore[assignment]
+        client.resume_session = lambda *a, **kw: _create_with_tools()  # type: ignore[attr-defined]
+
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, swarm_id="swarm-toollog",
+        )
+        orch.synthesis_session_id = "synth-swarm-toollog"
+
+        with caplog.at_level(logging.INFO, logger="backend.swarm.orchestrator"):
+            await orch.chat("test message")
+
+        tool_start_records = [r for r in caplog.records if "chat_tool_start" in r.message]
+        assert len(tool_start_records) >= 1, f"Expected chat_tool_start log, got: {[r.message for r in caplog.records]}"
+        assert "read_file" in tool_start_records[0].message
+
+    async def test_chat_complete_includes_duration_and_tool_count(self, event_bus: EventBus, caplog: pytest.LogCaptureFixture) -> None:
+        """chat_complete log should include tool_calls count and duration_ms."""
+        import logging
+
+        class TwoToolSession:
+            def __init__(self) -> None:
+                self._handlers: list[Any] = []
+                self._tools: list[Any] = []
+
+            def on(self, handler: Any) -> Any:
+                self._handlers.append(handler)
+                return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+            async def send(self, prompt: str, **kw: Any) -> str:
+                for i in range(2):
+                    for h in list(self._handlers):
+                        h(SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_START,
+                            data=SessionEventData(tool_name=f"tool_{i}", tool_call_id=f"tc-{i}"),
+                        ))
+                    for h in list(self._handlers):
+                        h(SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                            data=SessionEventData(tool_call_id=f"tc-{i}", success=True),
+                        ))
+                for h in list(self._handlers):
+                    h(SessionEvent(
+                        type=SessionEventType.ASSISTANT_MESSAGE,
+                        data=SessionEventData(content="Response"),
+                    ))
+                for h in list(self._handlers):
+                    h(SessionEvent(
+                        type=SessionEventType.SESSION_IDLE,
+                        data=SessionEventData(turn_id="turn-1"),
+                    ))
+                return "msg-1"
+
+        client = MockCopilotClient(synthesis_report="Report")
+
+        async def _resume(*a: Any, **kw: Any) -> TwoToolSession:
+            return TwoToolSession()
+
+        client.resume_session = _resume  # type: ignore[attr-defined]
+
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, swarm_id="swarm-duration",
+        )
+        orch.synthesis_session_id = "synth-swarm-duration"
+
+        with caplog.at_level(logging.INFO, logger="backend.swarm.orchestrator"):
+            await orch.chat("test message")
+
+        complete_records = [r for r in caplog.records if "chat_complete" in r.message]
+        assert len(complete_records) == 1, f"Expected 1 chat_complete, got: {[r.message for r in caplog.records]}"
+        assert "tool_calls" in complete_records[0].message
+        assert "duration_ms" in complete_records[0].message
