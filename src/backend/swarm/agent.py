@@ -126,6 +126,7 @@ class SwarmAgent:
         done: asyncio.Event = asyncio.Event()
         error_holder: list[str] = []
         text_content: list[str] = []
+        delta_parts: list[str] = []
 
         def _handler(event: Any) -> None:
             raw = getattr(event, "type", "")
@@ -142,8 +143,14 @@ class SwarmAgent:
                     getattr(data, "error", None) or getattr(data, "message", "unknown error")
                 )
                 done.set()
+            # Accumulate streamed deltas as fallback
+            if "assistant.message_delta" in et:
+                data = getattr(event, "data", None)
+                delta = getattr(data, "content", "") or getattr(data, "delta_content", "")
+                if delta:
+                    delta_parts.append(str(delta))
             # Capture ALL assistant text (even mid-thought with tool_requests)
-            if "assistant.message" in et and "delta" not in et:
+            elif "assistant.message" in et and "delta" not in et:
                 data = getattr(event, "data", None)
                 content = getattr(data, "content", None)
                 if content and str(content).strip():
@@ -180,7 +187,12 @@ class SwarmAgent:
             current = next((t for t in current_tasks if t.id == task.id), None)
             if current and current.status == TaskStatus.IN_PROGRESS:
                 # Agent didn't call task_update — use captured text as result
-                result = "\n".join(text_content) if text_content else ""
+                # Prefer full messages; fall back to accumulated deltas
+                result = (
+                    "\n".join(text_content) if text_content
+                    else "".join(delta_parts) if delta_parts
+                    else ""
+                )
                 await self.task_board.update_status(task.id, "completed", result)
         finally:
             unsubscribe()
