@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +15,7 @@ import structlog
 import yaml
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.schemas import (
     ChatRequest,
@@ -161,6 +163,7 @@ async def chat_with_swarm(
     resumed via the SDK's resume_session (session ID is deterministic:
     ``synth-{swarm_id}``).
     """
+    log.info("chat_request_received", swarm_id=swarm_id, message_length=len(request.message))
     orch = None
 
     if swarm_id in swarm_store:
@@ -205,6 +208,35 @@ async def list_swarm_files(swarm_id: str) -> dict:
                 "size": f.stat().st_size,
             })
     return {"files": files}
+
+
+@router.get("/api/swarm/{swarm_id}/files/download-zip")
+async def download_swarm_zip(swarm_id: str) -> StreamingResponse:
+    """Download all files in a swarm's work directory as a ZIP archive."""
+    base = Path("workdir").resolve()
+    work_dir = Path("workdir") / swarm_id
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if work_dir.is_dir():
+            for f in sorted(work_dir.rglob("*")):
+                if not f.is_file():
+                    continue
+                # Path traversal protection: skip files that resolve outside workdir
+                resolved = f.resolve()
+                if not str(resolved).startswith(str(base)):
+                    continue
+                arcname = str(f.relative_to(work_dir))
+                zf.write(f, arcname)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{swarm_id}.zip"',
+        },
+    )
 
 
 @router.get("/api/swarm/{swarm_id}/files/{file_path:path}")

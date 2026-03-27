@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,8 @@ class SwarmOrchestrator:
 
     async def chat(self, message: str, active_file: str | None = None) -> str:
         """Resume synthesis session and send a refinement message."""
+        start_time = time.monotonic()
+
         if not self.synthesis_session_id:
             raise ValueError("No synthesis session available")
 
@@ -136,6 +139,7 @@ class SwarmOrchestrator:
             done = asyncio.Event()
             text_content: list[str] = []
             message_id = f"chat-{id(message)}"
+            tool_call_count = [0]
 
             def _on_event(event: Any) -> None:
                 raw = getattr(event, "type", "")
@@ -172,17 +176,26 @@ class SwarmOrchestrator:
                 # Tool events
                 if "tool.execution_start" in et:
                     data = getattr(event, "data", None)
+                    tool_name = getattr(data, "tool_name", "")
+                    tool_call_id = getattr(data, "tool_call_id", "")
+                    tool_call_count[0] += 1
+                    log.info("chat_tool_start", swarm_id=self.swarm_id,
+                             tool_name=tool_name, tool_call_id=tool_call_id)
                     self.event_bus.emit_sync("leader.chat_tool_start", {
-                        "tool_name": getattr(data, "tool_name", ""),
-                        "tool_call_id": getattr(data, "tool_call_id", ""),
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
                         "message_id": message_id,
                         "swarm_id": self.swarm_id,
                     })
                 if "tool.execution_complete" in et:
                     data = getattr(event, "data", None)
+                    tool_call_id = getattr(data, "tool_call_id", "")
+                    success = str(getattr(data, "success", "")).lower() == "true"
+                    log.info("chat_tool_result", swarm_id=self.swarm_id,
+                             tool_call_id=tool_call_id, success=success)
                     self.event_bus.emit_sync("leader.chat_tool_result", {
-                        "tool_call_id": getattr(data, "tool_call_id", ""),
-                        "success": str(getattr(data, "success", "")).lower() == "true",
+                        "tool_call_id": tool_call_id,
+                        "success": success,
                         "message_id": message_id,
                         "swarm_id": self.swarm_id,
                     })
@@ -216,8 +229,10 @@ class SwarmOrchestrator:
                 unsubscribe()
 
             response = "\n".join(text_content) if text_content else ""
+            duration_ms = int((time.monotonic() - start_time) * 1000)
             log.info("chat_complete", swarm_id=self.swarm_id,
-                     response_len=len(response), chunks=len(text_content))
+                     response_len=len(response), chunks=len(text_content),
+                     tool_calls=tool_call_count[0], duration_ms=duration_ms)
             await self._emit("leader.chat_message", {
                 "content": response,
                 "message_id": message_id,
