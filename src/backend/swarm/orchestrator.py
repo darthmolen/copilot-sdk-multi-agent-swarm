@@ -76,7 +76,7 @@ class SwarmOrchestrator:
         self.inbox = InboxSystem()
         self.registry = TeamRegistry()
         self.agents: dict[str, SwarmAgent] = {}
-        self.config = config or {"max_rounds": 3, "timeout": 300}
+        self.config = config or {"max_rounds": 3, "timeout": 1800}
         self.template = template
         self.system_preamble = system_preamble
         self.system_tools = system_tools or []

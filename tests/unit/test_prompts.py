@@ -54,6 +54,46 @@ def test_assemble_worker_prompt_includes_work_dir() -> None:
     assert "work directory" in result.lower() or "work_dir" in result.lower()
 
 
+def test_work_dir_in_prompt_is_absolute() -> None:
+    """When a relative work_dir is passed, prompt must contain the absolute resolved path."""
+    from pathlib import Path
+    from backend.swarm.prompts import assemble_worker_prompt
+
+    relative_dir = Path("workdir/swarm-test-abc")
+    result = assemble_worker_prompt(
+        system_preamble="",
+        display_name="Agent",
+        role="Coder",
+        work_dir=relative_dir,
+    )
+    # The prompt must contain an absolute path (starts with /)
+    assert "workdir/swarm-test-abc" not in result or str(relative_dir.resolve()) in result
+    # The resolved absolute path must appear
+    assert str(relative_dir.resolve()) in result
+
+
+def test_work_dir_in_prompt_resolves_correctly() -> None:
+    """Relative path must be resolved to absolute — bare relative string must not appear alone."""
+    from pathlib import Path
+    from backend.swarm.prompts import assemble_worker_prompt
+
+    relative_dir = Path("workdir/swarm-xyz")
+    resolved = str(relative_dir.resolve())
+    result = assemble_worker_prompt(
+        system_preamble="",
+        display_name="Agent",
+        role="Coder",
+        work_dir=relative_dir,
+    )
+    # Must contain the full absolute path
+    assert resolved in result
+    # The path in the prompt must start with /
+    import re
+    match = re.search(r'`([^`]+)`', result)
+    assert match is not None
+    assert match.group(1).startswith("/"), f"Path in prompt is not absolute: {match.group(1)}"
+
+
 def test_assemble_worker_prompt_no_work_dir_omits_section() -> None:
     """When work_dir is None, no work directory section in prompt."""
     from backend.swarm.prompts import assemble_worker_prompt

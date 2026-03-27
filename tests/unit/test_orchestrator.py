@@ -310,6 +310,18 @@ class TestSpawn:
         assert len(orch.agents) == 1
 
 
+class TestConfigPropagation:
+    async def test_orchestrator_uses_provided_timeout(self, event_bus: EventBus) -> None:
+        """Orchestrator config timeout should propagate to execution."""
+        orch = make_orchestrator(event_bus, config={"max_rounds": 3, "timeout": 1800})
+        assert orch.config["timeout"] == 1800
+
+    async def test_orchestrator_default_timeout_is_1800(self, event_bus: EventBus) -> None:
+        """Default timeout should be 1800 seconds (30 minutes)."""
+        orch = make_orchestrator(event_bus)
+        assert orch.config["timeout"] == 1800
+
+
 class TestExecute:
     async def test_execute_round_runs_pending_tasks(self, event_bus: EventBus) -> None:
         orch = make_orchestrator(event_bus)

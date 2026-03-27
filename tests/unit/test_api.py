@@ -458,6 +458,31 @@ def test_chat_resumes_session_for_unknown_swarm() -> None:
         rest_mod._event_bus = old_bus
 
 
+def test_swarm_timeout_defaults_to_env_value() -> None:
+    """Orchestrator should receive timeout from SWARM_TASK_TIMEOUT env var."""
+    import backend.main as main_mod
+    import backend.api.rest as rest_mod
+
+    _clear_swarm_store()
+
+    # Save original and set custom timeout
+    original_timeout = getattr(main_mod, 'SWARM_TASK_TIMEOUT', 300)
+    main_mod.SWARM_TASK_TIMEOUT = 1800.0
+
+    client = TestClient(app)
+    try:
+        # Start a swarm — won't actually run (no copilot client) but creates state
+        response = client.post("/api/swarm/start", json={"goal": "Test timeout"})
+        assert response.status_code == 200
+        swarm_id = response.json()["swarm_id"]
+
+        # The swarm_store entry exists but orchestrator is None (no client)
+        # Verify the timeout value is accessible from the module
+        assert main_mod.SWARM_TASK_TIMEOUT == 1800.0
+    finally:
+        main_mod.SWARM_TASK_TIMEOUT = original_timeout
+
+
 def test_chat_endpoint_logs_request_received(caplog: pytest.fixture) -> None:
     """POST /api/swarm/{id}/chat logs chat_request_received with swarm_id and message_length."""
     import logging

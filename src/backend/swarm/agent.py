@@ -14,7 +14,7 @@ from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.tools import create_swarm_tools
 
-DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_MODEL = "gemini-3-pro-preview"
 
 

@@ -35,6 +35,7 @@ manager = ConnectionManager()
 event_bus = EventBus()
 ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "").lower()
 SWARM_API_KEY: str = os.environ.get("SWARM_API_KEY", "")
+SWARM_TASK_TIMEOUT: float = float(os.environ.get("SWARM_TASK_TIMEOUT", "1800"))
 
 
 # ---------------------------------------------------------------------------
