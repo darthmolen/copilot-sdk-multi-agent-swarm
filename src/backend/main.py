@@ -41,6 +41,12 @@ try:
 except ValueError:
     SWARM_TASK_TIMEOUT = 1800.0
 
+_raw_zip_size = os.environ.get("SWARM_MAX_TEMPLATE_ZIP_SIZE", "")
+try:
+    SWARM_MAX_TEMPLATE_ZIP_SIZE: int = int(_raw_zip_size) if _raw_zip_size else 3 * 1024 * 1024
+except ValueError:
+    SWARM_MAX_TEMPLATE_ZIP_SIZE = 3 * 1024 * 1024
+
 
 # ---------------------------------------------------------------------------
 # Auth

@@ -14,7 +14,7 @@ import shutil
 import structlog
 import yaml
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.schemas import (
@@ -413,3 +413,100 @@ async def delete_template(key: str) -> dict:
 
     shutil.rmtree(templates_dir)
     return {"deleted": True, "key": key}
+
+
+@router.post("/api/templates/deploy", status_code=201)
+async def deploy_template_zip(file: UploadFile) -> dict:
+    """Deploy a template pack from a zip file.
+
+    Validates structure, checks for zipslip, enforces size limit,
+    and validates frontmatter before extracting.
+    """
+    from backend.main import SWARM_MAX_TEMPLATE_ZIP_SIZE
+    from backend.swarm.template_validator import validate_template_file
+
+    # Size check
+    contents = await file.read()
+    if len(contents) > SWARM_MAX_TEMPLATE_ZIP_SIZE:
+        raise HTTPException(status_code=413, detail="Zip file exceeds size limit")
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(contents))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid zip file")
+
+    # Zipslip protection + find template root
+    template_yaml_path = None
+    for name in zf.namelist():
+        if ".." in name or name.startswith("/"):
+            raise HTTPException(status_code=400, detail="Path traversal detected in zip")
+        if name.endswith("_template.yaml"):
+            template_yaml_path = name
+
+    if not template_yaml_path:
+        raise HTTPException(status_code=400, detail="Zip must contain _template.yaml")
+
+    # Parse _template.yaml to get key
+    meta_content = zf.read(template_yaml_path).decode("utf-8")
+    # Parse frontmatter (may have --- delimiters)
+    lines = meta_content.split("\n")
+    if lines[0].strip() == "---":
+        close_idx = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        if close_idx:
+            meta = yaml.safe_load("\n".join(lines[1:close_idx])) or {}
+        else:
+            meta = yaml.safe_load(meta_content) or {}
+    else:
+        meta = yaml.safe_load(meta_content) or {}
+
+    if "key" not in meta:
+        raise HTTPException(status_code=400, detail="_template.yaml missing 'key' field")
+
+    template_key = meta["key"]
+
+    # Verify directory name matches key
+    zip_root = template_yaml_path.split("/")[0] if "/" in template_yaml_path else ""
+    if zip_root != template_key:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Zip directory '{zip_root}' does not match template key '{template_key}'",
+        )
+
+    # Reject keys with path separators
+    if "/" in template_key or "\\" in template_key or ".." in template_key:
+        raise HTTPException(status_code=400, detail="Invalid template key")
+
+    # Validate frontmatter on .md files
+    for name in zf.namelist():
+        if name.endswith(".md") and "/" in name:
+            filename = name.split("/")[-1]
+            content = zf.read(name).decode("utf-8")
+            result = validate_template_file(filename, content)
+            if not result.valid:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Validation failed for {filename}: {result.errors[0].message}",
+                )
+
+    # Extract to templates directory
+    target = _safe_template_path(template_key)
+    if target.exists():
+        shutil.rmtree(target)
+
+    target.mkdir(parents=True)
+    for name in zf.namelist():
+        if name.endswith("/"):
+            continue  # skip directories
+        # Strip the root directory prefix
+        relative = name[len(zip_root) + 1:] if zip_root else name
+        if not relative:
+            continue
+        dest = target / relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(zf.read(name))
+
+    return {
+        "key": template_key,
+        "name": meta.get("name", template_key),
+        "description": meta.get("description", ""),
+    }
