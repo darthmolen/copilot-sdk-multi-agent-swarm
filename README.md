@@ -243,3 +243,5 @@ npx vitest run
 
 - [Architecture](documentation/Architecture.md) — system design, component interactions, design decisions
 - [Communication](documentation/Communication.md) — event taxonomy, WebSocket protocol, inter-agent messaging
+- [Template Creation Guide](documentation/template-creation-guide.md) — how to create custom templates, orchestrator workflow, artifact reference, relationship patterns
+- [Replacement Variables](documentation/replacement-variables.md) — built-in template variables and expansion behavior
