@@ -39,6 +39,8 @@ async def _create_session_with_tools(
     system_prompt: str,
     tools: list[Any],
     session_id: str | None = None,
+    mcp_servers: dict | None = None,
+    skill_directories: list[str] | None = None,
 ) -> Any:
     """Create a session with the given tools, compatible with real SDK and mocks."""
     try:
@@ -49,6 +51,10 @@ async def _create_session_with_tools(
         }
         if session_id:
             kwargs["session_id"] = session_id
+        if mcp_servers:
+            kwargs["mcp_servers"] = mcp_servers
+        if skill_directories:
+            kwargs["skill_directories"] = skill_directories
         return await client.create_session(**kwargs)
     except TypeError:
         # Fallback for mocks that don't accept all SDK kwargs
@@ -274,8 +280,13 @@ class SwarmOrchestrator:
         plan_holder: list[dict[str, Any]] = []
         plan_tool = create_plan_tool(plan_holder)
 
+        mcp_servers = self.template.mcp_servers if self.template else None
+        skill_dirs = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
         session = await _create_session_with_tools(
             self.client, leader_prompt, [plan_tool],
+            mcp_servers=mcp_servers, skill_directories=skill_dirs,
         )
 
         # Event-driven: wait for turn_end (same pattern as SwarmAgent)
@@ -358,6 +369,12 @@ class SwarmOrchestrator:
 
             system_preamble = self.system_preamble
 
+            # MCP servers and skills from template (if available)
+            mcp_servers = self.template.mcp_servers if self.template else None
+            skill_dirs = (
+                [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+            )
+
             agent = SwarmAgent(
                 name=name,
                 role=role,
@@ -373,6 +390,8 @@ class SwarmOrchestrator:
                 model=self.model,
                 work_dir=self.work_dir,
                 swarm_id=self.swarm_id,
+                mcp_servers=mcp_servers,
+                skill_directories=skill_dirs,
             )
             await agent.create_session(self.client)
             self.agents[name] = agent
@@ -513,10 +532,15 @@ class SwarmOrchestrator:
         )
 
         synthesis_session_id = f"synth-{self.swarm_id}" if self.swarm_id else None
+        synth_mcp = self.template.mcp_servers if self.template else None
+        synth_skills = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
         try:
             session = await _create_session_with_tools(
                 self.client, synthesis_system, [],
                 session_id=synthesis_session_id,
+                mcp_servers=synth_mcp, skill_directories=synth_skills,
             )
         except TypeError:
             session = await self.client.create_session()

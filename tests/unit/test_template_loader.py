@@ -233,6 +233,52 @@ class TestLoad:
             loader.load("test-template")
 
 
+class TestMCPAndSkills:
+    def test_load_parses_mcp_servers_yaml(self, tmp_path: Path) -> None:
+        """Template with mcp-servers.yaml populates LoadedTemplate.mcp_servers."""
+        _create_template_dir(tmp_path)
+        mcp_config = {
+            "servers": {
+                "playwright": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@playwright/mcp@latest"],
+                    "tools": ["*"],
+                },
+            }
+        }
+        (tmp_path / "test-template" / "mcp-servers.yaml").write_text(yaml.dump(mcp_config))
+
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+
+        assert tpl.mcp_servers is not None
+        assert "playwright" in tpl.mcp_servers
+        assert tpl.mcp_servers["playwright"]["command"] == "npx"
+
+    def test_load_detects_skills_dir(self, tmp_path: Path) -> None:
+        """Template with skills/ subdirectory populates LoadedTemplate.skills_dir."""
+        _create_template_dir(tmp_path)
+        skills_dir = tmp_path / "test-template" / "skills" / "domain-expertise"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "skill.md").write_text("---\nname: domain\n---\nDomain knowledge.")
+
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+
+        assert tpl.skills_dir is not None
+        assert tpl.skills_dir.is_dir()
+
+    def test_load_no_mcp_no_skills_defaults_to_none(self, tmp_path: Path) -> None:
+        """Existing template without MCP or skills has None defaults."""
+        _create_template_dir(tmp_path)
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+
+        assert tpl.mcp_servers is None
+        assert tpl.skills_dir is None
+
+
 class TestLoadAllAndListAvailable:
     def test_load_all_returns_multiple_templates(self, tmp_path: Path) -> None:
         _create_template_dir(tmp_path, key="tpl-a", name="Template A")

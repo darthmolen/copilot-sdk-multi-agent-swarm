@@ -55,6 +55,8 @@ class SwarmAgent:
         model: str = DEFAULT_MODEL,
         work_dir: Path | None = None,
         swarm_id: str | None = None,
+        mcp_servers: dict | None = None,
+        skill_directories: list[str] | None = None,
     ) -> None:
         self.name = name
         self.role = role
@@ -70,6 +72,8 @@ class SwarmAgent:
         self.model = model
         self.work_dir = work_dir
         self.swarm_id = swarm_id
+        self.mcp_servers = mcp_servers
+        self.skill_directories = skill_directories
         self.session: Any = None  # Set by create_session
         self._monitor_tasks: list[asyncio.Task[None]] = []
 
@@ -109,14 +113,20 @@ class SwarmAgent:
         else:
             merged_available = None
 
-        self.session = await client.create_session(
-            on_permission_request=_approve_all,
-            model=self.model,
-            system_message={"mode": "replace", "content": full_prompt},
-            tools=tools,
-            available_tools=merged_available,
-            on_event=self._on_event,
-        )
+        kwargs: dict[str, Any] = {
+            "on_permission_request": _approve_all,
+            "model": self.model,
+            "system_message": {"mode": "replace", "content": full_prompt},
+            "tools": tools,
+            "available_tools": merged_available,
+            "on_event": self._on_event,
+        }
+        if self.mcp_servers:
+            kwargs["mcp_servers"] = self.mcp_servers
+        if self.skill_directories:
+            kwargs["skill_directories"] = self.skill_directories
+
+        self.session = await client.create_session(**kwargs)
 
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""
