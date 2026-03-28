@@ -87,9 +87,13 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
 
     system_preamble = _template_loader.system_preamble if _template_loader else ""
     system_tools = _template_loader.system_tools if _template_loader else []
+    from backend.main import SWARM_TASK_TIMEOUT
+
     work_base = Path("workdir")
+    config = {"max_rounds": 3, "timeout": SWARM_TASK_TIMEOUT}
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
+        config=config,
         template=loaded_template, system_preamble=system_preamble,
         system_tools=system_tools,
         swarm_id=swarm_id, work_base=work_base,

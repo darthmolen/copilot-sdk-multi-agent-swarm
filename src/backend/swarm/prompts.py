@@ -96,9 +96,10 @@ def assemble_worker_prompt(
         parts.append(system_preamble)
 
     if work_dir is not None:
+        resolved = work_dir.resolve()
         parts.append(
             f"## Work Directory\n\n"
-            f"Your work directory is: `{work_dir}`\n\n"
+            f"Your work directory is: `{resolved}`\n\n"
             f"Write ALL output files to this directory. Do not write files outside of it."
         )
 

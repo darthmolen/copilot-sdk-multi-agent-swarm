@@ -310,6 +310,18 @@ class TestSpawn:
         assert len(orch.agents) == 1
 
 
+class TestConfigPropagation:
+    async def test_orchestrator_uses_provided_timeout(self, event_bus: EventBus) -> None:
+        """Orchestrator config timeout should propagate to execution."""
+        orch = make_orchestrator(event_bus, config={"max_rounds": 3, "timeout": 1800})
+        assert orch.config["timeout"] == 1800
+
+    async def test_orchestrator_default_timeout_is_1800(self, event_bus: EventBus) -> None:
+        """Default timeout should be 1800 seconds (30 minutes)."""
+        orch = make_orchestrator(event_bus)
+        assert orch.config["timeout"] == 1800
+
+
 class TestExecute:
     async def test_execute_round_runs_pending_tasks(self, event_bus: EventBus) -> None:
         orch = make_orchestrator(event_bus)
@@ -665,6 +677,167 @@ class TestGranularEvents:
         assert delta_events[1][1]["delta"] == "world"
         assert delta_events[0][1]["swarm_id"] == "swarm-delta"
 
+
+    async def test_synthesize_captures_delta_only_content(self, event_bus: EventBus) -> None:
+        """When SDK sends only deltas (no assistant.message), synthesis still captures the report."""
+        client = MockCopilotClient(synthesis_report="ignored")
+        original_create = client.create_session
+
+        async def _delta_only_session(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names or "task_update" in tool_names:
+                return await original_create(**kwargs)
+
+            # Session that fires deltas + idle but NO assistant.message
+            class DeltaOnlySession:
+                def __init__(self) -> None:
+                    self._handlers: list[Any] = []
+                    self._tools: list[Any] = []
+
+                def on(self, handler: Any) -> Any:
+                    self._handlers.append(handler)
+                    return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+                async def send(self, prompt: str, **kw: Any) -> str:
+                    for chunk in ["Delta ", "report ", "content"]:
+                        for h in list(self._handlers):
+                            h(SessionEvent(
+                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                data=SessionEventData(content=chunk),
+                            ))
+                    # NO assistant.message — just idle
+                    for h in list(self._handlers):
+                        h(SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        ))
+                    return "msg-1"
+
+            return DeltaOnlySession()
+
+        client.create_session = _delta_only_session  # type: ignore[assignment]
+
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, swarm_id="swarm-delta-only",
+        )
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        report = await orch._synthesize("goal")
+        assert report != "(Synthesis produced no output)", f"Report should capture deltas, got: {report}"
+        assert "Delta report content" in report
+
+    async def test_synthesize_prefers_full_message_over_deltas(self, event_bus: EventBus) -> None:
+        """When SDK sends both deltas and a full message, the full message is used."""
+        # The existing test_synthesize_emits_report_deltas already verifies this:
+        # it sends deltas + full message and the report == "Hello world" (the full message).
+        # This test explicitly verifies no duplication.
+        client = MockCopilotClient(synthesis_report="ignored")
+        original_create = client.create_session
+
+        async def _both_session(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names or "task_update" in tool_names:
+                return await original_create(**kwargs)
+
+            class BothSession:
+                def __init__(self) -> None:
+                    self._handlers: list[Any] = []
+                    self._tools: list[Any] = []
+
+                def on(self, handler: Any) -> Any:
+                    self._handlers.append(handler)
+                    return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+                async def send(self, prompt: str, **kw: Any) -> str:
+                    # Fire deltas
+                    for chunk in ["Del", "ta"]:
+                        for h in list(self._handlers):
+                            h(SessionEvent(
+                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                data=SessionEventData(content=chunk),
+                            ))
+                    # Fire full message (this should be preferred)
+                    for h in list(self._handlers):
+                        h(SessionEvent(
+                            type=SessionEventType.ASSISTANT_MESSAGE,
+                            data=SessionEventData(content="Full message"),
+                        ))
+                    for h in list(self._handlers):
+                        h(SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        ))
+                    return "msg-1"
+
+            return BothSession()
+
+        client.create_session = _both_session  # type: ignore[assignment]
+
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, swarm_id="swarm-both",
+        )
+        await orch.task_board.add_task(
+            id="task-0", subject="R", description="D",
+            worker_role="A", worker_name="a",
+        )
+        await orch.task_board.update_status("task-0", "completed", "done")
+
+        report = await orch._synthesize("goal")
+        assert report == "Full message", f"Should prefer full message, got: {report}"
+
+    async def test_chat_captures_delta_only_content(self, event_bus: EventBus) -> None:
+        """When chat SDK sends only deltas (no assistant.message), response is still captured."""
+        client = MockCopilotClient(synthesis_report="Report")
+        original_create = client.create_session
+
+        async def _create_with_tools(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names or "task_update" in tool_names:
+                return await original_create(**kwargs)
+
+            class DeltaOnlyChatSession:
+                def __init__(self) -> None:
+                    self._handlers: list[Any] = []
+                    self._tools: list[Any] = []
+
+                def on(self, handler: Any) -> Any:
+                    self._handlers.append(handler)
+                    return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+                async def send(self, prompt: str, **kw: Any) -> str:
+                    for chunk in ["Chat ", "delta ", "response"]:
+                        for h in list(self._handlers):
+                            h(SessionEvent(
+                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                data=SessionEventData(content=chunk),
+                            ))
+                    for h in list(self._handlers):
+                        h(SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        ))
+                    return "msg-1"
+
+            return DeltaOnlyChatSession()
+
+        client.create_session = _create_with_tools  # type: ignore[assignment]
+        client.resume_session = lambda *a, **kw: _create_with_tools()  # type: ignore[attr-defined]
+
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, swarm_id="swarm-chat-delta",
+        )
+        orch.synthesis_session_id = "synth-swarm-chat-delta"
+
+        response = await orch.chat("test")
+        assert response != "", f"Chat should capture deltas, got empty"
+        assert "Chat delta response" in response
 
     async def test_chat_includes_active_file_in_prompt(self, event_bus: EventBus) -> None:
         """chat() with active_file includes the file path in the prompt sent to the session."""

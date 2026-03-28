@@ -76,7 +76,8 @@ class SwarmOrchestrator:
         self.inbox = InboxSystem()
         self.registry = TeamRegistry()
         self.agents: dict[str, SwarmAgent] = {}
-        self.config = config or {"max_rounds": 3, "timeout": 300}
+        default_config: dict[str, Any] = {"max_rounds": 3, "timeout": 1800}
+        self.config = {**default_config, **(config or {})}
         self.template = template
         self.system_preamble = system_preamble
         self.system_tools = system_tools or []
@@ -138,6 +139,7 @@ class SwarmOrchestrator:
 
             done = asyncio.Event()
             text_content: list[str] = []
+            delta_parts: list[str] = []
             message_id = f"chat-{id(message)}"
             tool_call_count = [0]
 
@@ -163,11 +165,12 @@ class SwarmOrchestrator:
                             "message_id": message_id,
                             "swarm_id": self.swarm_id,
                         })
-                # Stream deltas via EventBus.emit_sync (same pattern as agent.py:84)
+                # Stream deltas via EventBus.emit_sync and accumulate
                 if "assistant.message_delta" in et:
                     data = getattr(event, "data", None)
                     delta = getattr(data, "content", "")
                     if delta:
+                        delta_parts.append(str(delta))
                         self.event_bus.emit_sync("leader.chat_delta", {
                             "delta": str(delta),
                             "message_id": message_id,
@@ -228,7 +231,11 @@ class SwarmOrchestrator:
             finally:
                 unsubscribe()
 
-            response = "\n".join(text_content) if text_content else ""
+            response = (
+                "\n".join(text_content) if text_content
+                else "".join(delta_parts) if delta_parts
+                else ""
+            )
             duration_ms = int((time.monotonic() - start_time) * 1000)
             log.info("chat_complete", swarm_id=self.swarm_id,
                      response_len=len(response), chunks=len(text_content),
@@ -519,6 +526,7 @@ class SwarmOrchestrator:
         # NOT turn_end — agents do multiple turns per task; idle = truly done
         done = asyncio.Event()
         text_content: list[str] = []
+        delta_parts: list[str] = []
 
         def _on_event(event: Any) -> None:
             raw = getattr(event, "type", "")
@@ -528,11 +536,12 @@ class SwarmOrchestrator:
                 done.set()
             elif "session" in et and "error" in et:
                 done.set()
-            # Stream deltas to frontend
+            # Stream deltas to frontend and accumulate
             if "assistant.message_delta" in et:
                 data = getattr(event, "data", None)
                 delta = getattr(data, "content", "") or getattr(data, "delta_content", "")
                 if delta:
+                    delta_parts.append(str(delta))
                     self.event_bus.emit_sync("leader.report_delta", {
                         "delta": str(delta),
                         "swarm_id": self.swarm_id,
@@ -555,7 +564,11 @@ class SwarmOrchestrator:
         finally:
             unsubscribe()
 
-        report = "\n".join(text_content) if text_content else "(Synthesis produced no output)"
+        report = (
+            "\n".join(text_content) if text_content
+            else "".join(delta_parts) if delta_parts
+            else "(Synthesis produced no output)"
+        )
 
         await self._emit("leader.report", {"content": report})
         await self._emit("swarm.phase_changed", {"phase": "complete"})

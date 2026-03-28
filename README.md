@@ -10,19 +10,28 @@ An `EventBus` decouples all components. Every event carries a `swarm_id` for per
 
 See [documentation/Architecture.md](documentation/Architecture.md) for component diagrams and design decisions.
 
-## Key Features
+## What You Get
 
-- **Multi-swarm support** — Run multiple swarms simultaneously with isolated state per swarm
-- **Event-driven execution** — `session.send()` + `session.on()` pattern, waiting for `session.idle` (not `turn_end`)
-- **No `customAgents`** — Uses `system_message: mode:"replace"` for better custom tool compliance
-- **Per-swarm work directories** — Each swarm gets `workdir/<swarm_id>/` for agent file output
-- **Defensive tool handlers** — All 4 swarm tools validate arguments and return errors instead of crashing
-- **Real-time WebSocket streaming** — All events routed by `swarm_id` to correct frontend connections
-- **Task dependency resolution** — Tasks declare `blocked_by` relationships; orchestrator dispatches only runnable tasks
-- **Inter-agent messaging** — Shared inbox system with send/receive tools and anti-polling instructions
-- **API key authentication** — Configurable auth with environment-based security policy
-- **3 built-in templates** — Pre-configured team compositions for common workflows
-- **Synthesis with full context** — Work directory files injected into synthesis prompt so the synthesis agent has all research content
+- **Parallel research teams on demand** — Describe a goal, get a coordinated team of AI agents that decompose, research, and synthesize a report. Run multiple teams simultaneously.
+- **Three ready-made team templates** — Deep Research, Software Development, and Warehouse Optimization with pre-configured roles and task dependencies. Create your own via the template editor.
+- **Live dashboard** — Watch tasks move through Blocked → Pending → In Progress → Completed in real time. See which agent is doing what.
+- **Refinement chat** — Talk to the synthesis agent after the report is done. Ask follow-up questions, request revisions, drill into specifics — all with full context of the original research.
+- **Download session files** — Export all artifacts from any session as a ZIP archive directly from the UI.
+- **Resumable sessions** — Share a URL to any report. Come back later and pick up the refinement conversation where you left off.
+- **Custom templates** — Build your own team compositions through the in-browser template editor with live validation.
+- **Run anywhere** — Run locally on your machine or hosted by your IT organization. Same experience either way.
+
+## Under the Hood
+
+- **Event-driven orchestration** — Four-phase lifecycle (Plan → Spawn → Execute → Synthesize) with an `EventBus` decoupling all components. No polling, no blocking.
+- **Per-swarm isolation** — Every swarm gets its own state, work directory, and WebSocket channel. Multiple swarms run concurrently without interference.
+- **Task dependency resolution** — Tasks declare `blocked_by` relationships; the orchestrator dispatches only runnable tasks each round.
+- **Inter-agent messaging** — Shared inbox system lets agents coordinate without the orchestrator as a bottleneck.
+- **Structured logging** — JSON-formatted structlog with tool names, duration tracking, and tool call counts on every chat interaction. Debug a hallucinating agent from the logs alone.
+- **API key authentication** — Environment-based security policy: open for local dev, enforced in production. REST via `X-API-Key` header, WebSocket via query parameter.
+- **Path traversal protection** — All file endpoints validate resolved paths stay within the work directory. Symlinks outside the boundary are rejected.
+- **Defensive tool handlers** — All swarm tools validate arguments and return structured errors instead of crashing the session.
+- **Dockerized deployment** — Container-ready for IT hosting with configurable auth and log output.
 
 ## Tech Stack
 
@@ -31,7 +40,7 @@ See [documentation/Architecture.md](documentation/Architecture.md) for component
 | Backend  | Python 3.10+, FastAPI, Pydantic v2, asyncio, uvicorn, structlog |
 | Frontend | React 19, TypeScript 5.9, Vite      |
 | SDK      | GitHub Copilot SDK (headless CLI), Gemini 3 Pro Preview |
-| Testing  | pytest + pytest-asyncio (178+), Vitest (28+) |
+| Testing  | pytest + pytest-asyncio (223+), Vitest (28+) |
 
 ## Project Structure
 
@@ -45,7 +54,7 @@ copilot-sdk-multi-agent-swarm/
       events.py                  # EventBus (pub-sub with async/sync emit)
       logging_config.py          # structlog JSON logging
       api/
-        rest.py                  # REST endpoints: start, status, cancel, templates
+        rest.py                  # REST endpoints: start, status, cancel, chat, files, download-zip, templates
         schemas.py               # Request/response Pydantic models
         websocket.py             # WebSocket connection manager (per-swarm routing)
       swarm/
@@ -66,12 +75,18 @@ copilot-sdk-multi-agent-swarm/
       warehouse-optimizer/       # 4 workers: inventory, layout, demand, planner
     frontend/
       src/
-        App.tsx                  # Multi-swarm dashboard with auth gate
+        App.tsx                  # Multi-swarm dashboard + report refinement view
         components/
           SwarmControls.tsx       # Goal input, template selection, API key header
           TaskBoard.tsx           # Kanban board with swarm_id labels
           AgentRoster.tsx         # Agent cards with status dots and swarm_id
-          ChatPanel.tsx           # Synthesis report display
+          ChatPanel.tsx           # Refinement chat with streaming markdown
+          ChatInput.tsx           # Chat input with Enter-to-send
+          ArtifactList.tsx        # File explorer sidebar with ZIP download
+          ResizableLayout.tsx     # Draggable two-column split view
+          StreamingMarkdown.tsx   # Progressive markdown renderer
+          ToolCard.tsx            # Tool execution status cards
+          TemplateEditor.tsx      # In-browser template CRUD with validation
           InboxFeed.tsx           # Inter-agent message stream
         hooks/
           useSwarmState.ts        # Per-swarm reducer + multiSwarmReducer
@@ -82,8 +97,9 @@ copilot-sdk-multi-agent-swarm/
     test_orchestrator.py         # Full lifecycle + swarm_id routing tests
     test_swarm_agent.py          # Agent execution tests
     test_swarm_tools.py          # Tool handlers + defensive error handling
-    test_api.py                  # REST + WS + auth tests
+    test_api.py                  # REST + WS + auth + file download tests
     test_event_bridge.py
+    test_logging.py              # Structured logging configuration tests
     test_event_bus.py
     test_task_board.py
     test_inbox_integration.py
@@ -130,7 +146,15 @@ Create a `.env` file in the project root:
 LOG_LEVEL=DEBUG
 ENVIRONMENT=development
 SWARM_API_KEY=
+SWARM_TASK_TIMEOUT=1800
 ```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `DEBUG` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
+| `ENVIRONMENT` | — | Set to `development` to disable auth when no key is set |
+| `SWARM_API_KEY` | — | API key for REST and WebSocket auth. Empty + development = open access |
+| `SWARM_TASK_TIMEOUT` | `1800` | Max seconds per agent task before timeout (30 min default) |
 
 ### Run the backend
 
@@ -218,7 +242,7 @@ SWARM_API_KEY=your-secret-key-here
 
 ## Running Tests
 
-### Backend (178+ tests)
+### Backend (223+ tests)
 
 ```bash
 pytest

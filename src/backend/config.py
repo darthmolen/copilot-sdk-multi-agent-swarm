@@ -10,5 +10,5 @@ class SwarmConfig(BaseModel):
 
     model: str = "gemini-3-pro-preview"
     max_rounds: int = 3
-    timeout: float = 300.0
+    timeout: float = 1800.0
     max_workers: int = 5

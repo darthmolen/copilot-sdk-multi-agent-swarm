@@ -86,5 +86,5 @@ def test_config_defaults() -> None:
     cfg = SwarmConfig()
     assert cfg.model == "gemini-3-pro-preview"
     assert cfg.max_rounds == 3
-    assert cfg.timeout == 300.0
+    assert cfg.timeout == 1800.0
     assert cfg.max_workers == 5
