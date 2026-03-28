@@ -91,7 +91,7 @@ def test_work_dir_in_prompt_resolves_correctly() -> None:
     import re
     match = re.search(r'`([^`]+)`', result)
     assert match is not None
-    assert match.group(1).startswith("/"), f"Path in prompt is not absolute: {match.group(1)}"
+    assert Path(match.group(1)).is_absolute(), f"Path in prompt is not absolute: {match.group(1)}"
 
 
 def test_assemble_worker_prompt_no_work_dir_omits_section() -> None:

@@ -184,9 +184,10 @@ class SwarmAgent:
                 await self.task_board.update_status(task.id, "timeout")
                 monitoring = True
                 t = asyncio.create_task(self._monitor_late_completion(
-                    task, done, text_content, delta_parts, unsubscribe,
+                    task, done, text_content, delta_parts, error_holder, unsubscribe,
                 ))
                 self._monitor_tasks.append(t)
+                t.add_done_callback(lambda task_ref: self._monitor_tasks.remove(task_ref) if task_ref in self._monitor_tasks else None)
                 return
 
             if error_holder:
@@ -215,6 +216,7 @@ class SwarmAgent:
         done: asyncio.Event,
         text_content: list[str],
         delta_parts: list[str],
+        error_holder: list[str],
         unsubscribe: Callable[[], None],
         monitor_timeout: float = 3600,
     ) -> None:
@@ -222,18 +224,22 @@ class SwarmAgent:
         try:
             await asyncio.wait_for(done.wait(), timeout=monitor_timeout)
 
-            # Session completed — recover the work
+            # Session finished — check if it was an error or success
             current_tasks = await self.task_board.get_tasks()
             current = next((t for t in current_tasks if t.id == task.id), None)
             if current and current.status == TaskStatus.TIMEOUT:
-                result = (
-                    "\n".join(text_content) if text_content
-                    else "".join(delta_parts) if delta_parts
-                    else ""
-                )
-                updated = await self.task_board.update_status(task.id, "completed", result)
-                log.info("task_late_completed", task_id=task.id, agent=self.name,
-                         result_len=len(result))
+                if error_holder:
+                    updated = await self.task_board.update_status(task.id, "failed", error_holder[0])
+                    log.info("task_late_failed", task_id=task.id, agent=self.name)
+                else:
+                    result = (
+                        "\n".join(text_content) if text_content
+                        else "".join(delta_parts) if delta_parts
+                        else ""
+                    )
+                    updated = await self.task_board.update_status(task.id, "completed", result)
+                    log.info("task_late_completed", task_id=task.id, agent=self.name,
+                             result_len=len(result))
                 if self.swarm_id:
                     await self.event_bus.emit("task.updated", {
                         "task": updated.to_dict(),
