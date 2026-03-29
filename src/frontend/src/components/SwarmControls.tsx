@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { TemplateEditor } from './TemplateEditor';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
@@ -20,8 +20,9 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showEditor, setShowEditor] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  function fetchTemplates() {
     const apiKey = sessionStorage.getItem('swarm_api_key') ?? '';
     fetch(`${API_BASE}/api/templates`, {
       headers: apiKey ? { 'X-API-Key': apiKey } : {},
@@ -35,7 +36,33 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
         }
       })
       .catch(() => null);
+  }
+
+  useEffect(() => {
+    fetchTemplates();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleDeploy(file: File) {
+    setError(null);
+    const apiKey = sessionStorage.getItem('swarm_api_key') ?? '';
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch(`${API_BASE}/api/templates/deploy`, {
+        method: 'POST',
+        headers: apiKey ? { 'X-API-Key': apiKey } : {},
+        body: formData,
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `Deploy failed: ${res.status}`);
+      }
+      // Refresh template list after successful deploy
+      fetchTemplates();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Deploy failed');
+    }
+  }
 
   async function handleStart() {
     if (!goal.trim()) return;
@@ -79,7 +106,26 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
         className="goal-input goal-input--textarea"
         rows={3}
       />
-      <div className="swarm-controls__actions">
+      <div className="swarm-controls__actions" data-testid="swarm-actions">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".zip"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleDeploy(file);
+            e.target.value = '';
+          }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="te-deploy-btn"
+          title="Deploy template pack"
+          aria-label="Deploy template pack"
+        >
+          &#8679;
+        </button>
         <select
           value={template}
           onChange={(e) => setTemplate(e.target.value)}
