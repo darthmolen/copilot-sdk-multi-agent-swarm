@@ -160,6 +160,52 @@ async def test_create_session_passes_model(
     assert kwargs["model"] == "gemini-3-pro-preview"
 
 
+async def test_create_session_passes_mcp_servers(
+    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
+    event_bus: EventBus, mock_client: MockClient,
+) -> None:
+    """MCP server config is passed through to create_session kwargs."""
+    mcp = {"playwright": {"type": "stdio", "command": "npx", "args": [], "tools": ["*"]}}
+    agent = SwarmAgent(
+        name="coder", role="Code", display_name="Coder",
+        task_board=task_board, inbox=inbox, registry=registry,
+        event_bus=event_bus, mcp_servers=mcp,
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs.get("mcp_servers") == mcp
+
+
+async def test_create_session_passes_skill_directories(
+    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
+    event_bus: EventBus, mock_client: MockClient, tmp_path: Path,
+) -> None:
+    """Skill directories are passed through to create_session kwargs."""
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    agent = SwarmAgent(
+        name="coder", role="Code", display_name="Coder",
+        task_board=task_board, inbox=inbox, registry=registry,
+        event_bus=event_bus, skill_directories=[str(skills_dir)],
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs.get("skill_directories") == [str(skills_dir)]
+
+
+async def test_create_session_no_mcp_no_skills_omits_kwargs(
+    agent: SwarmAgent, mock_client: MockClient,
+) -> None:
+    """Without MCP or skills, those kwargs are not present."""
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert "mcp_servers" not in kwargs
+    assert "skill_directories" not in kwargs
+
+
 async def test_create_session_registers_swarm_tools(
     agent: SwarmAgent, mock_client: MockClient
 ) -> None:

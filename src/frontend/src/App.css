@@ -1534,7 +1534,7 @@
   color: #64748b;
 }
 
-.te-edit-btn {
+.te-small-dark-btn {
   padding: 4px 8px;
   background: transparent;
   border: 1px solid #334155;
@@ -1544,7 +1544,7 @@
   font-size: 0.85rem;
 }
 
-.te-edit-btn:hover {
+.te-small-dark-btn:hover {
   background: #334155;
   color: #e2e8f0;
 }

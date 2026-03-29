@@ -27,6 +27,8 @@ class LoadedTemplate:
     leader_prompt: str
     agents: list[AgentDefinition] = field(default_factory=list)
     synthesis_prompt: str = ""
+    mcp_servers: dict | None = None
+    skills_dir: Path | None = None
 
 
 class TemplateLoader:
@@ -78,6 +80,17 @@ class TemplateLoader:
         synthesis_path = template_dir / "synthesis.md"
         synthesis_prompt = synthesis_path.read_text() if synthesis_path.exists() else ""
 
+        # Read mcp-servers.yaml (optional)
+        mcp_path = template_dir / "mcp-servers.yaml"
+        mcp_servers = None
+        if mcp_path.exists():
+            mcp_data = yaml.safe_load(mcp_path.read_text()) or {}
+            mcp_servers = mcp_data.get("servers")
+
+        # Detect skills/ directory (optional)
+        skills_dir = template_dir / "skills"
+        skills_dir_resolved = skills_dir if skills_dir.is_dir() else None
+
         return LoadedTemplate(
             key=meta["key"],
             name=meta["name"],
@@ -86,6 +99,8 @@ class TemplateLoader:
             leader_prompt=leader_prompt,
             agents=agents,
             synthesis_prompt=synthesis_prompt,
+            mcp_servers=mcp_servers,
+            skills_dir=skills_dir_resolved,
         )
 
     def load_all(self) -> dict[str, LoadedTemplate]:

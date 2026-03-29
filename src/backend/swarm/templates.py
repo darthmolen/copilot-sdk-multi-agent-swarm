@@ -14,18 +14,6 @@ class SwarmTemplate:
 
 
 TEMPLATES: dict[str, SwarmTemplate] = {
-    "software-development": SwarmTemplate(
-        key="software-development",
-        name="Software Development Team",
-        description="A team of software engineers that designs, implements, tests, and documents a feature",
-        goal_template=(
-            "Assemble a software development team to: {user_input}\n\n"
-            "Create specialists for: architecture/design, implementation, testing, and documentation. "
-            "The implementation task should be blocked by the design task. "
-            "The testing task should be blocked by the implementation task. "
-            "Documentation can run in parallel with testing."
-        ),
-    ),
     "deep-research": SwarmTemplate(
         key="deep-research",
         name="Deep Research Team",

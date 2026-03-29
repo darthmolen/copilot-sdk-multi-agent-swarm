@@ -14,7 +14,7 @@ import shutil
 import structlog
 import yaml
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.schemas import (
@@ -43,6 +43,12 @@ swarm_store: dict[str, dict] = {}
 _event_bus: Any = None
 _copilot_client: Any = None
 _template_loader: TemplateLoader | None = None
+
+
+def _get_work_dir() -> str:
+    """Lazy import to avoid circular dependency with main.py."""
+    from backend.main import SWARM_WORK_DIR
+    return SWARM_WORK_DIR
 
 
 def configure(event_bus: Any, copilot_client: Any = None, template_loader: TemplateLoader | None = None) -> None:
@@ -87,16 +93,17 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
 
     system_preamble = _template_loader.system_preamble if _template_loader else ""
     system_tools = _template_loader.system_tools if _template_loader else []
-    from backend.main import SWARM_TASK_TIMEOUT
+    from backend.main import SWARM_TASK_TIMEOUT, SWARM_MAX_ROUNDS, SWARM_MODEL, SWARM_WORK_DIR
 
-    work_base = Path("workdir")
-    config = {"max_rounds": 3, "timeout": SWARM_TASK_TIMEOUT}
+    work_base = Path(SWARM_WORK_DIR)
+    config = {"max_rounds": SWARM_MAX_ROUNDS, "timeout": SWARM_TASK_TIMEOUT}
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
         config=config,
         template=loaded_template, system_preamble=system_preamble,
         system_tools=system_tools,
         swarm_id=swarm_id, work_base=work_base,
+        model=SWARM_MODEL,
     )
     swarm_store[swarm_id]["orchestrator"] = orch
 
@@ -200,7 +207,7 @@ async def chat_with_swarm(
 @router.get("/api/swarm/{swarm_id}/files")
 async def list_swarm_files(swarm_id: str) -> dict:
     """List files in a swarm's work directory."""
-    work_dir = Path("workdir") / swarm_id
+    work_dir = Path(_get_work_dir()) / swarm_id
     if not work_dir.is_dir():
         return {"files": []}
     files = []
@@ -217,8 +224,8 @@ async def list_swarm_files(swarm_id: str) -> dict:
 @router.get("/api/swarm/{swarm_id}/files/download-zip")
 async def download_swarm_zip(swarm_id: str) -> StreamingResponse:
     """Download all files in a swarm's work directory as a ZIP archive."""
-    base = Path("workdir").resolve()
-    work_dir = Path("workdir") / swarm_id
+    base = Path(_get_work_dir()).resolve()
+    work_dir = Path(_get_work_dir()) / swarm_id
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -246,8 +253,8 @@ async def download_swarm_zip(swarm_id: str) -> StreamingResponse:
 @router.get("/api/swarm/{swarm_id}/files/{file_path:path}")
 async def get_swarm_file(swarm_id: str, file_path: str) -> dict:
     """Read a file from a swarm's work directory."""
-    base = Path("workdir").resolve()
-    target = (Path("workdir") / swarm_id / file_path).resolve()
+    base = Path(_get_work_dir()).resolve()
+    target = (Path(_get_work_dir()) / swarm_id / file_path).resolve()
     if not str(target).startswith(str(base)):
         raise HTTPException(status_code=403, detail="Path traversal not allowed")
     if not target.is_file():
@@ -258,7 +265,7 @@ async def get_swarm_file(swarm_id: str, file_path: str) -> dict:
 @router.post("/api/swarm/{swarm_id}/files/ensure-report")
 async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
     """Ensure the synthesis report file exists in the workdir, creating it from localStorage if needed."""
-    work_dir = Path("workdir") / swarm_id
+    work_dir = Path(_get_work_dir()) / swarm_id
     work_dir.mkdir(parents=True, exist_ok=True)
     report_path = work_dir / "synthesis_report.md"
     created = False
@@ -270,8 +277,10 @@ async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
 
 def _safe_template_path(key: str) -> Path:
     """Resolve a template key to a safe directory path. Raises 403 on traversal."""
-    base = Path("src/templates").resolve()
-    target = (Path("src/templates") / key).resolve()
+    from backend.main import TEMPLATES_DIR
+
+    base = Path(TEMPLATES_DIR).resolve()
+    target = (Path(TEMPLATES_DIR) / key).resolve()
     if not str(target).startswith(str(base) + "/") and target != base:
         raise HTTPException(status_code=403, detail="Path traversal not allowed")
     return target
@@ -413,3 +422,125 @@ async def delete_template(key: str) -> dict:
 
     shutil.rmtree(templates_dir)
     return {"deleted": True, "key": key}
+
+
+@router.post("/api/templates/deploy", status_code=201)
+async def deploy_template_zip(file: UploadFile) -> dict:
+    """Deploy a template pack from a zip file.
+
+    Validates structure, checks for zipslip, enforces size limit,
+    and validates frontmatter before extracting.
+    """
+    from backend.main import SWARM_MAX_TEMPLATE_ZIP_SIZE
+    from backend.swarm.template_validator import validate_template_file
+
+    # Size check (compressed)
+    contents = await file.read()
+    if len(contents) > SWARM_MAX_TEMPLATE_ZIP_SIZE:
+        raise HTTPException(status_code=413, detail="Zip file exceeds size limit")
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(contents))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid zip file")
+
+    # Uncompressed size + file count limits
+    max_uncompressed = SWARM_MAX_TEMPLATE_ZIP_SIZE * 10  # 30MB default
+    max_members = 200
+    total_uncompressed = sum(info.file_size for info in zf.infolist())
+    if total_uncompressed > max_uncompressed:
+        raise HTTPException(status_code=413, detail="Zip uncompressed size exceeds limit")
+    if len(zf.namelist()) > max_members:
+        raise HTTPException(status_code=413, detail="Zip contains too many files")
+
+    # Zipslip protection + find _template.yaml at root level only
+    template_yaml_path = None
+    for name in zf.namelist():
+        # Reject path traversal: .., absolute paths (Unix and Windows)
+        if ".." in name or name.startswith("/") or name.startswith("\\"):
+            raise HTTPException(status_code=400, detail="Path traversal detected in zip")
+        if Path(name).is_absolute():
+            raise HTTPException(status_code=400, detail="Path traversal detected in zip")
+        # Only accept _template.yaml at exactly one level deep: {root}/_template.yaml
+        parts = name.split("/")
+        if len(parts) == 2 and parts[1] == "_template.yaml":
+            template_yaml_path = name
+
+    if not template_yaml_path:
+        raise HTTPException(status_code=400, detail="Zip must contain {key}/_template.yaml at root level")
+
+    # Parse _template.yaml to get key
+    meta_content = zf.read(template_yaml_path).decode("utf-8")
+    # Parse frontmatter (may have --- delimiters)
+    lines = meta_content.split("\n")
+    if lines[0].strip() == "---":
+        close_idx = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        if close_idx is not None:
+            meta = yaml.safe_load("\n".join(lines[1:close_idx])) or {}
+        else:
+            meta = yaml.safe_load(meta_content) or {}
+    else:
+        meta = yaml.safe_load(meta_content) or {}
+
+    if "key" not in meta:
+        raise HTTPException(status_code=400, detail="_template.yaml missing 'key' field")
+
+    template_key = meta["key"]
+
+    # Verify directory name matches key
+    zip_root = template_yaml_path.split("/")[0]
+    if zip_root != template_key:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Zip directory '{zip_root}' does not match template key '{template_key}'",
+        )
+
+    # Reject keys with path separators
+    if "/" in template_key or "\\" in template_key or ".." in template_key:
+        raise HTTPException(status_code=400, detail="Invalid template key")
+
+    # Validate _template.yaml itself
+    result = validate_template_file("_template.yaml", meta_content)
+    if not result.valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Validation failed for _template.yaml: {result.errors[0].message}",
+        )
+
+    # Validate frontmatter on .md files
+    for name in zf.namelist():
+        if name.endswith(".md"):
+            filename = name.split("/")[-1]
+            content = zf.read(name).decode("utf-8")
+            result = validate_template_file(filename, content)
+            if not result.valid:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Validation failed for {filename}: {result.errors[0].message}",
+                )
+
+    # Extract to templates directory
+    target = _safe_template_path(template_key)
+    if target.exists():
+        shutil.rmtree(target)
+
+    target.mkdir(parents=True)
+    for name in zf.namelist():
+        if name.endswith("/"):
+            continue  # skip directories
+        # Strip the root directory prefix
+        relative = name[len(zip_root) + 1:]
+        if not relative:
+            continue
+        # Final safety: ensure relative path stays within target
+        dest = (target / relative).resolve()
+        if not str(dest).startswith(str(target.resolve())):
+            continue  # skip files that would escape target
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(zf.read(name))
+
+    return {
+        "key": template_key,
+        "name": meta.get("name", template_key),
+        "description": meta.get("description", ""),
+    }

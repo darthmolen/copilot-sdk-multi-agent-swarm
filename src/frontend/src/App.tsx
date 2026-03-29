@@ -1,4 +1,5 @@
 import { useReducer, useCallback, useState, useEffect, useRef } from 'react';
+import { Toaster } from 'react-hot-toast';
 import { multiSwarmReducer, initialMultiSwarmState, isThinking } from './hooks/useSwarmState';
 import { chatReducer, initialChatStore } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -80,12 +81,36 @@ function SwarmConnection({
 
 function App() {
   const [authed, setAuthed] = useState(() => !!sessionStorage.getItem('swarm_api_key'));
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Probe backend to see if auth is required
+  useEffect(() => {
+    if (authed) { setAuthChecked(true); return; }
+    fetch(`${API_BASE}/api/templates`)
+      .then((res) => {
+        if (res.ok) {
+          // Backend doesn't require auth — skip the gate
+          setAuthed(true);
+        }
+        setAuthChecked(true);
+      })
+      .catch(() => setAuthChecked(true));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!authChecked) return null;
 
   if (!authed) {
     return <AuthGate onAuth={() => setAuthed(true)} />;
   }
 
-  return <SwarmDashboard />;
+  return (
+    <>
+      <Toaster position="top-right" toastOptions={{
+        style: { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' },
+      }} />
+      <SwarmDashboard />
+    </>
+  );
 }
 
 function SwarmDashboard() {
