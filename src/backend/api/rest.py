@@ -434,7 +434,7 @@ async def deploy_template_zip(file: UploadFile) -> dict:
     from backend.main import SWARM_MAX_TEMPLATE_ZIP_SIZE
     from backend.swarm.template_validator import validate_template_file
 
-    # Size check
+    # Size check (compressed)
     contents = await file.read()
     if len(contents) > SWARM_MAX_TEMPLATE_ZIP_SIZE:
         raise HTTPException(status_code=413, detail="Zip file exceeds size limit")
@@ -444,16 +444,30 @@ async def deploy_template_zip(file: UploadFile) -> dict:
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid zip file")
 
-    # Zipslip protection + find template root
+    # Uncompressed size + file count limits
+    max_uncompressed = SWARM_MAX_TEMPLATE_ZIP_SIZE * 10  # 30MB default
+    max_members = 200
+    total_uncompressed = sum(info.file_size for info in zf.infolist())
+    if total_uncompressed > max_uncompressed:
+        raise HTTPException(status_code=413, detail="Zip uncompressed size exceeds limit")
+    if len(zf.namelist()) > max_members:
+        raise HTTPException(status_code=413, detail="Zip contains too many files")
+
+    # Zipslip protection + find _template.yaml at root level only
     template_yaml_path = None
     for name in zf.namelist():
-        if ".." in name or name.startswith("/"):
+        # Reject path traversal: .., absolute paths (Unix and Windows)
+        if ".." in name or name.startswith("/") or name.startswith("\\"):
             raise HTTPException(status_code=400, detail="Path traversal detected in zip")
-        if name.endswith("_template.yaml"):
+        if Path(name).is_absolute():
+            raise HTTPException(status_code=400, detail="Path traversal detected in zip")
+        # Only accept _template.yaml at exactly one level deep: {root}/_template.yaml
+        parts = name.split("/")
+        if len(parts) == 2 and parts[1] == "_template.yaml":
             template_yaml_path = name
 
     if not template_yaml_path:
-        raise HTTPException(status_code=400, detail="Zip must contain _template.yaml")
+        raise HTTPException(status_code=400, detail="Zip must contain {key}/_template.yaml at root level")
 
     # Parse _template.yaml to get key
     meta_content = zf.read(template_yaml_path).decode("utf-8")
@@ -461,7 +475,7 @@ async def deploy_template_zip(file: UploadFile) -> dict:
     lines = meta_content.split("\n")
     if lines[0].strip() == "---":
         close_idx = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-        if close_idx:
+        if close_idx is not None:
             meta = yaml.safe_load("\n".join(lines[1:close_idx])) or {}
         else:
             meta = yaml.safe_load(meta_content) or {}
@@ -474,7 +488,7 @@ async def deploy_template_zip(file: UploadFile) -> dict:
     template_key = meta["key"]
 
     # Verify directory name matches key
-    zip_root = template_yaml_path.split("/")[0] if "/" in template_yaml_path else ""
+    zip_root = template_yaml_path.split("/")[0]
     if zip_root != template_key:
         raise HTTPException(
             status_code=400,
@@ -485,9 +499,17 @@ async def deploy_template_zip(file: UploadFile) -> dict:
     if "/" in template_key or "\\" in template_key or ".." in template_key:
         raise HTTPException(status_code=400, detail="Invalid template key")
 
+    # Validate _template.yaml itself
+    result = validate_template_file("_template.yaml", meta_content)
+    if not result.valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Validation failed for _template.yaml: {result.errors[0].message}",
+        )
+
     # Validate frontmatter on .md files
     for name in zf.namelist():
-        if name.endswith(".md") and "/" in name:
+        if name.endswith(".md"):
             filename = name.split("/")[-1]
             content = zf.read(name).decode("utf-8")
             result = validate_template_file(filename, content)
@@ -507,10 +529,13 @@ async def deploy_template_zip(file: UploadFile) -> dict:
         if name.endswith("/"):
             continue  # skip directories
         # Strip the root directory prefix
-        relative = name[len(zip_root) + 1:] if zip_root else name
+        relative = name[len(zip_root) + 1:]
         if not relative:
             continue
-        dest = target / relative
+        # Final safety: ensure relative path stays within target
+        dest = (target / relative).resolve()
+        if not str(dest).startswith(str(target.resolve())):
+            continue  # skip files that would escape target
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(zf.read(name))
 

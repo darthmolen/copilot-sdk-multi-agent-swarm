@@ -41,6 +41,7 @@ async def _create_session_with_tools(
     session_id: str | None = None,
     mcp_servers: dict | None = None,
     skill_directories: list[str] | None = None,
+    model: str | None = None,
 ) -> Any:
     """Create a session with the given tools, compatible with real SDK and mocks."""
     try:
@@ -55,6 +56,8 @@ async def _create_session_with_tools(
             kwargs["mcp_servers"] = mcp_servers
         if skill_directories:
             kwargs["skill_directories"] = skill_directories
+        if model:
+            kwargs["model"] = model
         return await client.create_session(**kwargs)
     except TypeError:
         # Fallback for mocks that don't accept all SDK kwargs
@@ -287,6 +290,7 @@ class SwarmOrchestrator:
         session = await _create_session_with_tools(
             self.client, leader_prompt, [plan_tool],
             mcp_servers=mcp_servers, skill_directories=skill_dirs,
+            model=self.model,
         )
 
         # Event-driven: wait for turn_end (same pattern as SwarmAgent)
@@ -541,6 +545,7 @@ class SwarmOrchestrator:
                 self.client, synthesis_system, [],
                 session_id=synthesis_session_id,
                 mcp_servers=synth_mcp, skill_directories=synth_skills,
+                model=self.model,
             )
         except TypeError:
             session = await self.client.create_session()

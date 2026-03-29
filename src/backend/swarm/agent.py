@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,8 +18,6 @@ from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.tools import create_swarm_tools
 
 log = structlog.get_logger()
-
-import os
 
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_MODEL = os.environ.get("SWARM_MODEL", "gemini-3-pro-preview")
