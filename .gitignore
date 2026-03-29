@@ -14,3 +14,4 @@ node_modules/
 venv/
 .env.claude/
 .env
+uv.lock
