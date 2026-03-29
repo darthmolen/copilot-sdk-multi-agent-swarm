@@ -140,13 +140,10 @@ npm install
 
 ### Configure environment
 
-Create a `.env` file in the project root:
+Copy `.env.template` to `.env` and adjust for your environment:
 
 ```bash
-LOG_LEVEL=DEBUG
-ENVIRONMENT=development
-SWARM_API_KEY=
-SWARM_TASK_TIMEOUT=1800
+cp .env.template .env
 ```
 
 | Variable | Default | Description |
@@ -154,7 +151,15 @@ SWARM_TASK_TIMEOUT=1800
 | `LOG_LEVEL` | `DEBUG` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
 | `ENVIRONMENT` | — | Set to `development` to disable auth when no key is set |
 | `SWARM_API_KEY` | — | API key for REST and WebSocket auth. Empty + development = open access |
-| `SWARM_TASK_TIMEOUT` | `1800` | Max seconds per agent task before timeout (30 min default) |
+| `SWARM_TASK_TIMEOUT` | `1800` | Max seconds per agent task before timeout (30 min) |
+| `SWARM_MAX_ROUNDS` | `3` | Max execution rounds per swarm |
+| `SWARM_MODEL` | `gemini-3-pro-preview` | LLM model identifier for agent sessions |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Comma-separated allowed CORS origins |
+| `SWARM_WORK_DIR` | `workdir` | Agent work directory (use absolute path for Docker) |
+| `TEMPLATES_DIR` | `src/templates` | Template directory (use absolute path for Docker) |
+| `LOGS_DIR` | `logs` | Log output directory |
+| `STATIC_DIR` | `static` | Built frontend static files directory |
+| `SWARM_MAX_TEMPLATE_ZIP_SIZE` | `3145728` | Max zip size for template deploy (3MB) |
 
 ### Run the backend
 

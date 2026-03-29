@@ -23,7 +23,7 @@ from backend.swarm.template_loader import TemplateLoader
 # Logging
 # ---------------------------------------------------------------------------
 
-LOG_DIR = Path("logs")
+LOG_DIR = Path(os.environ.get("LOGS_DIR", "logs"))
 configure_logging(json_file=LOG_DIR / "backend.log")
 log = structlog.get_logger(__name__)
 
@@ -46,6 +46,23 @@ try:
     SWARM_MAX_TEMPLATE_ZIP_SIZE: int = int(_raw_zip_size) if _raw_zip_size else 3 * 1024 * 1024
 except ValueError:
     SWARM_MAX_TEMPLATE_ZIP_SIZE = 3 * 1024 * 1024
+
+_raw_max_rounds = os.environ.get("SWARM_MAX_ROUNDS", "")
+try:
+    SWARM_MAX_ROUNDS: int = int(_raw_max_rounds) if _raw_max_rounds else 3
+except ValueError:
+    SWARM_MAX_ROUNDS = 3
+
+SWARM_MODEL: str = os.environ.get("SWARM_MODEL", "gemini-3-pro-preview")
+CORS_ORIGINS: list[str] = [
+    o.strip() for o in os.environ.get(
+        "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
+    ).split(",") if o.strip()
+]
+SWARM_WORK_DIR: str = os.environ.get("SWARM_WORK_DIR", "workdir")
+TEMPLATES_DIR: str = os.environ.get("TEMPLATES_DIR", "src/templates")
+LOGS_DIR: str = os.environ.get("LOGS_DIR", "logs")
+STATIC_DIR: str = os.environ.get("STATIC_DIR", "static")
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +120,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.warning("copilot_cli_start_failed", error=str(exc))
 
     # --- Template loader --------------------------------------------------
-    templates_dir = Path("src/templates")
+    templates_dir = Path(TEMPLATES_DIR)
     template_loader = TemplateLoader(templates_dir) if templates_dir.is_dir() else None
     if template_loader:
         log.info("templates_loaded", path=str(templates_dir))
@@ -183,7 +200,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -192,9 +209,9 @@ app.add_middleware(
 app.include_router(router, dependencies=[Depends(verify_api_key)])
 
 # Serve frontend static files in production (when built frontend exists)
-_static_dir = Path("static")
+_static_dir = Path(STATIC_DIR)
 if _static_dir.is_dir():
-    app.mount("/", StaticFiles(directory="static", html=True), name="static")
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
 
 
 @app.websocket("/ws/{swarm_id}")

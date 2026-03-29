@@ -18,8 +18,10 @@ from backend.swarm.tools import create_swarm_tools
 
 log = structlog.get_logger()
 
+import os
+
 DEFAULT_TIMEOUT_SECONDS = 1800
-DEFAULT_MODEL = "gemini-3-pro-preview"
+DEFAULT_MODEL = os.environ.get("SWARM_MODEL", "gemini-3-pro-preview")
 
 
 def _approve_all(*_args: Any, **_kwargs: Any) -> Any:

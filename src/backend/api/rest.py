@@ -45,6 +45,12 @@ _copilot_client: Any = None
 _template_loader: TemplateLoader | None = None
 
 
+def _get_work_dir() -> str:
+    """Lazy import to avoid circular dependency with main.py."""
+    from backend.main import SWARM_WORK_DIR
+    return SWARM_WORK_DIR
+
+
 def configure(event_bus: Any, copilot_client: Any = None, template_loader: TemplateLoader | None = None) -> None:
     """Inject dependencies. Called during app startup."""
     global _event_bus, _copilot_client, _template_loader
@@ -87,16 +93,17 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
 
     system_preamble = _template_loader.system_preamble if _template_loader else ""
     system_tools = _template_loader.system_tools if _template_loader else []
-    from backend.main import SWARM_TASK_TIMEOUT
+    from backend.main import SWARM_TASK_TIMEOUT, SWARM_MAX_ROUNDS, SWARM_MODEL, SWARM_WORK_DIR
 
-    work_base = Path("workdir")
-    config = {"max_rounds": 3, "timeout": SWARM_TASK_TIMEOUT}
+    work_base = Path(SWARM_WORK_DIR)
+    config = {"max_rounds": SWARM_MAX_ROUNDS, "timeout": SWARM_TASK_TIMEOUT}
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
         config=config,
         template=loaded_template, system_preamble=system_preamble,
         system_tools=system_tools,
         swarm_id=swarm_id, work_base=work_base,
+        model=SWARM_MODEL,
     )
     swarm_store[swarm_id]["orchestrator"] = orch
 
@@ -200,7 +207,7 @@ async def chat_with_swarm(
 @router.get("/api/swarm/{swarm_id}/files")
 async def list_swarm_files(swarm_id: str) -> dict:
     """List files in a swarm's work directory."""
-    work_dir = Path("workdir") / swarm_id
+    work_dir = Path(_get_work_dir()) / swarm_id
     if not work_dir.is_dir():
         return {"files": []}
     files = []
@@ -217,8 +224,8 @@ async def list_swarm_files(swarm_id: str) -> dict:
 @router.get("/api/swarm/{swarm_id}/files/download-zip")
 async def download_swarm_zip(swarm_id: str) -> StreamingResponse:
     """Download all files in a swarm's work directory as a ZIP archive."""
-    base = Path("workdir").resolve()
-    work_dir = Path("workdir") / swarm_id
+    base = Path(_get_work_dir()).resolve()
+    work_dir = Path(_get_work_dir()) / swarm_id
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -246,8 +253,8 @@ async def download_swarm_zip(swarm_id: str) -> StreamingResponse:
 @router.get("/api/swarm/{swarm_id}/files/{file_path:path}")
 async def get_swarm_file(swarm_id: str, file_path: str) -> dict:
     """Read a file from a swarm's work directory."""
-    base = Path("workdir").resolve()
-    target = (Path("workdir") / swarm_id / file_path).resolve()
+    base = Path(_get_work_dir()).resolve()
+    target = (Path(_get_work_dir()) / swarm_id / file_path).resolve()
     if not str(target).startswith(str(base)):
         raise HTTPException(status_code=403, detail="Path traversal not allowed")
     if not target.is_file():
@@ -258,7 +265,7 @@ async def get_swarm_file(swarm_id: str, file_path: str) -> dict:
 @router.post("/api/swarm/{swarm_id}/files/ensure-report")
 async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
     """Ensure the synthesis report file exists in the workdir, creating it from localStorage if needed."""
-    work_dir = Path("workdir") / swarm_id
+    work_dir = Path(_get_work_dir()) / swarm_id
     work_dir.mkdir(parents=True, exist_ok=True)
     report_path = work_dir / "synthesis_report.md"
     created = False
@@ -270,8 +277,10 @@ async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
 
 def _safe_template_path(key: str) -> Path:
     """Resolve a template key to a safe directory path. Raises 403 on traversal."""
-    base = Path("src/templates").resolve()
-    target = (Path("src/templates") / key).resolve()
+    from backend.main import TEMPLATES_DIR
+
+    base = Path(TEMPLATES_DIR).resolve()
+    target = (Path(TEMPLATES_DIR) / key).resolve()
     if not str(target).startswith(str(base) + "/") and target != base:
         raise HTTPException(status_code=403, detail="Path traversal not allowed")
     return target
