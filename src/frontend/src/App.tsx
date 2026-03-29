@@ -80,6 +80,23 @@ function SwarmConnection({
 
 function App() {
   const [authed, setAuthed] = useState(() => !!sessionStorage.getItem('swarm_api_key'));
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Probe backend to see if auth is required
+  useEffect(() => {
+    if (authed) { setAuthChecked(true); return; }
+    fetch(`${API_BASE}/api/templates`)
+      .then((res) => {
+        if (res.ok) {
+          // Backend doesn't require auth — skip the gate
+          setAuthed(true);
+        }
+        setAuthChecked(true);
+      })
+      .catch(() => setAuthChecked(true));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!authChecked) return null;
 
   if (!authed) {
     return <AuthGate onAuth={() => setAuthed(true)} />;
