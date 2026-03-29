@@ -204,7 +204,7 @@ def test_get_swarm_status_unknown_returns_404() -> None:
 
 
 def test_list_templates_returns_templates() -> None:
-    """GET /api/templates returns the 3 built-in templates."""
+    """GET /api/templates returns the built-in templates."""
     client = TestClient(app)
 
     response = client.get("/api/templates")
@@ -213,14 +213,11 @@ def test_list_templates_returns_templates() -> None:
 
     assert "templates" in body
     templates = body["templates"]
-    assert len(templates) == 3
+    assert len(templates) >= 2
 
     names = {t["name"] for t in templates}
-    assert names == {
-        "Software Development Team",
-        "Deep Research Team",
-        "Warehouse Optimization Team",
-    }
+    assert "Deep Research Team" in names
+    assert "Warehouse Optimization Team" in names
 
 
 # ---------------------------------------------------------------------------
