@@ -1,5 +1,4 @@
 import { useReducer, useCallback, useState, useEffect, useRef } from 'react';
-import { Toaster } from 'react-hot-toast';
 import { multiSwarmReducer, initialMultiSwarmState, isThinking } from './hooks/useSwarmState';
 import { chatReducer, initialChatStore } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -103,14 +102,7 @@ function App() {
     return <AuthGate onAuth={() => setAuthed(true)} />;
   }
 
-  return (
-    <>
-      <Toaster position="top-right" toastOptions={{
-        style: { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' },
-      }} />
-      <SwarmDashboard />
-    </>
-  );
+  return <SwarmDashboard />;
 }
 
 function SwarmDashboard() {

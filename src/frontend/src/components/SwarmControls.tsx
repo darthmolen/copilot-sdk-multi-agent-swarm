@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import toast from 'react-hot-toast';
 import { TemplateEditor } from './TemplateEditor';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
@@ -58,13 +57,10 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail.detail || `Deploy failed: ${res.status}`);
       }
-      const result = await res.json();
-      toast.success(`Template "${result.name || result.key}" deployed`);
+      // Refresh template list after successful deploy
       fetchTemplates();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Deploy failed';
-      toast.error(msg);
-      setError(msg);
+      setError(err instanceof Error ? err.message : 'Deploy failed');
     }
   }
 
