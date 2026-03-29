@@ -120,7 +120,7 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="te-deploy-btn"
+          className="te-small-dark-btn"
           title="Deploy template pack"
           aria-label="Deploy template pack"
         >
@@ -140,7 +140,7 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
         </select>
         <button
           onClick={() => setShowEditor(true)}
-          className="te-edit-btn"
+          className="te-small-dark-btn"
           title="Edit templates"
           aria-label="Edit templates"
         >
