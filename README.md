@@ -13,7 +13,7 @@ See [documentation/Architecture.md](documentation/Architecture.md) for component
 ## What You Get
 
 - **Parallel research teams on demand** — Describe a goal, get a coordinated team of AI agents that decompose, research, and synthesize a report. Run multiple teams simultaneously.
-- **Three ready-made team templates** — Deep Research, Software Development, and Warehouse Optimization with pre-configured roles and task dependencies. Create your own via the template editor.
+- **Ready-made team templates** — Deep Research and Warehouse Optimization with pre-configured roles and task dependencies. Create your own via the template editor or deploy template packs via zip.
 - **Live dashboard** — Watch tasks move through Blocked → Pending → In Progress → Completed in real time. See which agent is doing what.
 - **Refinement chat** — Talk to the synthesis agent after the report is done. Ask follow-up questions, request revisions, drill into specifics — all with full context of the original research.
 - **Download session files** — Export all artifacts from any session as a ZIP archive directly from the UI.
@@ -71,7 +71,7 @@ copilot-sdk-multi-agent-swarm/
     templates/
       system-prompt.md           # System coordination protocol (YAML frontmatter + body)
       deep-research/             # 3 workers: researcher, skeptic, data analyst
-      software-development/      # 4 workers: architect, implementer, tester, documenter
+      # Templates deployed via zip (simple-coding-agent, azure-solutions-agent, etc.)
       warehouse-optimizer/       # 4 workers: inventory, layout, demand, planner
     frontend/
       src/
@@ -206,7 +206,7 @@ Then open `http://localhost:5173` in your browser. If auth is enabled, you'll be
 
 ### Running a swarm
 
-1. Select a template from the dropdown (Deep Research, Software Development, or Warehouse Optimizer)
+1. Select a template from the dropdown (Deep Research, Warehouse Optimizer, or any deployed template pack)
 2. Enter your goal in the text input
 3. Click **Start Swarm**
 4. Watch the task board update in real-time: Blocked → Pending → In Progress → Completed
@@ -260,7 +260,7 @@ npx vitest run
 | Template | Workers | Dependency Pattern |
 |----------|---------|-------------------|
 | **Deep Research** | Primary Researcher, Skeptic, Data Analyst | All research parallel; synthesis blocked by all |
-| **Software Development** | Architect, Implementer, Tester, Documenter | Implementation blocked by design; testing blocked by implementation; docs parallel with testing |
+| **Simple Coding Agent** | Architect, Implementer, Tester, Documenter | Deployable via zip pack; includes Microsoft Learn MCP + C# quality skill |
 | **Warehouse Optimization** | Inventory Analyst, Layout Optimizer, Demand Forecaster, Implementation Planner | Inventory + demand parallel; layout blocked by inventory; planner blocked by all three |
 
 ## Documentation

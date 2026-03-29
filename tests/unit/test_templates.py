@@ -16,12 +16,12 @@ from backend.swarm.templates import (
 # ---------------------------------------------------------------------------
 
 
-def test_list_templates_returns_three() -> None:
-    """list_templates returns 3 templates with the correct keys."""
+def test_list_templates_returns_builtin() -> None:
+    """list_templates returns the built-in templates with correct keys."""
     result = list_templates()
-    assert len(result) == 3
+    assert len(result) == 2
     keys = {t["key"] for t in result}
-    assert keys == {"software-development", "deep-research", "warehouse-optimizer"}
+    assert keys == {"deep-research", "warehouse-optimizer"}
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +70,9 @@ def test_all_templates_have_user_input_placeholder() -> None:
         assert "{user_input}" in tmpl.goal_template, f"{key} missing {{user_input}}"
 
 
-def test_software_development_template_has_blocked_by() -> None:
-    """The software-development goal mentions 'blocked by'."""
-    goal = format_goal("software-development", "build a REST API")
+def test_warehouse_optimizer_template_has_blocked_by() -> None:
+    """The warehouse-optimizer goal mentions 'blocked by'."""
+    goal = format_goal("warehouse-optimizer", "optimize the fulfillment center")
     assert "blocked by" in goal.lower()
 
 

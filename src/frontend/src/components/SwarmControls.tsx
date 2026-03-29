@@ -1,13 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TemplateEditor } from './TemplateEditor';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
-const TEMPLATES = [
-  { value: 'deep-research', label: 'Deep Research' },
-  { value: 'software-development', label: 'Software Development' },
-  { value: 'warehouse-optimizer', label: 'Warehouse Optimizer' },
-];
+interface TemplateOption {
+  key: string;
+  name: string;
+  description: string;
+}
 
 interface SwarmControlsProps {
   onStart: (swarmId: string) => void;
@@ -15,10 +15,27 @@ interface SwarmControlsProps {
 
 export function SwarmControls({ onStart }: SwarmControlsProps) {
   const [goal, setGoal] = useState('');
-  const [template, setTemplate] = useState(TEMPLATES[0].value);
+  const [templates, setTemplates] = useState<TemplateOption[]>([]);
+  const [template, setTemplate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showEditor, setShowEditor] = useState(false);
+
+  useEffect(() => {
+    const apiKey = sessionStorage.getItem('swarm_api_key') ?? '';
+    fetch(`${API_BASE}/api/templates`, {
+      headers: apiKey ? { 'X-API-Key': apiKey } : {},
+    })
+      .then((res) => (res.ok ? res.json() : { templates: [] }))
+      .then((data) => {
+        const fetched: TemplateOption[] = data.templates ?? [];
+        setTemplates(fetched);
+        if (fetched.length > 0 && !template) {
+          setTemplate(fetched[0].key);
+        }
+      })
+      .catch(() => null);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleStart() {
     if (!goal.trim()) return;
@@ -66,12 +83,12 @@ export function SwarmControls({ onStart }: SwarmControlsProps) {
         <select
           value={template}
           onChange={(e) => setTemplate(e.target.value)}
-          disabled={loading}
+          disabled={loading || templates.length === 0}
           className="template-select"
         >
-          {TEMPLATES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
+          {templates.map((t) => (
+            <option key={t.key} value={t.key}>
+              {t.name}
             </option>
           ))}
         </select>
