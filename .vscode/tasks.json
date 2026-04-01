@@ -2,9 +2,17 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Setup",
+      "type": "shell",
+      "command": "make setup",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
       "label": "Start Backend",
       "type": "shell",
-      "command": "source ${workspaceFolder}/.venv/bin/activate && set -a && source ${workspaceFolder}/.env && set +a && mkdir -p logs && uvicorn backend.main:app --reload --app-dir src --port 8000 2>&1 | tee logs/backend-stdout.log",
+      "command": "make backend",
       "isBackground": true,
       "problemMatcher": [],
       "group": "build",
@@ -17,10 +25,7 @@
     {
       "label": "Start Frontend",
       "type": "shell",
-      "command": "npm run dev 2>&1 | tee ../../logs/frontend.log",
-      "options": {
-        "cwd": "${workspaceFolder}/src/frontend"
-      },
+      "command": "make frontend",
       "isBackground": true,
       "problemMatcher": [],
       "group": "build",
@@ -39,6 +44,14 @@
         "isDefault": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Run Tests",
+      "type": "shell",
+      "command": "make test",
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
     }
   ]
 }

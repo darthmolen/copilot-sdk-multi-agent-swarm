@@ -140,6 +140,16 @@ export function isThinking(phase: SwarmState['phase']): boolean {
   return phase !== null && phase !== 'complete' && phase !== 'cancelled' && phase !== 'failed';
 }
 
+export function shouldShowReportView(
+  reportSwarmId: string | null,
+  currentReport: string | null,
+  phase: SwarmState['phase'],
+): boolean {
+  if (!reportSwarmId) return false;
+  if (currentReport) return true;
+  return phase === 'qa';
+}
+
 export function useSwarmState() {
   const [state, dispatch] = useReducer(swarmReducer, initialState);
   return { state, dispatch };

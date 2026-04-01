@@ -1,6 +1,6 @@
 import { useReducer, useCallback, useState, useEffect, useRef } from 'react';
 import { Toaster } from 'react-hot-toast';
-import { multiSwarmReducer, initialMultiSwarmState, isThinking } from './hooks/useSwarmState';
+import { multiSwarmReducer, initialMultiSwarmState, isThinking, shouldShowReportView } from './hooks/useSwarmState';
 import { chatReducer, initialChatStore } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SwarmControls } from './components/SwarmControls';
@@ -165,6 +165,7 @@ function SwarmDashboard() {
 
   const handleSwarmEvent = useCallback(
     (swarmId: string, event: SwarmEvent) => {
+      console.log(`[Event] ${event.type}`, { swarmId, ...event.data });
       // Route chat events to chatReducer
       if (event.type === 'leader.chat_delta') {
         chatDispatch({
@@ -197,6 +198,21 @@ function SwarmDashboard() {
       } else {
         // All other events go to swarm reducer
         swarmDispatch({ type: 'swarm.event', swarmId, event });
+
+        // Auto-switch to report view when Q&A phase starts
+        if (event.type === 'swarm.phase_changed' && event.data.phase === 'qa') {
+          setReportSwarmId(swarmId);
+        }
+
+        // Live artifact list: append new files as agents write them
+        if (event.type === 'file.created' && event.data.swarm_id === reportSwarmId) {
+          const filename = event.data.filename as string;
+          const sizeBytes = (event.data.size_bytes as number) ?? 0;
+          setSwarmFiles((prev) => {
+            if (prev.some((f) => f.name === filename)) return prev;
+            return [...prev, { name: filename, path: filename, size: sizeBytes }];
+          });
+        }
       }
     },
     [],
@@ -204,6 +220,25 @@ function SwarmDashboard() {
 
   function handleStartSwarm(swarmId: string) {
     swarmDispatch({ type: 'swarm.add', swarmId });
+
+    // Poll swarm status shortly after start to catch phases emitted before WebSocket connected
+    const apiKey = getApiKey();
+    const headers: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
+    setTimeout(() => {
+      fetch(`${API_BASE}/api/swarm/${swarmId}/status`, { headers })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.phase === 'qa') {
+            setReportSwarmId(swarmId);
+            swarmDispatch({
+              type: 'swarm.event',
+              swarmId,
+              event: { type: 'swarm.phase_changed', data: { phase: 'qa', swarm_id: swarmId } },
+            });
+          }
+        })
+        .catch(() => null);
+    }, 500);
   }
 
   // Auto-save completed reports to localStorage
@@ -333,6 +368,7 @@ function SwarmDashboard() {
   const currentReport = reportSwarmId
     ? (store.swarms[reportSwarmId]?.leaderReport || getReportById(reportSwarmId)?.report || null)
     : null;
+  const currentPhase = reportSwarmId ? (store.swarms[reportSwarmId]?.phase ?? null) : null;
   const currentChatState = reportSwarmId ? chatStore.chats[reportSwarmId] : null;
   // Chat is always enabled — backend can resume_session for any past swarm
   const chatEnabled = !!reportSwarmId;
@@ -341,8 +377,8 @@ function SwarmDashboard() {
   const reportContentRef = useRef<HTMLDivElement>(null);
   useMermaid(reportContentRef, [activeFileContent, currentReport]);
 
-  // Full-screen report + chat view
-  if (reportSwarmId && currentReport) {
+  // Full-screen report + chat view (also shown during QA phase before report exists)
+  if (shouldShowReportView(reportSwarmId, currentReport, currentPhase)) {
     return (
       <div className="app app--report-view">
         <header className="app-header">
@@ -354,7 +390,7 @@ function SwarmDashboard() {
             <button
               className="copy-button"
               onClick={() => {
-                navigator.clipboard.writeText(currentReport);
+                navigator.clipboard.writeText(currentReport ?? '');
                 const btn = document.querySelector('.copy-button');
                 if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); }
               }}
@@ -378,7 +414,7 @@ function SwarmDashboard() {
                 ref={reportContentRef}
                 className="report-content"
                 dangerouslySetInnerHTML={{
-                  __html: renderMarkdown(activeFileContent ?? currentReport),
+                  __html: renderMarkdown(activeFileContent ?? currentReport ?? ''),
                 }}
               />
             </div>

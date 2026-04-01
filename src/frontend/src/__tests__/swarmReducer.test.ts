@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { swarmReducer, initialState, isThinking, multiSwarmReducer, initialMultiSwarmState } from '../hooks/useSwarmState';
+import { swarmReducer, initialState, isThinking, multiSwarmReducer, initialMultiSwarmState, shouldShowReportView } from '../hooks/useSwarmState';
 import type { SwarmState, SwarmEvent, Task, AgentInfo, InboxMessage } from '../types/swarm';
 
 describe('swarmReducer', () => {
@@ -311,6 +311,10 @@ describe('isThinking', () => {
     expect(isThinking('synthesizing')).toBe(true);
   });
 
+  it('is true when phase is qa', () => {
+    expect(isThinking('qa')).toBe(true);
+  });
+
   it('is false when phase is complete', () => {
     expect(isThinking('complete')).toBe(false);
   });
@@ -321,6 +325,28 @@ describe('isThinking', () => {
 
   it('is false when phase is cancelled', () => {
     expect(isThinking('cancelled')).toBe(false);
+  });
+});
+
+describe('shouldShowReportView', () => {
+  it('returns true when report exists', () => {
+    expect(shouldShowReportView('swarm-1', 'Some report', null)).toBe(true);
+  });
+
+  it('returns false when no swarm selected', () => {
+    expect(shouldShowReportView(null, 'Some report', null)).toBe(false);
+  });
+
+  it('returns true when phase is qa even without a report', () => {
+    expect(shouldShowReportView('swarm-1', null, 'qa')).toBe(true);
+  });
+
+  it('returns true when phase is qa and report is empty string', () => {
+    expect(shouldShowReportView('swarm-1', '', 'qa')).toBe(true);
+  });
+
+  it('returns false when no report and phase is not qa', () => {
+    expect(shouldShowReportView('swarm-1', null, 'executing')).toBe(false);
   });
 });
 

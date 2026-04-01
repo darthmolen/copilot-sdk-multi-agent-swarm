@@ -49,9 +49,9 @@ except ValueError:
 
 _raw_max_rounds = os.environ.get("SWARM_MAX_ROUNDS", "")
 try:
-    SWARM_MAX_ROUNDS: int = int(_raw_max_rounds) if _raw_max_rounds else 3
+    SWARM_MAX_ROUNDS: int = int(_raw_max_rounds) if _raw_max_rounds else 5
 except ValueError:
-    SWARM_MAX_ROUNDS = 3
+    SWARM_MAX_ROUNDS = 5
 
 SWARM_MODEL: str = os.environ.get("SWARM_MODEL", "gemini-3-pro-preview")
 CORS_ORIGINS: list[str] = [

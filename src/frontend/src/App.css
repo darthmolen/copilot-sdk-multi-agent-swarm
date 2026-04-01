@@ -219,6 +219,13 @@
   border-radius: 8px;
 }
 
+.report-list-empty {
+  color: #6b7280;
+  font-size: 13px;
+  font-style: italic;
+  padding: 4px 0;
+}
+
 .report-list-item {
   display: flex;
   align-items: center;

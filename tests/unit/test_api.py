@@ -393,6 +393,29 @@ def test_chat_returns_200_for_complete_swarm() -> None:
     assert response.json()["status"] == "streaming"
 
 
+def test_chat_returns_200_for_qa_phase() -> None:
+    """POST /api/swarm/{id}/chat returns 200 when swarm is in qa phase."""
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    from unittest.mock import AsyncMock, MagicMock
+    mock_orch = MagicMock()
+    mock_orch.qa_session = MagicMock()  # Q&A session exists
+    mock_orch.qa_chat = AsyncMock(return_value="What is your team size?")
+    swarm_store[swarm_id]["phase"] = "qa"
+    swarm_store[swarm_id]["orchestrator"] = mock_orch
+
+    response = client.post(
+        f"/api/swarm/{swarm_id}/chat",
+        json={"message": "We have 12 apps"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "streaming"
+
+
 def test_chat_returns_401_when_auth_required() -> None:
     """POST /api/swarm/{id}/chat requires X-API-Key when configured."""
     _clear_swarm_store()

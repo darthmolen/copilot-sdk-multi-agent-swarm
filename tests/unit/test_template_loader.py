@@ -279,6 +279,207 @@ class TestMCPAndSkills:
         assert tpl.skills_dir is None
 
 
+class TestMaxInstances:
+    def test_parse_agent_file_reads_max_instances(self, tmp_path: Path) -> None:
+        """Worker with maxInstances: 3 produces AgentDefinition with max_instances=3."""
+        agent_file = tmp_path / "worker-scaler.md"
+        agent_file.write_text(
+            "---\n"
+            "name: scaler\n"
+            "displayName: Scaler Agent\n"
+            "description: Scales out\n"
+            "maxInstances: 3\n"
+            "---\n"
+            "You are a scalable worker."
+        )
+        agent = TemplateLoader.parse_agent_file(agent_file)
+        assert agent.max_instances == 3
+
+    def test_parse_agent_file_defaults_max_instances_to_1(self, tmp_path: Path) -> None:
+        """Worker without maxInstances field defaults to max_instances=1."""
+        agent_file = tmp_path / "worker-single.md"
+        agent_file.write_text(
+            "---\n"
+            "name: single\n"
+            "displayName: Single Agent\n"
+            "description: Single instance\n"
+            "---\n"
+            "You are a single worker."
+        )
+        agent = TemplateLoader.parse_agent_file(agent_file)
+        assert agent.max_instances == 1
+
+    def test_load_preserves_max_instances_in_agents(self, tmp_path: Path) -> None:
+        """LoadedTemplate.agents carries parsed max_instances values through."""
+        workers = [
+            {
+                "filename": "worker-scalable.md",
+                "name": "scalable",
+                "displayName": "Scalable Worker",
+                "description": "Can scale",
+                "maxInstances": 4,
+                "body": "Scalable prompt.",
+            },
+            {
+                "filename": "worker-fixed.md",
+                "name": "fixed",
+                "displayName": "Fixed Worker",
+                "description": "Single instance",
+                "body": "Fixed prompt.",
+            },
+        ]
+        _create_template_dir(tmp_path, workers=workers)
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+
+        scalable = next(a for a in tpl.agents if a.name == "scalable")
+        fixed = next(a for a in tpl.agents if a.name == "fixed")
+        assert scalable.max_instances == 4
+        assert fixed.max_instances == 1
+
+
+class TestPerWorkerSkills:
+    def test_parse_agent_file_reads_skills_list(self, tmp_path: Path) -> None:
+        """Worker with skills: [skill-a, skill-b] produces AgentDefinition.skills."""
+        agent_file = tmp_path / "worker-skilled.md"
+        agent_file.write_text(
+            "---\n"
+            "name: skilled\n"
+            "displayName: Skilled Agent\n"
+            "description: Has specific skills\n"
+            "skills:\n  - azure-architect\n  - azure-security-expert\n"
+            "---\n"
+            "You are skilled."
+        )
+        agent = TemplateLoader.parse_agent_file(agent_file)
+        assert agent.skills == ["azure-architect", "azure-security-expert"]
+
+    def test_parse_agent_file_skills_null_is_none(self, tmp_path: Path) -> None:
+        """Worker without skills field or with skills: null produces None."""
+        agent_file = tmp_path / "worker-noskills.md"
+        agent_file.write_text(
+            "---\n"
+            "name: noskills\n"
+            "displayName: No Skills Agent\n"
+            "description: No skills field\n"
+            "---\n"
+            "You have no skills config."
+        )
+        agent = TemplateLoader.parse_agent_file(agent_file)
+        assert agent.skills is None
+
+    def test_parse_agent_file_skills_wildcard(self, tmp_path: Path) -> None:
+        """Worker with skills: ['*'] produces ['*']."""
+        agent_file = tmp_path / "worker-wild.md"
+        agent_file.write_text(
+            '---\n'
+            'name: wild\n'
+            'displayName: Wild Agent\n'
+            'description: All skills\n'
+            'skills:\n  - "*"\n'
+            '---\n'
+            'You get all skills.'
+        )
+        agent = TemplateLoader.parse_agent_file(agent_file)
+        assert agent.skills == ["*"]
+
+    def test_parse_agent_file_skills_empty_list(self, tmp_path: Path) -> None:
+        """Worker with skills: [] produces empty list."""
+        agent_file = tmp_path / "worker-empty.md"
+        agent_file.write_text(
+            "---\n"
+            "name: empty\n"
+            "displayName: Empty Agent\n"
+            "description: No skills\n"
+            "skills: []\n"
+            "---\n"
+            "You get no skills."
+        )
+        agent = TemplateLoader.parse_agent_file(agent_file)
+        assert agent.skills == []
+
+    def test_load_enumerates_all_skill_names(self, tmp_path: Path) -> None:
+        """Template with skills/ dir populates all_skill_names from frontmatter."""
+        _create_template_dir(tmp_path)
+        skills_dir = tmp_path / "test-template" / "skills"
+        skill_a = skills_dir / "skill-a"
+        skill_a.mkdir(parents=True)
+        (skill_a / "skill.md").write_text("---\nname: Skill Alpha\n---\nContent A.")
+        skill_b = skills_dir / "skill-b"
+        skill_b.mkdir(parents=True)
+        (skill_b / "skill.md").write_text("---\nname: Skill Beta\n---\nContent B.")
+
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+
+        assert tpl.all_skill_names == {"Skill Alpha", "Skill Beta"}
+        assert tpl.skill_name_map == {"skill-a": "Skill Alpha", "skill-b": "Skill Beta"}
+
+    def test_load_validates_unknown_skill_references(self, tmp_path: Path) -> None:
+        """Worker referencing nonexistent skill raises ValueError."""
+        workers = [
+            {
+                "filename": "worker-bad.md",
+                "name": "bad",
+                "displayName": "Bad Worker",
+                "description": "References fake skill",
+                "skills": ["nonexistent-skill"],
+                "body": "Prompt.",
+            },
+        ]
+        _create_template_dir(tmp_path, workers=workers)
+        # Create skills dir with one real skill
+        skills_dir = tmp_path / "test-template" / "skills" / "real-skill"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "skill.md").write_text("---\nname: real-skill\n---\nContent.")
+
+        loader = TemplateLoader(tmp_path)
+        with pytest.raises(ValueError, match="unknown skill"):
+            loader.load("test-template")
+
+    def test_load_backward_compat_no_skills_field(self, tmp_path: Path) -> None:
+        """Existing templates without skills field or skills/ dir load fine."""
+        _create_template_dir(tmp_path)
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+
+        assert tpl.all_skill_names == set()
+        assert tpl.skill_name_map == {}
+        # Agent should have skills=None
+        assert tpl.agents[0].skills is None
+
+
+class TestQAFlag:
+    def test_load_parses_qa_enabled_from_leader(self, tmp_path: Path) -> None:
+        """Leader with qa: true in frontmatter produces LoadedTemplate.qa_enabled=True."""
+        _create_template_dir(
+            tmp_path,
+            leader_frontmatter={"qa": True},
+            leader_body="You are the leader.\n\n## Q&A Questions\nAsk about scale.",
+        )
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+        assert tpl.qa_enabled is True
+
+    def test_load_qa_disabled_by_default(self, tmp_path: Path) -> None:
+        """Leader without qa field produces LoadedTemplate.qa_enabled=False."""
+        _create_template_dir(tmp_path)
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+        assert tpl.qa_enabled is False
+
+    def test_load_captures_leader_prompt_for_qa(self, tmp_path: Path) -> None:
+        """Leader prompt is available for Q&A session regardless of qa flag."""
+        _create_template_dir(
+            tmp_path,
+            leader_frontmatter={"qa": True},
+            leader_body="You are the leader.\n\n## Q&A\nAsk about enterprise size.",
+        )
+        loader = TemplateLoader(tmp_path)
+        tpl = loader.load("test-template")
+        assert "enterprise size" in tpl.leader_prompt
+
+
 class TestLoadAllAndListAvailable:
     def test_load_all_returns_multiple_templates(self, tmp_path: Path) -> None:
         _create_template_dir(tmp_path, key="tpl-a", name="Template A")

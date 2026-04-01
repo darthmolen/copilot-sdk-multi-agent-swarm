@@ -55,6 +55,7 @@ export function useWebSocket(
 
       ws.onopen = () => {
         if (!active) { ws.close(); return; }
+        console.log(`[WS] Connected to ${swarmId}`);
         setConnected(true);
         reconnectDelay.current = INITIAL_RECONNECT_DELAY;
       };
@@ -63,6 +64,7 @@ export function useWebSocket(
         if (!active) return;
         try {
           const event: SwarmEvent = JSON.parse(evt.data);
+          console.log(`[WS ←] ${event.type}`, event.data);
           onEventRef.current(event);
         } catch {
           // Ignore malformed messages
@@ -71,6 +73,7 @@ export function useWebSocket(
 
       ws.onclose = () => {
         if (!active) return;
+        console.log(`[WS] Disconnected from ${swarmId}`);
         setConnected(false);
         if (!shouldReconnect.current) return;
         reconnectTimer.current = setTimeout(() => {

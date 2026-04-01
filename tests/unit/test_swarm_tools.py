@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -497,3 +498,56 @@ async def test_inbox_send_emits_event_via_callback():
     assert inbox_events[0]["sender"] == "worker_1"
     assert inbox_events[0]["recipient"] == "worker_2"
     assert inbox_events[0]["content"] == "hello from worker 1"
+
+
+# ---------------------------------------------------------------------------
+# begin_swarm tool tests (Q&A phase)
+# ---------------------------------------------------------------------------
+
+
+async def test_begin_swarm_tool_returns_correct_shape():
+    """begin_swarm tool has correct name and skip_permission=True."""
+    from backend.swarm.tools import create_begin_swarm_tool
+
+    holder: list[str] = []
+    event = asyncio.Event()
+    tool = create_begin_swarm_tool(holder, event)
+
+    assert isinstance(tool, Tool)
+    assert tool.name == "begin_swarm"
+    assert tool.skip_permission is True
+
+
+async def test_begin_swarm_captures_refined_goal():
+    """Invoking begin_swarm stores refined_goal and sets the completion event."""
+    from backend.swarm.tools import create_begin_swarm_tool
+
+    holder: list[str] = []
+    event = asyncio.Event()
+    tool = create_begin_swarm_tool(holder, event)
+
+    invocation = ToolInvocation(arguments={
+        "refined_goal": "Build a mid-size AKS platform for 12 legacy apps with pragmatic security."
+    })
+    result = await tool.handler(invocation)
+
+    assert result.result_type == "success"
+    assert len(holder) == 1
+    assert "mid-size AKS platform" in holder[0]
+    assert event.is_set()
+
+
+async def test_begin_swarm_rejects_missing_refined_goal():
+    """begin_swarm with missing refined_goal returns failure."""
+    from backend.swarm.tools import create_begin_swarm_tool
+
+    holder: list[str] = []
+    event = asyncio.Event()
+    tool = create_begin_swarm_tool(holder, event)
+
+    invocation = ToolInvocation(arguments={"wrong_field": "oops"})
+    result = await tool.handler(invocation)
+
+    assert result.result_type == "failure"
+    assert len(holder) == 0
+    assert not event.is_set()

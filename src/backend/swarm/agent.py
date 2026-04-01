@@ -58,6 +58,7 @@ class SwarmAgent:
         swarm_id: str | None = None,
         mcp_servers: dict | None = None,
         skill_directories: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
     ) -> None:
         self.name = name
         self.role = role
@@ -75,6 +76,7 @@ class SwarmAgent:
         self.swarm_id = swarm_id
         self.mcp_servers = mcp_servers
         self.skill_directories = skill_directories
+        self.disabled_skills = disabled_skills
         self.session: Any = None  # Set by create_session
         self._monitor_tasks: list[asyncio.Task[None]] = []
 
@@ -126,6 +128,8 @@ class SwarmAgent:
             kwargs["mcp_servers"] = self.mcp_servers
         if self.skill_directories:
             kwargs["skill_directories"] = self.skill_directories
+        if self.disabled_skills:
+            kwargs["disabled_skills"] = self.disabled_skills
 
         self.session = await client.create_session(**kwargs)
 

@@ -16,6 +16,8 @@ class AgentDefinition:
     tools: list[str] | None = None  # None = all tools
     infer: bool = False
     prompt_template: str = ""  # markdown body
+    max_instances: int = 1  # max concurrent tasks per round
+    skills: list[str] | None = None  # per-worker skill directory names
 
 
 @dataclass
@@ -29,6 +31,9 @@ class LoadedTemplate:
     synthesis_prompt: str = ""
     mcp_servers: dict | None = None
     skills_dir: Path | None = None
+    all_skill_names: set[str] = field(default_factory=set)
+    skill_name_map: dict[str, str] = field(default_factory=dict)  # dir_name -> skill_name
+    qa_enabled: bool = False
 
 
 class TemplateLoader:
@@ -63,8 +68,9 @@ class TemplateLoader:
         # Read leader.md
         leader_path = template_dir / "leader.md"
         leader_prompt = ""
+        leader_meta: dict = {}
         if leader_path.exists():
-            _, leader_prompt = self.parse_frontmatter(leader_path.read_text())
+            leader_meta, leader_prompt = self.parse_frontmatter(leader_path.read_text())
 
         # Read worker-*.md files
         agents: list[AgentDefinition] = []
@@ -87,9 +93,33 @@ class TemplateLoader:
             mcp_data = yaml.safe_load(mcp_path.read_text()) or {}
             mcp_servers = mcp_data.get("servers")
 
-        # Detect skills/ directory (optional)
+        # Detect skills/ directory and enumerate skill names (optional)
         skills_dir = template_dir / "skills"
         skills_dir_resolved = skills_dir if skills_dir.is_dir() else None
+
+        skill_name_map: dict[str, str] = {}
+        if skills_dir_resolved:
+            for subdir in sorted(skills_dir_resolved.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                skill_file = subdir / "skill.md"
+                if not skill_file.exists():
+                    skill_file = subdir / "SKILL.md"
+                if skill_file.exists():
+                    skill_meta, _ = self.parse_frontmatter(skill_file.read_text())
+                    skill_name_map[subdir.name] = skill_meta.get("name", subdir.name)
+
+        all_skill_names = set(skill_name_map.values())
+
+        # Validate per-worker skill references
+        for agent in agents:
+            if agent.skills is not None and agent.skills != ["*"]:
+                unknown = set(agent.skills) - set(skill_name_map.keys())
+                if unknown:
+                    raise ValueError(
+                        f"Worker '{agent.name}' references unknown skill directories: "
+                        f"{unknown}. Available: {set(skill_name_map.keys())}"
+                    )
 
         return LoadedTemplate(
             key=meta["key"],
@@ -101,6 +131,9 @@ class TemplateLoader:
             synthesis_prompt=synthesis_prompt,
             mcp_servers=mcp_servers,
             skills_dir=skills_dir_resolved,
+            all_skill_names=all_skill_names,
+            skill_name_map=skill_name_map,
+            qa_enabled=bool(leader_meta.get("qa", False)),
         )
 
     def load_all(self) -> dict[str, LoadedTemplate]:
@@ -154,4 +187,6 @@ class TemplateLoader:
             tools=metadata.get("tools"),
             infer=metadata.get("infer", False),
             prompt_template=body,
+            max_instances=metadata.get("maxInstances", 1),
+            skills=metadata.get("skills"),
         )

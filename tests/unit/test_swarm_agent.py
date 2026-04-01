@@ -195,6 +195,32 @@ async def test_create_session_passes_skill_directories(
     assert kwargs.get("skill_directories") == [str(skills_dir)]
 
 
+async def test_create_session_passes_disabled_skills(
+    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
+    event_bus: EventBus, mock_client: MockClient,
+) -> None:
+    """disabled_skills list is passed through to create_session kwargs."""
+    agent = SwarmAgent(
+        name="coder", role="Code", display_name="Coder",
+        task_board=task_board, inbox=inbox, registry=registry,
+        event_bus=event_bus, disabled_skills=["skill-b", "skill-c"],
+    )
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert kwargs.get("disabled_skills") == ["skill-b", "skill-c"]
+
+
+async def test_create_session_no_disabled_skills_when_none(
+    agent: SwarmAgent, mock_client: MockClient,
+) -> None:
+    """Agent without disabled_skills does not include it in kwargs."""
+    await agent.create_session(mock_client)
+
+    kwargs = mock_client.create_session_kwargs
+    assert "disabled_skills" not in kwargs
+
+
 async def test_create_session_no_mcp_no_skills_omits_kwargs(
     agent: SwarmAgent, mock_client: MockClient,
 ) -> None:
