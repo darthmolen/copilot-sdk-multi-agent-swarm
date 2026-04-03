@@ -1572,6 +1572,72 @@ class TestMaxInstances:
 
 
 # ---------------------------------------------------------------------------
+# Per-agent CopilotClient (client_factory) tests
+# ---------------------------------------------------------------------------
+
+
+class TestClientFactory:
+    async def test_spawn_uses_factory_for_each_worker(self, event_bus: EventBus) -> None:
+        """When client_factory is provided, each worker gets a separate client."""
+        clients_created: list[Any] = []
+
+        async def mock_factory() -> Any:
+            client = MockCopilotClient(leader_plan=VALID_PLAN)
+            clients_created.append(client)
+            return client
+
+        orch = SwarmOrchestrator(
+            client=MockCopilotClient(leader_plan=VALID_PLAN),
+            event_bus=event_bus,
+            client_factory=mock_factory,
+        )
+        await orch._spawn(VALID_PLAN)
+
+        # 2 unique workers in VALID_PLAN → 2 factory calls
+        assert len(clients_created) == 2
+
+    async def test_cleanup_stops_all_agent_clients(self, event_bus: EventBus) -> None:
+        """After execution, cleanup stops all per-agent clients."""
+        stopped: list[str] = []
+
+        async def mock_factory() -> Any:
+            client = MockCopilotClient(leader_plan=VALID_PLAN)
+            agent_name = f"client-{len(stopped)}"
+
+            async def mock_stop() -> None:
+                stopped.append(agent_name)
+
+            client.stop = mock_stop
+            return client
+
+        orch = SwarmOrchestrator(
+            client=MockCopilotClient(leader_plan=VALID_PLAN),
+            event_bus=event_bus,
+            client_factory=mock_factory,
+        )
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+        await orch._cleanup_agents()
+
+        assert len(stopped) == 2, f"Expected 2 agent clients stopped, got {len(stopped)}"
+
+    async def test_spawn_falls_back_to_shared_client_when_no_factory(self, event_bus: EventBus) -> None:
+        """Without client_factory, agents use the shared self.client (existing behavior)."""
+        shared_client = MockCopilotClient(leader_plan=VALID_PLAN)
+        orch = SwarmOrchestrator(
+            client=shared_client,
+            event_bus=event_bus,
+        )
+        await orch._spawn(VALID_PLAN)
+
+        # All agents should have sessions (created via shared client)
+        assert len(orch.agents) == 2
+        for agent in orch.agents.values():
+            assert agent.session is not None
+
+
+# ---------------------------------------------------------------------------
 # Per-worker skills (disabled_skills) tests
 # ---------------------------------------------------------------------------
 

@@ -589,3 +589,49 @@ async def test_monitor_expires_without_completion(
     await asyncio.sleep(0.2)
     tasks = await task_board.get_tasks()
     assert tasks[0].status == TaskStatus.TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# Client ownership and cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_cleanup_stops_owned_client(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+) -> None:
+    """Agent with owns_client=True calls client.stop() on cleanup."""
+    mock_client.stopped = False
+
+    async def mock_stop() -> None:
+        mock_client.stopped = True
+
+    mock_client.stop = mock_stop
+
+    await agent.create_session(mock_client, owns_client=True)
+    await agent.cleanup()
+
+    assert mock_client.stopped is True
+
+
+async def test_agent_cleanup_skips_shared_client(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+) -> None:
+    """Agent with owns_client=False does NOT call client.stop()."""
+    mock_client.stopped = False
+
+    async def mock_stop() -> None:
+        mock_client.stopped = True
+
+    mock_client.stop = mock_stop
+
+    await agent.create_session(mock_client, owns_client=False)
+    await agent.cleanup()
+
+    assert mock_client.stopped is False
+
+
+async def test_agent_cleanup_safe_without_session(
+    agent: SwarmAgent,
+) -> None:
+    """Cleanup is safe to call even if agent never had a session."""
+    await agent.cleanup()  # Should not raise

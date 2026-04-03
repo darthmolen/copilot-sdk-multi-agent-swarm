@@ -78,9 +78,11 @@ class SwarmAgent:
         self.skill_directories = skill_directories
         self.disabled_skills = disabled_skills
         self.session: Any = None  # Set by create_session
+        self._client: Any = None  # Set by create_session if owns_client
+        self._owns_client: bool = False
         self._monitor_tasks: list[asyncio.Task[None]] = []
 
-    async def create_session(self, client: Any) -> None:
+    async def create_session(self, client: Any, *, owns_client: bool = False) -> None:
         """Create a CopilotSession with system_message mode:replace.
 
         No customAgents — uses direct system_message override for better
@@ -132,6 +134,18 @@ class SwarmAgent:
             kwargs["disabled_skills"] = self.disabled_skills
 
         self.session = await client.create_session(**kwargs)
+        if owns_client:
+            self._client = client
+            self._owns_client = True
+
+    async def cleanup(self) -> None:
+        """Stop the owned client if this agent has one."""
+        if self._owns_client and self._client is not None:
+            try:
+                await self._client.stop()
+            except Exception:
+                log.warning("agent_client_stop_failed", agent=self.name)
+            self._client = None
 
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""

@@ -42,6 +42,7 @@ swarm_store: dict[str, dict] = {}
 # Injected dependencies (set by main.py lifespan)
 _event_bus: Any = None
 _copilot_client: Any = None
+_client_factory: Any = None
 _template_loader: TemplateLoader | None = None
 
 
@@ -51,12 +52,18 @@ def _get_work_dir() -> str:
     return SWARM_WORK_DIR
 
 
-def configure(event_bus: Any, copilot_client: Any = None, template_loader: TemplateLoader | None = None) -> None:
+def configure(
+    event_bus: Any,
+    copilot_client: Any = None,
+    template_loader: TemplateLoader | None = None,
+    client_factory: Any = None,
+) -> None:
     """Inject dependencies. Called during app startup."""
-    global _event_bus, _copilot_client, _template_loader
+    global _event_bus, _copilot_client, _template_loader, _client_factory
     _event_bus = event_bus
     _copilot_client = copilot_client
     _template_loader = template_loader
+    _client_factory = client_factory
 
 
 def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> dict:
@@ -131,6 +138,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         system_tools=system_tools,
         swarm_id=swarm_id, work_base=work_base,
         model=SWARM_MODEL,
+        client_factory=_client_factory,
     )
     swarm_store[swarm_id]["orchestrator"] = orch
 

@@ -87,8 +87,10 @@ class SwarmOrchestrator:
         model: str = "gemini-3-pro-preview",
         swarm_id: str | None = None,
         work_base: Path | None = None,
+        client_factory: Any | None = None,
     ) -> None:
         self.client = client
+        self.client_factory = client_factory
         self.event_bus = event_bus
         self.task_board = TaskBoard()
         self.inbox = InboxSystem()
@@ -122,6 +124,13 @@ class SwarmOrchestrator:
         if self.swarm_id:
             data = {**data, "swarm_id": self.swarm_id}
         await self.event_bus.emit(event_type, data)
+
+    async def _cleanup_agents(self) -> None:
+        """Stop per-agent clients after execution completes."""
+        for agent in self.agents.values():
+            await agent.cleanup()
+        log.info("agent_clients_cleaned_up", swarm_id=self.swarm_id,
+                 agent_count=len(self.agents))
 
     async def cancel(self) -> None:
         """Cancel the swarm execution."""
@@ -457,6 +466,7 @@ class SwarmOrchestrator:
 
             log.info("swarm_phase_executing", swarm_id=self.swarm_id)
             await self._execute()
+            await self._cleanup_agents()
 
             log.info("swarm_phase_synthesizing", swarm_id=self.swarm_id)
             report = await self._synthesize(goal)
@@ -614,7 +624,11 @@ class SwarmOrchestrator:
                 skill_directories=skill_dirs,
                 disabled_skills=disabled_skills,
             )
-            await agent.create_session(self.client)
+            if self.client_factory:
+                agent_client = await self.client_factory()
+                await agent.create_session(agent_client, owns_client=True)
+            else:
+                await agent.create_session(self.client)
             self.agents[name] = agent
 
             await self.registry.register(name, role, display_name)
@@ -670,7 +684,11 @@ class SwarmOrchestrator:
             skill_directories=base.skill_directories,
             disabled_skills=base.disabled_skills,
         )
-        await ephemeral.create_session(self.client)
+        if self.client_factory:
+            agent_client = await self.client_factory()
+            await ephemeral.create_session(agent_client, owns_client=True)
+        else:
+            await ephemeral.create_session(self.client)
         return ephemeral
 
     # ------------------------------------------------------------------

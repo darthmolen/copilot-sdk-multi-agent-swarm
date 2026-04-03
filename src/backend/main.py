@@ -53,7 +53,7 @@ try:
 except ValueError:
     SWARM_MAX_ROUNDS = 5
 
-SWARM_MODEL: str = os.environ.get("SWARM_MODEL", "gemini-3-pro-preview")
+SWARM_MODEL: str = os.environ.get("SWARM_MODEL", "claude-sonnet-4.6")
 CORS_ORIGINS: list[str] = [
     o.strip() for o in os.environ.get(
         "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
@@ -127,8 +127,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         log.warning("templates_dir_not_found", path=str(templates_dir))
 
+    # --- Client factory for per-agent CLI processes -------------------------
+    client_factory = None
+    if copilot_client is not None:
+        cli_path = shutil.which("copilot")
+        if cli_path:
+            async def _make_agent_client() -> Any:
+                from copilot import CopilotClient, SubprocessConfig  # type: ignore[import-not-found]
+                client = CopilotClient(SubprocessConfig(cli_path=cli_path, use_stdio=True))
+                await client.start()
+                return client
+
+            client_factory = _make_agent_client
+            log.info("client_factory_configured", cli_path=cli_path)
+
     # --- Wire dependencies ------------------------------------------------
-    configure(event_bus, copilot_client, template_loader)
+    configure(event_bus, copilot_client, template_loader, client_factory=client_factory)
 
     # --- EventBus → WebSocket forwarder -----------------------------------
     def _make_ws_forwarder():  # noqa: ANN202
