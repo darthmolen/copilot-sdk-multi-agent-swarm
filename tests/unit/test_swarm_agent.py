@@ -406,6 +406,75 @@ async def test_execute_task_unsubscribes_on_completion(
 
 
 # ---------------------------------------------------------------------------
+# Circuit breaker — consecutive tool failures
+# ---------------------------------------------------------------------------
+
+
+async def test_circuit_breaker_trips_after_consecutive_tool_failures(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    task_board: TaskBoard,
+) -> None:
+    """Agent stops execution after MAX_TOOL_FAILURES consecutive tool failures."""
+    await agent.create_session(mock_client)
+    task = await _make_task(task_board)
+
+    async def _fire_tool_failures() -> None:
+        await asyncio.sleep(0.01)
+        # Fire 5 consecutive tool failures (no successes in between)
+        for i in range(5):
+            mock_session.fire_event(SessionEvent(
+                type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                data=SessionEventData(
+                    tool_call_id=f"tc-{i}",
+                    success=False,
+                    error='"command": Required',
+                ),
+            ))
+
+    asyncio.ensure_future(_fire_tool_failures())
+    await agent.execute_task(task, timeout=5)
+
+    tasks = await task_board.get_tasks()
+    assert tasks[0].status == TaskStatus.FAILED
+    assert "circuit breaker" in (tasks[0].result or "").lower()
+
+
+async def test_circuit_breaker_resets_on_successful_tool(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    task_board: TaskBoard,
+) -> None:
+    """A successful tool call resets the consecutive failure counter."""
+    await agent.create_session(mock_client)
+    task = await _make_task(task_board)
+
+    async def _fire_mixed_events() -> None:
+        await asyncio.sleep(0.01)
+        # 4 failures, then 1 success, then 4 more failures — should NOT trip
+        for i in range(4):
+            mock_session.fire_event(SessionEvent(
+                type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                data=SessionEventData(tool_call_id=f"tc-{i}", success=False, error="err"),
+            ))
+        mock_session.fire_event(SessionEvent(
+            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+            data=SessionEventData(tool_call_id="tc-ok", success=True),
+        ))
+        for i in range(4):
+            mock_session.fire_event(SessionEvent(
+                type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                data=SessionEventData(tool_call_id=f"tc-b{i}", success=False, error="err"),
+            ))
+        # Then idle — task should complete normally, not circuit break
+        mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
+
+    asyncio.ensure_future(_fire_mixed_events())
+    await agent.execute_task(task, timeout=5)
+
+    tasks = await task_board.get_tasks()
+    assert tasks[0].status == TaskStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
 # event_callback wiring
 # ---------------------------------------------------------------------------
 

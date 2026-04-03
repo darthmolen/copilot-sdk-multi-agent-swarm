@@ -524,6 +524,21 @@ class TestGranularEvents:
             assert "id" in d["task"]
             assert "status" in d["task"]
 
+    async def test_execute_emits_rounds_exhausted_when_tasks_remain(self, event_bus: EventBus) -> None:
+        """When max_rounds is reached with pending tasks, swarm.rounds_exhausted is emitted."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, config={"max_rounds": 1, "timeout": 300})
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+
+        exhausted = [(t, d) for t, d in events if t == "swarm.rounds_exhausted"]
+        assert len(exhausted) == 1, "Expected swarm.rounds_exhausted event"
+        assert exhausted[0][1]["remaining_tasks"] > 0
+        assert exhausted[0][1]["max_rounds"] == 1
+
     async def test_execute_emits_phase_changed_executing(self, event_bus: EventBus) -> None:
         events: list[tuple[str, dict]] = []
         event_bus.subscribe(lambda t, d: events.append((t, d)))
@@ -1507,6 +1522,52 @@ class TestMaxInstances:
         assert spawn_sessions == 1, f"Expected 1 spawn session, got {spawn_sessions}"
         # execute should create 2 more ephemeral sessions (3 tasks - 1 base = 2 ephemeral)
         assert total_sessions == 3, f"Expected 3 total sessions (1 base + 2 ephemeral), got {total_sessions}"
+
+    async def test_ephemeral_sessions_created_in_parallel(
+        self, event_bus: EventBus
+    ) -> None:
+        """Ephemeral agent sessions are created concurrently, not sequentially."""
+        template = _make_scalable_template(max_instances=3)
+        creation_log: list[tuple[str, float]] = []
+
+        class TimingClient:
+            def __init__(self, base: MockCopilotClient) -> None:
+                self._base = base
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                creation_log.append(("start", asyncio.get_event_loop().time()))
+                await asyncio.sleep(0.05)  # Simulate network I/O
+                creation_log.append(("end", asyncio.get_event_loop().time()))
+                return await self._base.create_session(**kwargs)
+
+        base_client = MockCopilotClient(leader_plan=SCALABLE_PLAN)
+        client = TimingClient(base_client)
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            template=template,
+        )
+
+        plan = await orch._plan("Build modules")
+        await orch._spawn(plan)
+        creation_log.clear()  # Reset after spawn
+
+        await orch._execute()
+
+        # 2 ephemeral sessions should be created (3 tasks - 1 base)
+        starts = [t for label, t in creation_log if label == "start"]
+        assert len(starts) >= 2, f"Expected at least 2 ephemeral sessions, got {len(starts)}"
+
+        # If parallel: both starts should happen before either ends
+        # If sequential: start[1] happens after end[0]
+        # Check: time between first and second start should be < the sleep duration
+        if len(starts) >= 2:
+            gap = starts[1] - starts[0]
+            assert gap < 0.04, (
+                f"Ephemeral sessions created sequentially (gap={gap:.3f}s). "
+                f"Expected parallel creation (gap < 0.04s)."
+            )
 
 
 # ---------------------------------------------------------------------------

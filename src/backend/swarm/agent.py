@@ -137,6 +137,8 @@ class SwarmAgent:
         """Forward SDK events to the EventBus."""
         self.event_bus.emit_sync("sdk_event", {"agent": self.name, "event": event})
 
+    MAX_TOOL_FAILURES = 5
+
     async def execute_task(
         self, task: Task, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
     ) -> None:
@@ -147,8 +149,10 @@ class SwarmAgent:
         error_holder: list[str] = []
         text_content: list[str] = []
         delta_parts: list[str] = []
+        consecutive_tool_failures = 0
 
         def _handler(event: Any) -> None:
+            nonlocal consecutive_tool_failures
             raw = getattr(event, "type", "")
             et = getattr(raw, "value", str(raw)).lower()
 
@@ -163,6 +167,24 @@ class SwarmAgent:
                     getattr(data, "error", None) or getattr(data, "message", "unknown error")
                 )
                 done.set()
+            # Circuit breaker: track consecutive tool failures
+            if "tool.execution_complete" in et or "tool_execution_complete" in et:
+                data = getattr(event, "data", None)
+                success = getattr(data, "success", None)
+                if success is False:
+                    consecutive_tool_failures += 1
+                    if consecutive_tool_failures >= self.MAX_TOOL_FAILURES:
+                        error_msg = getattr(data, "error", "") or ""
+                        error_holder.append(
+                            f"Circuit breaker: {consecutive_tool_failures} consecutive "
+                            f"tool failures. Last error: {error_msg}"
+                        )
+                        log.warning("circuit_breaker_tripped",
+                                    agent=self.name, task_id=task.id,
+                                    failures=consecutive_tool_failures)
+                        done.set()
+                elif success is True:
+                    consecutive_tool_failures = 0
             # Accumulate streamed deltas as fallback
             if "assistant.message_delta" in et:
                 data = getattr(event, "data", None)
@@ -206,7 +228,7 @@ class SwarmAgent:
                 return
 
             if error_holder:
-                await self.task_board.update_status(task.id, "failed")
+                await self.task_board.update_status(task.id, "failed", error_holder[0])
                 return
 
             # Check if agent already completed via task_update tool

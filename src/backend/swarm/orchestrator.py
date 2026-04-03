@@ -721,20 +721,35 @@ class SwarmOrchestrator:
                 })
 
             # Prepare execution: base agent for first task, ephemeral for rest
-            coros = []
             task_agent_pairs: list[tuple[str, Task]] = []
             ephemeral_agents: list[SwarmAgent] = []
 
+            # Phase 1: Collect ephemeral agent creation coroutines
+            creation_coros: list[Any] = []
+            execution_plan: list[tuple[SwarmAgent | None, str, Task]] = []
             for worker_name, tasks in assigned.items():
                 base_agent = self.agents[worker_name]
                 for idx, task in enumerate(tasks):
                     if idx == 0:
-                        coros.append(base_agent.execute_task(task, timeout=timeout))
+                        execution_plan.append((base_agent, worker_name, task))
                     else:
-                        ephemeral = await self._create_ephemeral_agent(worker_name)
-                        ephemeral_agents.append(ephemeral)
-                        coros.append(ephemeral.execute_task(task, timeout=timeout))
-                    task_agent_pairs.append((worker_name, task))
+                        creation_coros.append(self._create_ephemeral_agent(worker_name))
+                        execution_plan.append((None, worker_name, task))
+
+            # Phase 2: Create all ephemeral agents in parallel
+            created = await asyncio.gather(*creation_coros) if creation_coros else []
+            ephemeral_agents.extend(created)
+
+            # Phase 3: Assign agents and build execution coroutines
+            coros = []
+            ephemeral_idx = 0
+            for agent_or_none, worker_name, task in execution_plan:
+                if agent_or_none is not None:
+                    coros.append(agent_or_none.execute_task(task, timeout=timeout))
+                else:
+                    coros.append(ephemeral_agents[ephemeral_idx].execute_task(task, timeout=timeout))
+                    ephemeral_idx += 1
+                task_agent_pairs.append((worker_name, task))
 
             results = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -776,6 +791,18 @@ class SwarmOrchestrator:
 
             await self._emit("swarm.round_end", {"round": round_num})
             await self._scan_work_dir()
+
+        # Warn if tasks remain after all rounds exhausted
+        remaining = await self.task_board.get_runnable_tasks()
+        if remaining:
+            log.warning("swarm_rounds_exhausted",
+                        swarm_id=self.swarm_id,
+                        remaining_tasks=len(remaining),
+                        max_rounds=max_rounds)
+            await self._emit("swarm.rounds_exhausted", {
+                "remaining_tasks": len(remaining),
+                "max_rounds": max_rounds,
+            })
 
     # ------------------------------------------------------------------
     # Phase 4: Synthesis (tool-based structured output)
