@@ -462,12 +462,13 @@ class TestGranularEvents:
         assert task_created[1][1]["task"]["id"] == "task-1"
         assert task_created[1][1]["task"]["worker_name"] == "writer"
 
-    async def test_plan_emits_phase_changed_planning(self, event_bus: EventBus) -> None:
+    async def test_run_emits_phase_changed_planning_before_plan(self, event_bus: EventBus) -> None:
+        """Planning phase event is emitted from run() before _plan() starts."""
         events: list[tuple[str, dict]] = []
         event_bus.subscribe(lambda t, d: events.append((t, d)))
 
         orch = make_orchestrator(event_bus)
-        await orch._plan("Build something")
+        await orch.run("Build something")
 
         phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
         phases = [d["phase"] for _, d in phase_events]

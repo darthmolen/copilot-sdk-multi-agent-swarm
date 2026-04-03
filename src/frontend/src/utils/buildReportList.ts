@@ -1,7 +1,7 @@
 import type { SwarmState, SavedReport } from '../types/swarm';
 import { truncateTitle } from './savedReportStorage';
 
-export type ReportStatus = 'generating' | 'live' | 'saved';
+export type ReportStatus = 'running' | 'generating' | 'live' | 'saved';
 
 export interface ReportListItem {
   swarmId: string;
@@ -19,10 +19,11 @@ export function buildReportList(
   const items: ReportListItem[] = [];
   const seenIds = new Set<string>();
 
-  // Active swarms that are synthesizing with partial report
+  // Active swarms: synthesizing with report → 'generating', all others → 'running'
   for (const id of activeSwarmIds) {
     const swarm = swarms[id];
-    if (swarm?.leaderReport && swarm.phase === 'synthesizing') {
+    if (!swarm) continue;
+    if (swarm.leaderReport && swarm.phase === 'synthesizing') {
       const firstLine = swarm.leaderReport.split('\n')[0].replace(/^#+\s*/, '');
       items.push({
         swarmId: id,
@@ -30,8 +31,15 @@ export function buildReportList(
         timestamp: Date.now(),
         status: 'generating',
       });
-      seenIds.add(id);
+    } else {
+      items.push({
+        swarmId: id,
+        title: `Session ${id.slice(0, 8)}...`,
+        timestamp: Date.now(),
+        status: 'running',
+      });
     }
+    seenIds.add(id);
   }
 
   // Completed swarms with reports
@@ -63,10 +71,12 @@ export function buildReportList(
     }
   }
 
-  // Sort: generating first, then by timestamp descending
+  // Sort: running/generating first, then by timestamp descending
+  const priority = (s: ReportStatus) => (s === 'running' || s === 'generating') ? 0 : 1;
   items.sort((a, b) => {
-    if (a.status === 'generating' && b.status !== 'generating') return -1;
-    if (b.status === 'generating' && a.status !== 'generating') return 1;
+    const pa = priority(a.status);
+    const pb = priority(b.status);
+    if (pa !== pb) return pa - pb;
     return b.timestamp - a.timestamp;
   });
 

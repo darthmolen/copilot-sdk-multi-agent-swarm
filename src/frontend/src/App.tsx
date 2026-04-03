@@ -1,5 +1,5 @@
 import { useReducer, useCallback, useState, useEffect, useRef } from 'react';
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 import { multiSwarmReducer, initialMultiSwarmState, isThinking, shouldShowReportView } from './hooks/useSwarmState';
 import { chatReducer, initialChatStore } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -204,6 +204,12 @@ function SwarmDashboard() {
           setReportSwarmId(swarmId);
         }
 
+        // Auto-switch back to dashboard when swarm kicks off planning
+        if (event.type === 'swarm.phase_changed' && event.data.phase === 'planning') {
+          setReportSwarmId(null);
+          toast('Swarm started! Watch progress on the task board.', { icon: '\u{1F680}', duration: 5000 });
+        }
+
         // Live artifact list: append new files as agents write them
         if (event.type === 'file.created' && event.data.swarm_id === reportSwarmId) {
           const filename = event.data.filename as string;
@@ -261,7 +267,11 @@ function SwarmDashboard() {
   // When entering report view: ensure report on server + fetch file list
   const artifactFetchedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!reportSwarmId || artifactFetchedRef.current === reportSwarmId) return;
+    if (!reportSwarmId) {
+      artifactFetchedRef.current = null;  // Reset so re-entry re-fetches
+      return;
+    }
+    if (artifactFetchedRef.current === reportSwarmId) return;
     artifactFetchedRef.current = reportSwarmId;
 
     const apiKey = getApiKey();

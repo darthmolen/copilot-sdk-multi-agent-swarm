@@ -285,6 +285,13 @@
 .report-status-dot--saved {
   background: #6b7280;
 }
+.report-status-dot--running {
+  background: #3b82f6;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+.report-list-item--running {
+  border-left-color: #3b82f6;
+}
 
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }

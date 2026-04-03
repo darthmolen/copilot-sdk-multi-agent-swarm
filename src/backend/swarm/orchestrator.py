@@ -444,6 +444,7 @@ class SwarmOrchestrator:
                      goal_len=len(goal),
                      template=self.template.key if self.template else None,
                      client_type=type(self.client).__name__ if self.client else "None")
+            await self._emit("swarm.phase_changed", {"phase": "planning"})
             plan = await self._plan(goal)
             task_count = len(plan.get("tasks", []))
             log.info("swarm_plan_received", swarm_id=self.swarm_id,
@@ -521,8 +522,6 @@ class SwarmOrchestrator:
         plan = plan_holder[0]
 
         # Create tasks on the board
-        await self._emit("swarm.phase_changed", {"phase": "planning"})
-
         tasks_data = plan.get("tasks", [])
         task_ids: list[str] = [f"task-{idx}" for idx in range(len(tasks_data))]
 
