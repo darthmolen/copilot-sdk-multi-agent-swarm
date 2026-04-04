@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from unittest.mock import AsyncMock
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -88,3 +89,70 @@ async def test_service_add_task_without_create_swarm_raises():
             worker_role="r",
             worker_name="w",
         )
+
+
+# ---------------------------------------------------------------
+# Suspend
+# ---------------------------------------------------------------
+
+
+class TestSwarmServiceSuspend:
+    async def test_suspend_updates_phase(self) -> None:
+        """suspend() sets phase to 'suspended' in cache."""
+        service = SwarmService()
+        swarm_id = str(uuid4())
+        await service.create_swarm(swarm_id, goal="Test")
+
+        await service.suspend("rounds_exhausted")
+
+        assert service._phase == "suspended"
+
+    async def test_suspend_calls_repo_when_available(self) -> None:
+        """suspend() calls repo.suspend_swarm() if repo is set."""
+        mock_repo = AsyncMock()
+        service = SwarmService(repo=mock_repo)
+        swarm_id = str(uuid4())
+        await service.create_swarm(swarm_id, goal="Test")
+
+        await service.suspend("rounds_exhausted")
+
+        mock_repo.suspend_swarm.assert_awaited_once_with(UUID(swarm_id))
+
+    async def test_suspend_without_repo_still_works(self) -> None:
+        """suspend() works in memory-only mode (no repo)."""
+        service = SwarmService()
+        swarm_id = str(uuid4())
+        await service.create_swarm(swarm_id, goal="Test")
+
+        await service.suspend("rounds_exhausted")
+
+        assert service._phase == "suspended"
+
+
+# ---------------------------------------------------------------
+# Round tracking
+# ---------------------------------------------------------------
+
+
+class TestSwarmServiceRoundTracking:
+    async def test_update_round(self) -> None:
+        """update_round() persists round number."""
+        mock_repo = AsyncMock()
+        service = SwarmService(repo=mock_repo)
+        swarm_id = str(uuid4())
+        await service.create_swarm(swarm_id, goal="Test")
+
+        await service.update_round(3)
+
+        assert service._current_round == 3
+        mock_repo.update_round.assert_awaited_once_with(UUID(swarm_id), 3)
+
+    async def test_update_round_without_repo(self) -> None:
+        """update_round() works in memory-only mode."""
+        service = SwarmService()
+        swarm_id = str(uuid4())
+        await service.create_swarm(swarm_id, goal="Test")
+
+        await service.update_round(3)
+
+        assert service._current_round == 3
