@@ -43,6 +43,7 @@ swarm_store: dict[str, dict] = {}
 _event_bus: Any = None
 _copilot_client: Any = None
 _client_factory: Any = None
+_repository: Any = None
 _template_loader: TemplateLoader | None = None
 
 
@@ -57,13 +58,15 @@ def configure(
     copilot_client: Any = None,
     template_loader: TemplateLoader | None = None,
     client_factory: Any = None,
+    repository: Any = None,
 ) -> None:
     """Inject dependencies. Called during app startup."""
-    global _event_bus, _copilot_client, _template_loader, _client_factory
+    global _event_bus, _copilot_client, _template_loader, _client_factory, _repository
     _event_bus = event_bus
     _copilot_client = copilot_client
     _template_loader = template_loader
     _client_factory = client_factory
+    _repository = repository
 
 
 def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> dict:
@@ -131,6 +134,10 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
     log.info("swarm_config", swarm_id=swarm_id, model=SWARM_MODEL,
              max_rounds=SWARM_MAX_ROUNDS, timeout=SWARM_TASK_TIMEOUT)
 
+    # Create SwarmService with optional repo for persistence
+    from backend.services.swarm_service import SwarmService
+    service = SwarmService(repo=_repository) if _repository else SwarmService()
+
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
         config=config,
@@ -139,6 +146,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         swarm_id=swarm_id, work_base=work_base,
         model=SWARM_MODEL,
         client_factory=_client_factory,
+        service=service,
     )
     swarm_store[swarm_id]["orchestrator"] = orch
 
@@ -607,3 +615,36 @@ async def deploy_template_zip(file: UploadFile) -> dict:
         "name": meta.get("name", template_key),
         "description": meta.get("description", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# Event replay + Swarm list (requires persistence)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/swarm/{swarm_id}/events")
+async def get_swarm_events(swarm_id: str, since: str | None = None):
+    """Return event log for replay. Requires DATABASE_URL configured."""
+    if _repository is None:
+        return JSONResponse({"error": "Persistence not configured"}, status_code=404)
+    from uuid import UUID
+    from datetime import datetime, timezone
+
+    swarm_uuid = UUID(swarm_id)
+    since_dt = datetime.fromisoformat(since) if since else None
+    events = await _repository.get_events(swarm_uuid, since=since_dt)
+    return {"events": events}
+
+
+@router.get("/api/swarms")
+async def list_swarms():
+    """Return all swarms from DB. Requires DATABASE_URL configured."""
+    if _repository is None:
+        return JSONResponse({"error": "Persistence not configured"}, status_code=404)
+    swarms = await _repository.list_swarms()
+    # Convert UUIDs and datetimes to strings for JSON
+    result = []
+    for s in swarms:
+        entry = {k: str(v) if hasattr(v, 'hex') else v for k, v in s.items()}
+        result.append(entry)
+    return {"swarms": result}

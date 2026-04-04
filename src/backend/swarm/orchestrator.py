@@ -88,13 +88,20 @@ class SwarmOrchestrator:
         swarm_id: str | None = None,
         work_base: Path | None = None,
         client_factory: Any | None = None,
+        service: Any | None = None,
     ) -> None:
         self.client = client
         self.client_factory = client_factory
         self.event_bus = event_bus
-        self.task_board = TaskBoard()
-        self.inbox = InboxSystem()
-        self.registry = TeamRegistry()
+        self.service = service
+        if service is not None:
+            self.task_board = service.task_board
+            self.inbox = service.inbox
+            self.registry = service.registry
+        else:
+            self.task_board = TaskBoard()
+            self.inbox = InboxSystem()
+            self.registry = TeamRegistry()
         self.agents: dict[str, SwarmAgent] = {}
         self._agent_defs: dict[str, AgentDefinition] = {}
         default_config: dict[str, Any] = {"max_rounds": 3, "timeout": 1800}
