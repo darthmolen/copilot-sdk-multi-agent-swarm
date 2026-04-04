@@ -34,12 +34,10 @@ import math
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 import numpy as np
 
 from prefill.interfaces import ContextBlock, MemoryStore, RetrievalStrategy
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -145,8 +143,8 @@ class SQLiteMemoryStore(MemoryStore):
         timestamp: datetime,
         tags: list[str],
         memory_type: str = "episodic",
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """
         Insert a new memory record and return its UUID.
@@ -420,7 +418,7 @@ if __name__ == "__main__":
         session_id="session-3",
     )
 
-    print(f"Added 4 episodic memories for user 'alice'.\n")
+    print("Added 4 episodic memories for user 'alice'.\n")
 
     # Retrieve before consolidation to see raw episodic memories.
     pre_blocks = strategy.retrieve(

@@ -21,7 +21,6 @@ import numpy as np
 
 from prefill.interfaces import ContextBlock, RetrievalStrategy
 
-
 # ---------------------------------------------------------------------------
 # Helpers (shared embedding logic)
 # ---------------------------------------------------------------------------

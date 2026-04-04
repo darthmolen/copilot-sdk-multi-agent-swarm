@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any
 
 import structlog
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -55,9 +56,9 @@ except ValueError:
 
 SWARM_MODEL: str = os.environ.get("SWARM_MODEL", "claude-sonnet-4.6")
 CORS_ORIGINS: list[str] = [
-    o.strip() for o in os.environ.get(
-        "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
-    ).split(",") if o.strip()
+    o.strip()
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    if o.strip()
 ]
 SWARM_WORK_DIR: str = os.environ.get("SWARM_WORK_DIR", "workdir")
 TEMPLATES_DIR: str = os.environ.get("TEMPLATES_DIR", "src/templates")
@@ -72,9 +73,7 @@ STATIC_DIR: str = os.environ.get("STATIC_DIR", "static")
 
 def _auth_required() -> bool:
     """Auth is required unless ENVIRONMENT=development AND no key is set."""
-    if ENVIRONMENT == "development" and not SWARM_API_KEY:
-        return False
-    return True
+    return not (ENVIRONMENT == "development" and not SWARM_API_KEY)
 
 
 async def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")) -> None:
@@ -98,6 +97,7 @@ async def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifecycle (startup/shutdown)."""
@@ -109,9 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         cli_path = shutil.which("copilot")
         if cli_path:
-            copilot_client = CopilotClient(
-                SubprocessConfig(cli_path=cli_path, use_stdio=True)
-            )
+            copilot_client = CopilotClient(SubprocessConfig(cli_path=cli_path, use_stdio=True))
             await copilot_client.start()
             log.info("copilot_cli_connected", cli_path=cli_path)
         else:
@@ -132,8 +130,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if copilot_client is not None:
         cli_path = shutil.which("copilot")
         if cli_path:
+
             async def _make_agent_client() -> Any:
                 from copilot import CopilotClient, SubprocessConfig  # type: ignore[import-not-found]
+
                 client = CopilotClient(SubprocessConfig(cli_path=cli_path, use_stdio=True))
                 await client.start()
                 return client
@@ -148,8 +148,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     db_engine = None
     if db_url:
         from backend.db.engine import create_async_engine
-        from backend.db.repository import SwarmRepository
         from backend.db.event_logger import EventLogger
+        from backend.db.repository import SwarmRepository
 
         db_engine = create_async_engine(db_url)
         repository = SwarmRepository(db_engine)
@@ -158,12 +158,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # --- Wire dependencies ------------------------------------------------
     configure(
-        event_bus, copilot_client, template_loader,
-        client_factory=client_factory, repository=repository,
+        event_bus,
+        copilot_client,
+        template_loader,
+        client_factory=client_factory,
+        repository=repository,
     )
 
     # --- MCP server dependencies ------------------------------------------
     from backend.mcp.deps import configure as configure_mcp
+
     configure_mcp(
         swarm_store=swarm_store,
         work_dir=SWARM_WORK_DIR,
@@ -173,11 +177,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Start MCP session manager (streamable HTTP transport requires run())
     from backend.mcp.server import get_session_manager
+
     _mcp_cm = get_session_manager().run()
     await _mcp_cm.__aenter__()
 
     # --- EventBus → WebSocket forwarder -----------------------------------
-    def _make_ws_forwarder():  # noqa: ANN202
+    def _make_ws_forwarder():
         async def _forward(event_type: str, data: dict) -> None:
             # Skip internal SDK events (contain non-serializable objects)
             # Log them for backend observability, but don't forward to frontend
@@ -193,36 +198,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     content = getattr(event_data, "content", None)
                     if content:
                         extra["content"] = str(content)[:300]
-                    for field in ("tool_name", "tool_call_id", "error", "message",
-                                  "reasoning_effort", "turn_id", "success"):
+                    for field in (
+                        "tool_name",
+                        "tool_call_id",
+                        "error",
+                        "message",
+                        "reasoning_effort",
+                        "turn_id",
+                        "success",
+                    ):
                         val = getattr(event_data, field, None)
                         if val is not None:
                             extra[field] = str(val)[:200]
                     # Permission request details
                     tool_requests = getattr(event_data, "tool_requests", None)
                     if tool_requests:
-                        extra["tool_requests"] = str([
-                            getattr(tr, "name", tr) for tr in tool_requests[:5]
-                        ])
+                        extra["tool_requests"] = str([getattr(tr, "name", tr) for tr in tool_requests[:5]])
 
                 log.debug("sdk_event", agent=agent, sdk_type=sdk_type, **extra)
                 return
 
-            swarm_id = data.get("swarm_id", None)
+            swarm_id = data.get("swarm_id")
             extra_log: dict[str, str] = {}
             if event_type == "leader.chat_tool_start":
                 extra_log["tool_name"] = data.get("tool_name", "")
             log.info("event_forwarded", event_type=event_type, swarm_id=swarm_id or "broadcast", **extra_log)
 
             if swarm_id:
-                await manager.broadcast(
-                    swarm_id, {"type": event_type, "data": data}
-                )
+                await manager.broadcast(swarm_id, {"type": event_type, "data": data})
             else:
                 for sid in list(swarm_store.keys()):
-                    await manager.broadcast(
-                        sid, {"type": event_type, "data": data}
-                    )
+                    await manager.broadcast(sid, {"type": event_type, "data": data})
 
         return _forward
 
@@ -273,7 +279,7 @@ class _MCPAuthMiddleware:
     def __init__(self, asgi_app: Any) -> None:
         self.app = asgi_app
 
-    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if not _auth_required():
             return await self.app(scope, receive, send)
 
@@ -283,15 +289,20 @@ class _MCPAuthMiddleware:
         if key != SWARM_API_KEY:
             # Return 401
             async def _send_401(send: Any) -> None:
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [[b"content-type", b"application/json"]],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": b'{"error":"Invalid API key"}',
-                })
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [[b"content-type", b"application/json"]],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b'{"error":"Invalid API key"}',
+                    }
+                )
+
             await _send_401(send)
             return
 

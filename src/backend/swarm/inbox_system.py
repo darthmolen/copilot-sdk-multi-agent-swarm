@@ -48,9 +48,7 @@ class InboxSystem:
         async with self._lock:
             return list(self._inboxes.get(agent_name, []))
 
-    async def broadcast(
-        self, sender: str, content: str, exclude: list[str] | None = None
-    ) -> list[InboxMessage]:
+    async def broadcast(self, sender: str, content: str, exclude: list[str] | None = None) -> list[InboxMessage]:
         """Send a message to all registered agents except sender and any in exclude."""
         exclude_set = {sender}
         if exclude:

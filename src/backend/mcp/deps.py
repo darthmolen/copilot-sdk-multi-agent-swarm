@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.swarm.models import SwarmState
+
 
 @dataclass
 class MCPDeps:
-    swarm_store: dict[str, dict] = field(default_factory=dict)
+    swarm_store: dict[str, SwarmState] = field(default_factory=dict)
     work_dir: str = "workdir"
     event_bus: Any = None
     repository: Any = None  # SwarmRepository, optional
@@ -18,7 +20,7 @@ _deps: MCPDeps | None = None
 
 
 def configure(
-    swarm_store: dict[str, dict],
+    swarm_store: dict[str, SwarmState],
     work_dir: str,
     event_bus: Any = None,
     repository: Any = None,

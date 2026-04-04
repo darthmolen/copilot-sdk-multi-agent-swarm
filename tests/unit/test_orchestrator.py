@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,6 @@ from backend.swarm.models import TaskStatus
 from backend.swarm.orchestrator import SwarmOrchestrator
 from backend.swarm.template_loader import AgentDefinition, LoadedTemplate
 from backend.swarm.tools import Tool, ToolInvocation
-
 
 # ---------------------------------------------------------------------------
 # Sample plan data
@@ -99,17 +97,21 @@ class MockToolCallingSession:
         # Fire assistant.message with content (for event-driven text capture)
         if self._send_and_wait_response:
             for h in list(self._handlers):
-                h(SessionEvent(
-                    type=SessionEventType.ASSISTANT_MESSAGE,
-                    data=SessionEventData(content=self._send_and_wait_response),
-                ))
+                h(
+                    SessionEvent(
+                        type=SessionEventType.ASSISTANT_MESSAGE,
+                        data=SessionEventData(content=self._send_and_wait_response),
+                    )
+                )
 
         # Fire turn_end
         for h in list(self._handlers):
-            h(SessionEvent(
-                type=SessionEventType.SESSION_IDLE,
-                data=SessionEventData(turn_id="turn-1"),
-            ))
+            h(
+                SessionEvent(
+                    type=SessionEventType.SESSION_IDLE,
+                    data=SessionEventData(turn_id="turn-1"),
+                )
+            )
         return "msg-1"
 
 
@@ -133,16 +135,20 @@ class MockWorkerSession:
     async def send(self, prompt: str, **kwargs: Any) -> str:
         if self._fail:
             for h in list(self._handlers):
-                h(SessionEvent(
-                    type=SessionEventType.SESSION_ERROR,
-                    data=SessionEventData(error="Agent execution failed"),
-                ))
+                h(
+                    SessionEvent(
+                        type=SessionEventType.SESSION_ERROR,
+                        data=SessionEventData(error="Agent execution failed"),
+                    )
+                )
             return "msg-1"
         for h in list(self._handlers):
-            h(SessionEvent(
-                type=SessionEventType.SESSION_IDLE,
-                data=SessionEventData(turn_id="turn-1"),
-            ))
+            h(
+                SessionEvent(
+                    type=SessionEventType.SESSION_IDLE,
+                    data=SessionEventData(turn_id="turn-1"),
+                )
+            )
         return "msg-1"
 
 
@@ -223,8 +229,11 @@ def make_orchestrator(
         synthesis_report=synthesis_report,
     )
     return SwarmOrchestrator(
-        client=client, event_bus=event_bus, config=config,
-        swarm_id=swarm_id, work_base=work_base,
+        client=client,
+        event_bus=event_bus,
+        config=config,
+        swarm_id=swarm_id,
+        work_base=work_base,
     )
 
 
@@ -302,8 +311,20 @@ class TestSpawn:
         plan_with_dups = {
             "team_description": "Dup team",
             "tasks": [
-                {"subject": "T1", "description": "D1", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []},
-                {"subject": "T2", "description": "D2", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []},
+                {
+                    "subject": "T1",
+                    "description": "D1",
+                    "worker_role": "Analyst",
+                    "worker_name": "analyst",
+                    "blocked_by_indices": [],
+                },
+                {
+                    "subject": "T2",
+                    "description": "D2",
+                    "worker_role": "Analyst",
+                    "worker_name": "analyst",
+                    "blocked_by_indices": [],
+                },
             ],
         }
         orch = make_orchestrator(event_bus)
@@ -354,8 +375,20 @@ class TestExecute:
         independent_plan = {
             "team_description": "Test team",
             "tasks": [
-                {"subject": "Task 1", "description": "Do thing 1", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []},
-                {"subject": "Task 2", "description": "Do thing 2", "worker_role": "Writer", "worker_name": "writer", "blocked_by_indices": []},
+                {
+                    "subject": "Task 1",
+                    "description": "Do thing 1",
+                    "worker_role": "Analyst",
+                    "worker_name": "analyst",
+                    "blocked_by_indices": [],
+                },
+                {
+                    "subject": "Task 2",
+                    "description": "Do thing 2",
+                    "worker_role": "Writer",
+                    "worker_name": "writer",
+                    "blocked_by_indices": [],
+                },
             ],
         }
 
@@ -382,8 +415,11 @@ class TestSynthesize:
         orch = make_orchestrator(event_bus, synthesis_report="The final synthesis report")
 
         await orch.task_board.add_task(
-            id="task-0", subject="Research", description="Do research",
-            worker_role="Analyst", worker_name="analyst",
+            id="task-0",
+            subject="Research",
+            description="Do research",
+            worker_role="Analyst",
+            worker_name="analyst",
         )
         await orch.task_board.update_status("task-0", "completed", "Research findings")
 
@@ -394,8 +430,11 @@ class TestSynthesize:
         """After synthesis, orchestrator stores synthesis_session_id."""
         orch = make_orchestrator(event_bus, swarm_id="swarm-abc", synthesis_report="Report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -409,8 +448,11 @@ class TestSynthesize:
 
         orch = make_orchestrator(event_bus, swarm_id="swarm-chat", synthesis_report="Original report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -432,8 +474,11 @@ class TestSynthesize:
         orch = make_orchestrator(event_bus, synthesis_report="Report text")
 
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -559,8 +604,11 @@ class TestGranularEvents:
 
         orch = make_orchestrator(event_bus, synthesis_report="The great report")
         await orch.task_board.add_task(
-            id="task-0", subject="Research", description="Do research",
-            worker_role="Analyst", worker_name="analyst",
+            id="task-0",
+            subject="Research",
+            description="Do research",
+            worker_role="Analyst",
+            worker_name="analyst",
         )
         await orch.task_board.update_status("task-0", "completed", "findings")
 
@@ -576,8 +624,11 @@ class TestGranularEvents:
 
         orch = make_orchestrator(event_bus, synthesis_report="report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -595,8 +646,11 @@ class TestGranularEvents:
 
         orch = make_orchestrator(event_bus, swarm_id="swarm-stream", synthesis_report="Original report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -609,6 +663,7 @@ class TestGranularEvents:
 
         # Allow emit_sync scheduled tasks to execute
         import asyncio
+
         await asyncio.sleep(0.05)
 
         # Should emit leader.chat_delta from the assistant.message content
@@ -618,7 +673,6 @@ class TestGranularEvents:
         # The delta content should contain the response text
         delta_content = "".join(d["delta"] for _, d in delta_events)
         assert len(delta_content) > 0, "Delta content should not be empty"
-
 
     async def test_synthesize_emits_report_deltas(self, event_bus: EventBus) -> None:
         """Synthesis streams leader.report_delta events as the report is being written."""
@@ -651,22 +705,28 @@ class TestGranularEvents:
                     # Fire deltas
                     for chunk in ["Hello ", "world"]:
                         for h in list(self._handlers):
-                            h(SessionEvent(
-                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
-                                data=SessionEventData(content=chunk),
-                            ))
+                            h(
+                                SessionEvent(
+                                    type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                    data=SessionEventData(content=chunk),
+                                )
+                            )
                     # Fire full message
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.ASSISTANT_MESSAGE,
-                            data=SessionEventData(content="Hello world"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.ASSISTANT_MESSAGE,
+                                data=SessionEventData(content="Hello world"),
+                            )
+                        )
                     # Fire idle
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.SESSION_IDLE,
-                            data=SessionEventData(turn_id="turn-1"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.SESSION_IDLE,
+                                data=SessionEventData(turn_id="turn-1"),
+                            )
+                        )
                     return "msg-1"
 
             return StreamingSession()
@@ -674,11 +734,16 @@ class TestGranularEvents:
         client.create_session = _streaming_session  # type: ignore[assignment]
 
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, swarm_id="swarm-delta",
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-delta",
         )
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -693,7 +758,6 @@ class TestGranularEvents:
         assert delta_events[0][1]["delta"] == "Hello "
         assert delta_events[1][1]["delta"] == "world"
         assert delta_events[0][1]["swarm_id"] == "swarm-delta"
-
 
     async def test_synthesize_captures_delta_only_content(self, event_bus: EventBus) -> None:
         """When SDK sends only deltas (no assistant.message), synthesis still captures the report."""
@@ -719,16 +783,20 @@ class TestGranularEvents:
                 async def send(self, prompt: str, **kw: Any) -> str:
                     for chunk in ["Delta ", "report ", "content"]:
                         for h in list(self._handlers):
-                            h(SessionEvent(
-                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
-                                data=SessionEventData(content=chunk),
-                            ))
+                            h(
+                                SessionEvent(
+                                    type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                    data=SessionEventData(content=chunk),
+                                )
+                            )
                     # NO assistant.message — just idle
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.SESSION_IDLE,
-                            data=SessionEventData(turn_id="turn-1"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.SESSION_IDLE,
+                                data=SessionEventData(turn_id="turn-1"),
+                            )
+                        )
                     return "msg-1"
 
             return DeltaOnlySession()
@@ -736,11 +804,16 @@ class TestGranularEvents:
         client.create_session = _delta_only_session  # type: ignore[assignment]
 
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, swarm_id="swarm-delta-only",
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-delta-only",
         )
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -775,21 +848,27 @@ class TestGranularEvents:
                     # Fire deltas
                     for chunk in ["Del", "ta"]:
                         for h in list(self._handlers):
-                            h(SessionEvent(
-                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
-                                data=SessionEventData(content=chunk),
-                            ))
+                            h(
+                                SessionEvent(
+                                    type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                    data=SessionEventData(content=chunk),
+                                )
+                            )
                     # Fire full message (this should be preferred)
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.ASSISTANT_MESSAGE,
-                            data=SessionEventData(content="Full message"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.ASSISTANT_MESSAGE,
+                                data=SessionEventData(content="Full message"),
+                            )
+                        )
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.SESSION_IDLE,
-                            data=SessionEventData(turn_id="turn-1"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.SESSION_IDLE,
+                                data=SessionEventData(turn_id="turn-1"),
+                            )
+                        )
                     return "msg-1"
 
             return BothSession()
@@ -797,11 +876,16 @@ class TestGranularEvents:
         client.create_session = _both_session  # type: ignore[assignment]
 
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, swarm_id="swarm-both",
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-both",
         )
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
@@ -831,15 +915,19 @@ class TestGranularEvents:
                 async def send(self, prompt: str, **kw: Any) -> str:
                     for chunk in ["Chat ", "delta ", "response"]:
                         for h in list(self._handlers):
-                            h(SessionEvent(
-                                type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
-                                data=SessionEventData(content=chunk),
-                            ))
+                            h(
+                                SessionEvent(
+                                    type=SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                                    data=SessionEventData(content=chunk),
+                                )
+                            )
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.SESSION_IDLE,
-                            data=SessionEventData(turn_id="turn-1"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.SESSION_IDLE,
+                                data=SessionEventData(turn_id="turn-1"),
+                            )
+                        )
                     return "msg-1"
 
             return DeltaOnlyChatSession()
@@ -848,20 +936,25 @@ class TestGranularEvents:
         client.resume_session = lambda *a, **kw: _create_with_tools()  # type: ignore[attr-defined]
 
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, swarm_id="swarm-chat-delta",
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-chat-delta",
         )
         orch.synthesis_session_id = "synth-swarm-chat-delta"
 
         response = await orch.chat("test")
-        assert response != "", f"Chat should capture deltas, got empty"
+        assert response != "", "Chat should capture deltas, got empty"
         assert "Chat delta response" in response
 
     async def test_chat_includes_active_file_in_prompt(self, event_bus: EventBus) -> None:
         """chat() with active_file includes the file path in the prompt sent to the session."""
         orch = make_orchestrator(event_bus, swarm_id="swarm-af", synthesis_report="Report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
         await orch._synthesize("goal")
@@ -880,8 +973,11 @@ class TestGranularEvents:
         """chat() without active_file still works (backward compat)."""
         orch = make_orchestrator(event_bus, swarm_id="swarm-noaf", synthesis_report="Report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
         await orch._synthesize("goal")
@@ -892,7 +988,9 @@ class TestGranularEvents:
 
 class TestFileWatcher:
     async def test_scan_emits_file_created_for_new_files(
-        self, event_bus: EventBus, tmp_path: Path,
+        self,
+        event_bus: EventBus,
+        tmp_path: Path,
     ) -> None:
         """_scan_work_dir emits file.created for new files in work directory."""
         events: list[tuple[str, dict]] = []
@@ -914,7 +1012,9 @@ class TestFileWatcher:
         assert filenames == {"design.md", "security.md"}
 
     async def test_scan_does_not_re_emit_known_files(
-        self, event_bus: EventBus, tmp_path: Path,
+        self,
+        event_bus: EventBus,
+        tmp_path: Path,
     ) -> None:
         """_scan_work_dir only emits for NEW files, not previously seen ones."""
         events: list[tuple[str, dict]] = []
@@ -937,7 +1037,8 @@ class TestFileWatcher:
         assert file_events[0][1]["filename"] == "second.md"
 
     async def test_scan_no_workdir_does_nothing(
-        self, event_bus: EventBus,
+        self,
+        event_bus: EventBus,
     ) -> None:
         """_scan_work_dir is a no-op when work_dir is None."""
         events: list[tuple[str, dict]] = []
@@ -1067,9 +1168,7 @@ class TestSwarmIdRouting:
         await orch._plan("Build something")
 
         for event_type, data in events:
-            assert data.get("swarm_id") == "swarm-123", (
-                f"{event_type} missing swarm_id: {data}"
-            )
+            assert data.get("swarm_id") == "swarm-123", f"{event_type} missing swarm_id: {data}"
 
     async def test_spawn_events_include_swarm_id(self, event_bus: EventBus) -> None:
         """Spawning phase events include swarm_id."""
@@ -1080,9 +1179,7 @@ class TestSwarmIdRouting:
         await orch._spawn(VALID_PLAN)
 
         for event_type, data in events:
-            assert data.get("swarm_id") == "swarm-456", (
-                f"{event_type} missing swarm_id: {data}"
-            )
+            assert data.get("swarm_id") == "swarm-456", f"{event_type} missing swarm_id: {data}"
 
     async def test_execute_events_include_swarm_id(self, event_bus: EventBus) -> None:
         """Execution phase events include swarm_id."""
@@ -1098,9 +1195,7 @@ class TestSwarmIdRouting:
         non_sdk = [(t, d) for t, d in events if t != "sdk_event"]
         assert len(non_sdk) > 0, "Expected execution events"
         for event_type, data in non_sdk:
-            assert data.get("swarm_id") == "swarm-789", (
-                f"{event_type} missing swarm_id: {data}"
-            )
+            assert data.get("swarm_id") == "swarm-789", f"{event_type} missing swarm_id: {data}"
 
     async def test_synthesize_events_include_swarm_id(self, event_bus: EventBus) -> None:
         """Synthesis phase events include swarm_id."""
@@ -1109,17 +1204,18 @@ class TestSwarmIdRouting:
 
         orch = make_orchestrator(event_bus, swarm_id="swarm-syn", synthesis_report="Report")
         await orch.task_board.add_task(
-            id="task-0", subject="R", description="D",
-            worker_role="A", worker_name="a",
+            id="task-0",
+            subject="R",
+            description="D",
+            worker_role="A",
+            worker_name="a",
         )
         await orch.task_board.update_status("task-0", "completed", "done")
 
         await orch._synthesize("goal")
 
         for event_type, data in events:
-            assert data.get("swarm_id") == "swarm-syn", (
-                f"{event_type} missing swarm_id: {data}"
-            )
+            assert data.get("swarm_id") == "swarm-syn", f"{event_type} missing swarm_id: {data}"
 
     async def test_tool_callback_events_include_swarm_id(self, event_bus: EventBus) -> None:
         """Tool events (task.updated, inbox.message) from agents include swarm_id."""
@@ -1133,23 +1229,28 @@ class TestSwarmIdRouting:
 
         # Simulate a task_update tool call through the agent's event_callback
         # The agent's _tool_event_callback should attach swarm_id
-        agent = list(orch.agents.values())[0]
+        agent = next(iter(orch.agents.values()))
         # Call the tool directly to trigger the callback
         from backend.swarm.tools import ToolInvocation
+
         task = (await orch.task_board.get_tasks())[0]
         tool = next(t for t in agent.session._tools if t.name == "task_update")
-        await tool.handler(ToolInvocation(arguments={
-            "task_id": task.id, "status": "in_progress",
-        }))
+        await tool.handler(
+            ToolInvocation(
+                arguments={
+                    "task_id": task.id,
+                    "status": "in_progress",
+                }
+            )
+        )
 
         import asyncio
+
         await asyncio.sleep(0.05)
 
         task_events = [(t, d) for t, d in events if t == "task.updated"]
         assert len(task_events) >= 1, f"Expected task.updated events, got {events}"
-        assert task_events[0][1].get("swarm_id") == "swarm-tool", (
-            f"task.updated missing swarm_id: {task_events[0][1]}"
-        )
+        assert task_events[0][1].get("swarm_id") == "swarm-tool", f"task.updated missing swarm_id: {task_events[0][1]}"
 
     async def test_no_swarm_id_emits_without_swarm_id(self, event_bus: EventBus) -> None:
         """Backward compat: no swarm_id means events don't include it."""
@@ -1160,9 +1261,7 @@ class TestSwarmIdRouting:
         await orch._plan("Build something")
 
         for event_type, data in events:
-            assert "swarm_id" not in data, (
-                f"{event_type} should not have swarm_id when none set: {data}"
-            )
+            assert "swarm_id" not in data, f"{event_type} should not have swarm_id when none set: {data}"
 
 
 class TestLogging:
@@ -1170,8 +1269,8 @@ class TestLogging:
 
     async def test_synthesis_timeout_logs_warning(self, event_bus: EventBus) -> None:
         """Synthesis timeout should log at WARNING level, not silently."""
+
         import structlog
-        from unittest.mock import patch
 
         log_output: list[dict] = []
 
@@ -1185,7 +1284,6 @@ class TestLogging:
         await orch.task_board.update_status("t-0", "completed", "done")
 
         # Patch session creation to return a session that never fires turn_end
-        original_create = orch.client.create_session
 
         async def _hanging_session(**kwargs: Any) -> Any:
             """Session whose send() never fires events — simulates a hung agent."""
@@ -1210,7 +1308,13 @@ class TestLogging:
         independent_plan = {
             "team_description": "Test team",
             "tasks": [
-                {"subject": "Task 1", "description": "Do thing 1", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []},
+                {
+                    "subject": "Task 1",
+                    "description": "Do thing 1",
+                    "worker_role": "Analyst",
+                    "worker_name": "analyst",
+                    "blocked_by_indices": [],
+                },
             ],
         }
 
@@ -1240,25 +1344,33 @@ class TestLogging:
 
             async def send(self, prompt: str, **kw: Any) -> str:
                 for h in list(self._handlers):
-                    h(SessionEvent(
-                        type=SessionEventType.TOOL_EXECUTION_START,
-                        data=SessionEventData(tool_name="read_file", tool_call_id="tc-1"),
-                    ))
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_START,
+                            data=SessionEventData(tool_name="read_file", tool_call_id="tc-1"),
+                        )
+                    )
                 for h in list(self._handlers):
-                    h(SessionEvent(
-                        type=SessionEventType.TOOL_EXECUTION_COMPLETE,
-                        data=SessionEventData(tool_call_id="tc-1", success=True),
-                    ))
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                            data=SessionEventData(tool_call_id="tc-1", success=True),
+                        )
+                    )
                 for h in list(self._handlers):
-                    h(SessionEvent(
-                        type=SessionEventType.ASSISTANT_MESSAGE,
-                        data=SessionEventData(content="Done"),
-                    ))
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.ASSISTANT_MESSAGE,
+                            data=SessionEventData(content="Done"),
+                        )
+                    )
                 for h in list(self._handlers):
-                    h(SessionEvent(
-                        type=SessionEventType.SESSION_IDLE,
-                        data=SessionEventData(turn_id="turn-1"),
-                    ))
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        )
+                    )
                 return "msg-1"
 
         client = MockCopilotClient(synthesis_report="Report")
@@ -1275,7 +1387,9 @@ class TestLogging:
         client.resume_session = lambda *a, **kw: _create_with_tools()  # type: ignore[attr-defined]
 
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, swarm_id="swarm-toollog",
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-toollog",
         )
         orch.synthesis_session_id = "synth-swarm-toollog"
 
@@ -1286,7 +1400,9 @@ class TestLogging:
         assert len(tool_start_records) >= 1, f"Expected chat_tool_start log, got: {[r.message for r in caplog.records]}"
         assert "read_file" in tool_start_records[0].message
 
-    async def test_chat_complete_includes_duration_and_tool_count(self, event_bus: EventBus, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_chat_complete_includes_duration_and_tool_count(
+        self, event_bus: EventBus, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """chat_complete log should include tool_calls count and duration_ms."""
         import logging
 
@@ -1302,25 +1418,33 @@ class TestLogging:
             async def send(self, prompt: str, **kw: Any) -> str:
                 for i in range(2):
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.TOOL_EXECUTION_START,
-                            data=SessionEventData(tool_name=f"tool_{i}", tool_call_id=f"tc-{i}"),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.TOOL_EXECUTION_START,
+                                data=SessionEventData(tool_name=f"tool_{i}", tool_call_id=f"tc-{i}"),
+                            )
+                        )
                     for h in list(self._handlers):
-                        h(SessionEvent(
-                            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
-                            data=SessionEventData(tool_call_id=f"tc-{i}", success=True),
-                        ))
+                        h(
+                            SessionEvent(
+                                type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                                data=SessionEventData(tool_call_id=f"tc-{i}", success=True),
+                            )
+                        )
                 for h in list(self._handlers):
-                    h(SessionEvent(
-                        type=SessionEventType.ASSISTANT_MESSAGE,
-                        data=SessionEventData(content="Response"),
-                    ))
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.ASSISTANT_MESSAGE,
+                            data=SessionEventData(content="Response"),
+                        )
+                    )
                 for h in list(self._handlers):
-                    h(SessionEvent(
-                        type=SessionEventType.SESSION_IDLE,
-                        data=SessionEventData(turn_id="turn-1"),
-                    ))
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        )
+                    )
                 return "msg-1"
 
         client = MockCopilotClient(synthesis_report="Report")
@@ -1331,7 +1455,9 @@ class TestLogging:
         client.resume_session = _resume  # type: ignore[attr-defined]
 
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, swarm_id="swarm-duration",
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-duration",
         )
         orch.synthesis_session_id = "synth-swarm-duration"
 
@@ -1419,9 +1545,7 @@ def make_scalable_orchestrator(
 
 
 class TestMaxInstances:
-    async def test_execute_assigns_multiple_tasks_to_scalable_worker(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_execute_assigns_multiple_tasks_to_scalable_worker(self, event_bus: EventBus) -> None:
         """With max_instances=3 and 3 tasks, all complete in a single round."""
         orch = make_scalable_orchestrator(event_bus, max_instances=3)
         plan = await orch._plan("Build modules")
@@ -1429,9 +1553,7 @@ class TestMaxInstances:
 
         # Track rounds
         rounds: list[int] = []
-        event_bus.subscribe(
-            lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None
-        )
+        event_bus.subscribe(lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None)
 
         await orch._execute()
 
@@ -1442,18 +1564,14 @@ class TestMaxInstances:
         # All 3 should complete in round 1 (not spread across rounds)
         assert len(rounds) == 1, f"Expected 1 round, got {len(rounds)}"
 
-    async def test_execute_respects_max_instances_cap(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_execute_respects_max_instances_cap(self, event_bus: EventBus) -> None:
         """With max_instances=2 and 3 tasks, only 2 run per round."""
         orch = make_scalable_orchestrator(event_bus, max_instances=2)
         plan = await orch._plan("Build modules")
         await orch._spawn(plan)
 
         rounds: list[int] = []
-        event_bus.subscribe(
-            lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None
-        )
+        event_bus.subscribe(lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None)
 
         await orch._execute()
 
@@ -1464,18 +1582,14 @@ class TestMaxInstances:
         # Should take 2 rounds (2 in round 1, 1 in round 2)
         assert len(rounds) == 2, f"Expected 2 rounds, got {len(rounds)}"
 
-    async def test_execute_max_instances_1_preserves_current_behavior(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_execute_max_instances_1_preserves_current_behavior(self, event_bus: EventBus) -> None:
         """With max_instances=1 (default), only 1 task per worker per round."""
         orch = make_scalable_orchestrator(event_bus, max_instances=1)
         plan = await orch._plan("Build modules")
         await orch._spawn(plan)
 
         rounds: list[int] = []
-        event_bus.subscribe(
-            lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None
-        )
+        event_bus.subscribe(lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None)
 
         await orch._execute()
 
@@ -1486,9 +1600,7 @@ class TestMaxInstances:
         # Should take 3 rounds (1 per round)
         assert len(rounds) == 3, f"Expected 3 rounds, got {len(rounds)}"
 
-    async def test_ephemeral_agents_get_independent_sessions(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_ephemeral_agents_get_independent_sessions(self, event_bus: EventBus) -> None:
         """Each concurrent task gets its own session (create_session called N times)."""
         template = _make_scalable_template(max_instances=3)
         session_count = [0]
@@ -1524,9 +1636,7 @@ class TestMaxInstances:
         # execute should create 2 more ephemeral sessions (3 tasks - 1 base = 2 ephemeral)
         assert total_sessions == 3, f"Expected 3 total sessions (1 base + 2 ephemeral), got {total_sessions}"
 
-    async def test_ephemeral_sessions_created_in_parallel(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_ephemeral_sessions_created_in_parallel(self, event_bus: EventBus) -> None:
         """Ephemeral agent sessions are created concurrently, not sequentially."""
         template = _make_scalable_template(max_instances=3)
         creation_log: list[tuple[str, float]] = []
@@ -1566,8 +1676,7 @@ class TestMaxInstances:
         if len(starts) >= 2:
             gap = starts[1] - starts[0]
             assert gap < 0.04, (
-                f"Ephemeral sessions created sequentially (gap={gap:.3f}s). "
-                f"Expected parallel creation (gap < 0.04s)."
+                f"Ephemeral sessions created sequentially (gap={gap:.3f}s). Expected parallel creation (gap < 0.04s)."
             )
 
 
@@ -1736,7 +1845,9 @@ class TestQAPhase:
         )
         client = MockCopilotClient(leader_plan=VALID_PLAN)
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, template=template,
+            client=client,
+            event_bus=event_bus,
+            template=template,
             config={"max_rounds": 3, "timeout": 5},
         )
 
@@ -1771,15 +1882,15 @@ class TestQAPhase:
         initial_response = "How many applications do you have?"
         client = MockCopilotClient(leader_plan=VALID_PLAN, synthesis_report=initial_response)
         orch = SwarmOrchestrator(
-            client=client, event_bus=event_bus, template=template,
+            client=client,
+            event_bus=event_bus,
+            template=template,
             config={"max_rounds": 3, "timeout": 5},
         )
 
         # Capture leader.chat_delta events
         deltas: list[dict[str, Any]] = []
-        event_bus.subscribe(
-            lambda et, data: deltas.append(data) if et == "leader.chat_delta" else None
-        )
+        event_bus.subscribe(lambda et, data: deltas.append(data) if et == "leader.chat_delta" else None)
 
         # Simulate begin_swarm after a short delay
         async def _simulate_begin_swarm() -> None:
@@ -1798,9 +1909,7 @@ class TestQAPhase:
 
 
 class TestPerWorkerSkills:
-    async def test_spawn_computes_disabled_skills_from_allowlist(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_spawn_computes_disabled_skills_from_allowlist(self, event_bus: EventBus) -> None:
         """Worker with skills=[a, b] gets disabled_skills for everything NOT in [a, b]."""
         template = _make_skills_template()
         # Track create_session kwargs per worker
@@ -1820,10 +1929,7 @@ class TestPerWorkerSkills:
 
         # Find the architect session (first worker created after leader)
         # Leader has create_plan tool, workers have task_update
-        worker_sessions = [
-            kw for kw in session_kwargs
-            if any(t.name == "task_update" for t in (kw.get("tools") or []))
-        ]
+        worker_sessions = [kw for kw in session_kwargs if any(t.name == "task_update" for t in (kw.get("tools") or []))]
         assert len(worker_sessions) == 2
 
         # Architect: skills=[azure-architect, azure-network]
@@ -1838,9 +1944,7 @@ class TestPerWorkerSkills:
         disabled = set(security_kw.get("disabled_skills", []))
         assert disabled == {"azure-architect", "azure-network", "azure-developer"}
 
-    async def test_spawn_wildcard_skills_no_disabled(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_spawn_wildcard_skills_no_disabled(self, event_bus: EventBus) -> None:
         """Worker with skills=['*'] gets no disabled_skills."""
         template = LoadedTemplate(
             key="wild-test",
@@ -1848,19 +1952,29 @@ class TestPerWorkerSkills:
             description="Wildcard skills",
             goal_template="Do: {user_input}",
             leader_prompt="Leader.",
-            agents=[AgentDefinition(
-                name="analyst",
-                display_name="Analyst",
-                description="Analyzes",
-                skills=["*"],
-            )],
+            agents=[
+                AgentDefinition(
+                    name="analyst",
+                    display_name="Analyst",
+                    description="Analyzes",
+                    skills=["*"],
+                )
+            ],
             synthesis_prompt="Synth: {goal}\n{task_results}",
             all_skill_names={"skill-a", "skill-b"},
             skill_name_map={"skill-a": "skill-a", "skill-b": "skill-b"},
         )
         plan = {
             "team_description": "Test",
-            "tasks": [{"subject": "T", "description": "D", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []}],
+            "tasks": [
+                {
+                    "subject": "T",
+                    "description": "D",
+                    "worker_role": "Analyst",
+                    "worker_name": "analyst",
+                    "blocked_by_indices": [],
+                }
+            ],
         }
         session_kwargs: list[dict[str, Any]] = []
 
@@ -1876,9 +1990,7 @@ class TestPerWorkerSkills:
         assert len(worker_sessions) == 1
         assert "disabled_skills" not in worker_sessions[0]
 
-    async def test_spawn_no_skills_field_backward_compat(
-        self, event_bus: EventBus
-    ) -> None:
+    async def test_spawn_no_skills_field_backward_compat(self, event_bus: EventBus) -> None:
         """Worker with skills=None gets no disabled_skills (backward compat)."""
         template = LoadedTemplate(
             key="compat-test",
@@ -1886,17 +1998,27 @@ class TestPerWorkerSkills:
             description="No per-worker skills",
             goal_template="Do: {user_input}",
             leader_prompt="Leader.",
-            agents=[AgentDefinition(
-                name="analyst",
-                display_name="Analyst",
-                description="Analyzes",
-                # skills=None (default)
-            )],
+            agents=[
+                AgentDefinition(
+                    name="analyst",
+                    display_name="Analyst",
+                    description="Analyzes",
+                    # skills=None (default)
+                )
+            ],
             synthesis_prompt="Synth: {goal}\n{task_results}",
         )
         plan = {
             "team_description": "Test",
-            "tasks": [{"subject": "T", "description": "D", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []}],
+            "tasks": [
+                {
+                    "subject": "T",
+                    "description": "D",
+                    "worker_role": "Analyst",
+                    "worker_name": "analyst",
+                    "blocked_by_indices": [],
+                }
+            ],
         }
         session_kwargs: list[dict[str, Any]] = []
 
@@ -1946,6 +2068,7 @@ class TestRestartAgent:
 
         # Manually register a fake agent
         from unittest.mock import AsyncMock, MagicMock
+
         old_agent = MagicMock()
         old_agent.name = "analyst"
         old_agent.role = "Data Analyst"

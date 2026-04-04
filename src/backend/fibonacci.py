@@ -1,7 +1,7 @@
-from functools import lru_cache
+from functools import cache
 
 
-@lru_cache(maxsize=None)
+@cache
 def fibonacci(n: int) -> int:
     """Return the nth Fibonacci number (0-indexed).
 

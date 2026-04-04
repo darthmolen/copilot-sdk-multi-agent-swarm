@@ -15,8 +15,11 @@ async def test_service_cache_only_task_crud():
     await service.create_swarm(str(uuid4()), goal="Test")
 
     task = await service.add_task(
-        task_id="task-0", subject="Analyze",
-        description="Do analysis", worker_role="analyst", worker_name="analyst",
+        task_id="task-0",
+        subject="Analyze",
+        description="Do analysis",
+        worker_role="analyst",
+        worker_name="analyst",
     )
     assert task.id == "task-0"
 
@@ -28,8 +31,11 @@ async def test_service_update_task_status():
     service = SwarmService()
     await service.create_swarm(str(uuid4()), goal="Test")
     await service.add_task(
-        task_id="task-0", subject="Work",
-        description="Do it", worker_role="dev", worker_name="dev",
+        task_id="task-0",
+        subject="Work",
+        description="Do it",
+        worker_role="dev",
+        worker_name="dev",
     )
     updated = await service.update_task_status("task-0", "completed", "Done!")
     assert updated.status.value == "completed"
@@ -41,8 +47,11 @@ async def test_service_reads_from_cache():
     service = SwarmService()
     await service.create_swarm(str(uuid4()), goal="Test")
     await service.add_task(
-        task_id="t1", subject="X",
-        description="Y", worker_role="r", worker_name="w",
+        task_id="t1",
+        subject="X",
+        description="Y",
+        worker_role="r",
+        worker_name="w",
     )
     tasks = await service.get_tasks()
     assert len(tasks) == 1
@@ -73,6 +82,9 @@ async def test_service_add_task_without_create_swarm_raises():
     service = SwarmService()
     with pytest.raises(RuntimeError, match="create_swarm"):
         await service.add_task(
-            task_id="t1", subject="X",
-            description="Y", worker_role="r", worker_name="w",
+            task_id="t1",
+            subject="X",
+            description="Y",
+            worker_role="r",
+            worker_name="w",
         )

@@ -4,12 +4,8 @@ Every test creates its own session so that failures are isolated.
 These tests make real LLM API calls -- keep prompts minimal.
 """
 
-import asyncio
-
 import pytest
-import pytest_asyncio
-
-from copilot import CopilotClient, CopilotSession, SubprocessConfig
+from copilot import CopilotClient, CopilotSession
 from copilot.session import PermissionHandler
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
@@ -18,6 +14,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _create_session(client: CopilotClient) -> CopilotSession:
     """Create a session with approve-all permissions."""
@@ -50,9 +47,7 @@ async def test_send_and_wait_returns_response(copilot_client: CopilotClient):
         assert response is not None, "Expected a non-None response from the assistant"
         # The response.data.content should contain the word "hello"
         content = getattr(response.data, "content", "") or ""
-        assert "hello" in content.lower(), (
-            f"Expected 'hello' in response content, got: {content!r}"
-        )
+        assert "hello" in content.lower(), f"Expected 'hello' in response content, got: {content!r}"
     finally:
         await session.disconnect()
 

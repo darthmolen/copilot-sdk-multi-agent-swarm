@@ -8,7 +8,6 @@ import pytest
 
 from backend.db.repository import SwarmRepository
 
-
 pytestmark = pytest.mark.db
 
 
@@ -76,13 +75,21 @@ async def test_create_and_get_tasks(db_engine):
     swarm_id = uuid4()
     await repo.create_swarm(swarm_id, goal="Test")
     await repo.create_task(
-        swarm_id, task_id="task-0", subject="Analyze data",
-        description="Run analysis", worker_role="analyst", worker_name="analyst",
+        swarm_id,
+        task_id="task-0",
+        subject="Analyze data",
+        description="Run analysis",
+        worker_role="analyst",
+        worker_name="analyst",
         blocked_by=[],
     )
     await repo.create_task(
-        swarm_id, task_id="task-1", subject="Write report",
-        description="Write up", worker_role="writer", worker_name="writer",
+        swarm_id,
+        task_id="task-1",
+        subject="Write report",
+        description="Write up",
+        worker_role="writer",
+        worker_name="writer",
         blocked_by=["task-0"],
     )
 
@@ -99,8 +106,12 @@ async def test_update_task_status(db_engine):
     swarm_id = uuid4()
     await repo.create_swarm(swarm_id, goal="Test")
     await repo.create_task(
-        swarm_id, task_id="task-0", subject="Work",
-        description="Do it", worker_role="dev", worker_name="dev",
+        swarm_id,
+        task_id="task-0",
+        subject="Work",
+        description="Do it",
+        worker_role="dev",
+        worker_name="dev",
     )
 
     await repo.update_task_status(swarm_id, "task-0", "completed", result="Done!")
@@ -120,8 +131,11 @@ async def test_register_and_get_agent(db_engine):
     swarm_id = uuid4()
     await repo.create_swarm(swarm_id, goal="Test")
     await repo.register_agent(
-        swarm_id, name="analyst", role="Data Analyst",
-        display_name="Analyst", session_id="sess-abc-123",
+        swarm_id,
+        name="analyst",
+        role="Data Analyst",
+        display_name="Analyst",
+        session_id="sess-abc-123",
     )
 
     agent = await repo.get_agent(swarm_id, "analyst")
@@ -234,12 +248,19 @@ async def test_load_full_swarm_state(db_engine):
     await repo.create_swarm(swarm_id, goal="Full test", template_key="azure")
     await repo.update_phase(swarm_id, "executing")
     await repo.create_task(
-        swarm_id, task_id="task-0", subject="Analyze",
-        description="Do analysis", worker_role="analyst", worker_name="analyst",
+        swarm_id,
+        task_id="task-0",
+        subject="Analyze",
+        description="Do analysis",
+        worker_role="analyst",
+        worker_name="analyst",
     )
     await repo.register_agent(
-        swarm_id, name="analyst", role="Analyst",
-        display_name="Analyst Agent", session_id="sess-1",
+        swarm_id,
+        name="analyst",
+        role="Analyst",
+        display_name="Analyst Agent",
+        session_id="sess-1",
     )
     await repo.save_message(swarm_id, sender="leader", recipient="analyst", content="Go")
     await repo.save_file(swarm_id, path="output.md", size_bytes=500)

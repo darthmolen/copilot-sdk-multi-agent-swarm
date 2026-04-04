@@ -18,9 +18,7 @@ class TeamRegistry:
         self._agents: dict[str, AgentInfo] = {}
         self._lock = asyncio.Lock()
 
-    async def register(
-        self, name: str, role: str, display_name: str = ""
-    ) -> AgentInfo:
+    async def register(self, name: str, role: str, display_name: str = "") -> AgentInfo:
         """Register a new agent. Returns the created AgentInfo."""
         async with self._lock:
             agent = AgentInfo(
@@ -36,8 +34,8 @@ class TeamRegistry:
         async with self._lock:
             try:
                 return self._agents[name]
-            except KeyError:
-                raise KeyError(f"Agent '{name}' not found")
+            except KeyError as exc:
+                raise KeyError(f"Agent '{name}' not found") from exc
 
     async def get_all(self) -> list[AgentInfo]:
         """Return a list of all registered agents."""

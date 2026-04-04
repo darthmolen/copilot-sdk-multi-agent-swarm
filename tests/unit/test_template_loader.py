@@ -13,10 +13,10 @@ from backend.swarm.template_loader import (
     TemplateLoader,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _create_template_dir(
     tmp_path: Path,
@@ -62,11 +62,7 @@ def _create_template_dir(
             }
         ]
     for w in workers:
-        fm_dict = {
-            k: v
-            for k, v in w.items()
-            if k not in ("filename", "body")
-        }
+        fm_dict = {k: v for k, v in w.items() if k not in ("filename", "body")}
         content = f"---\n{yaml.dump(fm_dict)}---\n{w.get('body', '')}"
         (tpl_dir / w["filename"]).write_text(content)
 
@@ -118,40 +114,21 @@ class TestParseAgentFile:
         assert agent.infer is True
         assert agent.prompt_template == "You are the alpha agent."
 
-    def test_parse_agent_file_defaults_display_name_to_name(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parse_agent_file_defaults_display_name_to_name(self, tmp_path: Path) -> None:
         agent_file = tmp_path / "worker-beta.md"
-        agent_file.write_text(
-            "---\n"
-            "name: beta\n"
-            "description: Beta worker\n"
-            "---\n"
-            "Prompt body."
-        )
+        agent_file.write_text("---\nname: beta\ndescription: Beta worker\n---\nPrompt body.")
         agent = TemplateLoader.parse_agent_file(agent_file)
         assert agent.display_name == "beta"
 
     def test_tools_null_means_all_tools(self, tmp_path: Path) -> None:
         agent_file = tmp_path / "worker-gamma.md"
-        agent_file.write_text(
-            "---\n"
-            "name: gamma\n"
-            "tools: null\n"
-            "---\n"
-            "Body."
-        )
+        agent_file.write_text("---\nname: gamma\ntools: null\n---\nBody.")
         agent = TemplateLoader.parse_agent_file(agent_file)
         assert agent.tools is None
 
     def test_agent_prompt_contains_placeholders(self, tmp_path: Path) -> None:
         agent_file = tmp_path / "worker-delta.md"
-        agent_file.write_text(
-            "---\n"
-            "name: delta\n"
-            "---\n"
-            "Hello {display_name}, your {role} is important."
-        )
+        agent_file.write_text("---\nname: delta\n---\nHello {display_name}, your {role} is important.")
         agent = TemplateLoader.parse_agent_file(agent_file)
         assert "{display_name}" in agent.prompt_template
         assert "{role}" in agent.prompt_template
@@ -211,19 +188,15 @@ class TestLoad:
         tpl = loader.load("test-template")
         assert tpl.synthesis_prompt == "Synthesize all findings."
 
-    def test_load_missing_template_raises_file_not_found(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_missing_template_raises_file_not_found(self, tmp_path: Path) -> None:
         loader = TemplateLoader(tmp_path)
         with pytest.raises(FileNotFoundError, match="Template directory not found"):
             loader.load("nonexistent")
 
-    def test_load_missing_template_yaml_raises_file_not_found(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_missing_template_yaml_raises_file_not_found(self, tmp_path: Path) -> None:
         (tmp_path / "bad-template").mkdir()
         loader = TemplateLoader(tmp_path)
-        with pytest.raises(FileNotFoundError, match="Missing _template.yaml"):
+        with pytest.raises(FileNotFoundError, match=r"Missing _template\.yaml"):
             loader.load("bad-template")
 
     def test_load_no_workers_raises_value_error(self, tmp_path: Path) -> None:
@@ -299,12 +272,7 @@ class TestMaxInstances:
         """Worker without maxInstances field defaults to max_instances=1."""
         agent_file = tmp_path / "worker-single.md"
         agent_file.write_text(
-            "---\n"
-            "name: single\n"
-            "displayName: Single Agent\n"
-            "description: Single instance\n"
-            "---\n"
-            "You are a single worker."
+            "---\nname: single\ndisplayName: Single Agent\ndescription: Single instance\n---\nYou are a single worker."
         )
         agent = TemplateLoader.parse_agent_file(agent_file)
         assert agent.max_instances == 1
@@ -372,13 +340,13 @@ class TestPerWorkerSkills:
         """Worker with skills: ['*'] produces ['*']."""
         agent_file = tmp_path / "worker-wild.md"
         agent_file.write_text(
-            '---\n'
-            'name: wild\n'
-            'displayName: Wild Agent\n'
-            'description: All skills\n'
+            "---\n"
+            "name: wild\n"
+            "displayName: Wild Agent\n"
+            "description: All skills\n"
             'skills:\n  - "*"\n'
-            '---\n'
-            'You get all skills.'
+            "---\n"
+            "You get all skills."
         )
         agent = TemplateLoader.parse_agent_file(agent_file)
         assert agent.skills == ["*"]
@@ -387,13 +355,7 @@ class TestPerWorkerSkills:
         """Worker with skills: [] produces empty list."""
         agent_file = tmp_path / "worker-empty.md"
         agent_file.write_text(
-            "---\n"
-            "name: empty\n"
-            "displayName: Empty Agent\n"
-            "description: No skills\n"
-            "skills: []\n"
-            "---\n"
-            "You get no skills."
+            "---\nname: empty\ndisplayName: Empty Agent\ndescription: No skills\nskills: []\n---\nYou get no skills."
         )
         agent = TemplateLoader.parse_agent_file(agent_file)
         assert agent.skills == []
@@ -494,12 +456,8 @@ class TestLoadAllAndListAvailable:
         assert result["tpl-b"].name == "Template B"
 
     def test_list_available_returns_summaries(self, tmp_path: Path) -> None:
-        _create_template_dir(
-            tmp_path, key="tpl-x", name="X", description="Desc X"
-        )
-        _create_template_dir(
-            tmp_path, key="tpl-y", name="Y", description="Desc Y"
-        )
+        _create_template_dir(tmp_path, key="tpl-x", name="X", description="Desc X")
+        _create_template_dir(tmp_path, key="tpl-y", name="Y", description="Desc Y")
         loader = TemplateLoader(tmp_path)
         summaries = loader.list_available()
 

@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
-import pytest
-
-from backend.mcp.deps import MCPDeps, configure, get_deps
-from backend.swarm.models import AgentInfo, AgentStatus, Task, TaskStatus
+from backend.mcp.deps import MCPDeps
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -22,7 +16,9 @@ from backend.swarm.team_registry import TeamRegistry
 
 
 def _make_orchestrator(
-    task_board: TaskBoard, registry: TeamRegistry, agents: dict | None = None,
+    task_board: TaskBoard,
+    registry: TeamRegistry,
+    agents: dict | None = None,
 ) -> MagicMock:
     orch = MagicMock()
     orch.service = MagicMock()
@@ -46,16 +42,19 @@ async def _make_deps(
     task_board = TaskBoard()
     registry = TeamRegistry()
 
-    for t in (tasks or []):
-        task = await task_board.add_task(
-            id=t["id"], subject=t["subject"], description=t["description"],
-            worker_role=t["worker_role"], worker_name=t["worker_name"],
+    for t in tasks or []:
+        await task_board.add_task(
+            id=t["id"],
+            subject=t["subject"],
+            description=t["description"],
+            worker_role=t["worker_role"],
+            worker_name=t["worker_name"],
         )
         if t.get("status") and t["status"] != "pending":
             await task_board.update_status(t["id"], t["status"], t.get("result", ""))
 
-    for a in (agents or []):
-        info = await registry.register(a["name"], a["role"], a.get("display_name", ""))
+    for a in agents or []:
+        await registry.register(a["name"], a["role"], a.get("display_name", ""))
         if a.get("status"):
             await registry.update_status(a["name"], a["status"])
         for _ in range(a.get("tasks_completed", 0)):
@@ -104,6 +103,7 @@ class TestGetActiveSwarms:
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_active_swarms
+
             result = await get_active_swarms()
         assert len(result) == 2
         ids = {s["swarm_id"] for s in result}
@@ -117,6 +117,7 @@ class TestGetActiveSwarms:
         deps = MCPDeps(swarm_store={}, work_dir=str(tmp_path))
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_active_swarms
+
             result = await get_active_swarms()
         assert result == []
 
@@ -131,8 +132,22 @@ class TestGetSwarmStatus:
         deps = await _make_deps(
             tmp_path,
             tasks=[
-                {"id": "t1", "subject": "A", "description": "a", "worker_role": "r", "worker_name": "w1", "status": "completed"},
-                {"id": "t2", "subject": "B", "description": "b", "worker_role": "r", "worker_name": "w1", "status": "in_progress"},
+                {
+                    "id": "t1",
+                    "subject": "A",
+                    "description": "a",
+                    "worker_role": "r",
+                    "worker_name": "w1",
+                    "status": "completed",
+                },
+                {
+                    "id": "t2",
+                    "subject": "B",
+                    "description": "b",
+                    "worker_role": "r",
+                    "worker_name": "w1",
+                    "status": "in_progress",
+                },
                 {"id": "t3", "subject": "C", "description": "c", "worker_role": "r", "worker_name": "w2"},
             ],
             agents=[
@@ -142,6 +157,7 @@ class TestGetSwarmStatus:
         )
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
+
             result = await get_swarm_status()
 
         assert result["phase"] == "executing"
@@ -155,6 +171,7 @@ class TestGetSwarmStatus:
         deps = await _make_deps(tmp_path, swarm_id="my-swarm")
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
+
             result = await get_swarm_status(swarm_id="my-swarm")
         assert result["phase"] == "executing"
 
@@ -162,6 +179,7 @@ class TestGetSwarmStatus:
         deps = await _make_deps(tmp_path, swarm_id="swarm-1")
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
+
             result = await get_swarm_status(swarm_id="nonexistent")
         assert "error" in result
 
@@ -182,6 +200,7 @@ class TestListTasks:
         )
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_tasks
+
             result = await list_tasks()
         assert len(result) == 2
 
@@ -189,12 +208,21 @@ class TestListTasks:
         deps = await _make_deps(
             tmp_path,
             tasks=[
-                {"id": "t1", "subject": "A", "description": "a", "worker_role": "r", "worker_name": "w1", "status": "completed", "result": "done"},
+                {
+                    "id": "t1",
+                    "subject": "A",
+                    "description": "a",
+                    "worker_role": "r",
+                    "worker_name": "w1",
+                    "status": "completed",
+                    "result": "done",
+                },
                 {"id": "t2", "subject": "B", "description": "b", "worker_role": "r", "worker_name": "w1"},
             ],
         )
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_tasks
+
             result = await list_tasks(status="completed")
         assert len(result) == 1
         assert result[0]["id"] == "t1"
@@ -209,6 +237,7 @@ class TestListTasks:
         )
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_tasks
+
             result = await list_tasks(worker="w2")
         assert len(result) == 1
         assert result[0]["worker_name"] == "w2"
@@ -224,11 +253,20 @@ class TestGetTaskDetail:
         deps = await _make_deps(
             tmp_path,
             tasks=[
-                {"id": "t1", "subject": "Analyze", "description": "deep dive", "worker_role": "analyst", "worker_name": "analyst", "status": "completed", "result": "Found 3 issues."},
+                {
+                    "id": "t1",
+                    "subject": "Analyze",
+                    "description": "deep dive",
+                    "worker_role": "analyst",
+                    "worker_name": "analyst",
+                    "status": "completed",
+                    "result": "Found 3 issues.",
+                },
             ],
         )
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_task_detail
+
             result = await get_task_detail(task_id="t1")
         assert result["id"] == "t1"
         assert result["result"] == "Found 3 issues."
@@ -237,6 +275,7 @@ class TestGetTaskDetail:
         deps = await _make_deps(tmp_path, tasks=[])
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_task_detail
+
             result = await get_task_detail(task_id="nonexistent")
         assert "error" in result
 
@@ -256,6 +295,7 @@ class TestGetRecentEvents:
         deps = await _make_deps(tmp_path, repository=mock_repo)
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_recent_events
+
             result = await get_recent_events(count=10)
         assert len(result) == 2
         mock_repo.get_events.assert_awaited_once()
@@ -264,6 +304,7 @@ class TestGetRecentEvents:
         deps = await _make_deps(tmp_path, repository=None)
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_recent_events
+
             result = await get_recent_events()
         assert "error" in result
 
@@ -278,12 +319,19 @@ class TestListAgents:
         deps = await _make_deps(
             tmp_path,
             agents=[
-                {"name": "analyst", "role": "Data Analyst", "display_name": "Analyst", "status": "working", "tasks_completed": 3},
+                {
+                    "name": "analyst",
+                    "role": "Data Analyst",
+                    "display_name": "Analyst",
+                    "status": "working",
+                    "tasks_completed": 3,
+                },
                 {"name": "writer", "role": "Writer", "display_name": "Writer", "status": "idle", "tasks_completed": 0},
             ],
         )
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_agents
+
             result = await list_agents()
         assert len(result) == 2
         analyst = next(a for a in result if a["name"] == "analyst")
@@ -307,6 +355,7 @@ class TestArtifacts:
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_artifacts
+
             result = await list_artifacts()
         assert len(result) == 2
         names = {a["name"] for a in result}
@@ -320,6 +369,7 @@ class TestArtifacts:
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import read_artifact
+
             result = await read_artifact(path="report.md")
         assert result["content"] == "# Hello World"
 
@@ -327,6 +377,7 @@ class TestArtifacts:
         deps = await _make_deps(tmp_path)
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import read_artifact
+
             result = await read_artifact(path="nonexistent.txt")
         assert "error" in result
 
@@ -337,6 +388,7 @@ class TestArtifacts:
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import read_artifact
+
             result = await read_artifact(path="../../secret.txt")
         assert "error" in result
 
@@ -355,6 +407,7 @@ class TestRestartAgent:
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import restart_agent
+
             result = await restart_agent(agent_name="analyst")
         assert result["ok"] is True
         mock_orch.restart_agent.assert_awaited_once_with("analyst")
@@ -367,6 +420,7 @@ class TestRestartAgent:
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import restart_agent
+
             result = await restart_agent(agent_name="ghost")
         assert "error" in result
 
@@ -382,6 +436,7 @@ class TestResolveSwarmId:
         deps = await _make_deps(tmp_path, swarm_id="only-one")
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
+
             result = await get_swarm_status()
         assert result["phase"] == "executing"
 
@@ -397,6 +452,7 @@ class TestResolveSwarmId:
         }
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
+
             result = await get_swarm_status()
         assert "error" in result
 
@@ -404,5 +460,6 @@ class TestResolveSwarmId:
         deps = MCPDeps(swarm_store={}, work_dir=str(tmp_path))
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
+
             result = await get_swarm_status()
         assert "error" in result

@@ -1,6 +1,7 @@
 """Async SQLAlchemy engine factory."""
 
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine as _create_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
 
 
 def create_async_engine(url: str, **kwargs) -> AsyncEngine:

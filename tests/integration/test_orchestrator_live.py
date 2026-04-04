@@ -10,7 +10,6 @@ Requires a live copilot-cli process and real LLM API calls.
 import json
 
 import pytest
-
 from copilot import CopilotClient
 from copilot.session import PermissionHandler
 
@@ -76,6 +75,7 @@ async def test_leader_decomposes_goal_into_tasks(copilot_client: CopilotClient):
         if "```" in cleaned:
             # Extract content between first ``` and last ```
             import re
+
             match = re.search(r"```(?:json)?\s*\n?(.*?)```", cleaned, re.DOTALL)
             if match:
                 cleaned = match.group(1).strip()
@@ -106,17 +106,11 @@ async def test_leader_decomposes_goal_into_tasks(copilot_client: CopilotClient):
         # Validate each task has the key fields.
         # LLMs may vary field names slightly, so check presence of core fields.
         for i, task in enumerate(tasks):
-            assert "subject" in task or "title" in task, (
-                f"Task {i} missing subject/title: {list(task.keys())}"
-            )
-            assert "description" in task, (
-                f"Task {i} missing description: {list(task.keys())}"
-            )
+            assert "subject" in task or "title" in task, f"Task {i} missing subject/title: {list(task.keys())}"
+            assert "description" in task, f"Task {i} missing description: {list(task.keys())}"
             # worker_role or worker_name — at least one should be present
             has_worker = "worker_role" in task or "worker_name" in task or "role" in task
-            assert has_worker, (
-                f"Task {i} missing worker assignment: {list(task.keys())}"
-            )
+            assert has_worker, f"Task {i} missing worker assignment: {list(task.keys())}"
             assert "worker_role" in task, f"Task missing 'worker_role': {task}"
 
     finally:
@@ -163,9 +157,9 @@ async def test_orchestrator_full_run_deep_research(copilot_client: CopilotClient
     all_tasks = await orch.task_board.get_tasks()
     all_agents_info = await orch.registry.get_all()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"SWARM DEBUG: {len(all_tasks)} tasks, {len(orch.agents)} agents")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     print("\n--- TASKS ---")
     for t in all_tasks:
@@ -173,7 +167,7 @@ async def test_orchestrator_full_run_deep_research(copilot_client: CopilotClient
         if t.result:
             print(f"               Result ({len(t.result)} chars): {t.result[:300]}")
         else:
-            print(f"               Result: (empty)")
+            print("               Result: (empty)")
 
     print("\n--- AGENTS ---")
     for a in all_agents_info:
@@ -187,7 +181,7 @@ async def test_orchestrator_full_run_deep_research(copilot_client: CopilotClient
     print(report[:2000])
     if len(report) > 2000:
         print(f"\n... ({len(report) - 2000} more chars)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # --- Assertions ---
     assert len(all_tasks) >= 2, f"Expected at least 2 tasks, got {len(all_tasks)}"

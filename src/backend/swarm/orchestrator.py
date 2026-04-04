@@ -30,6 +30,7 @@ def _approve_all(*_args: Any, **_kwargs: Any) -> Any:
     """Auto-approve every permission request."""
     try:
         from copilot.session import PermissionRequestResult  # type: ignore[import-not-found]
+
         return PermissionRequestResult(kind="approved")
     except ImportError:
         return True
@@ -46,11 +47,16 @@ async def _create_session_with_tools(
 ) -> Any:
     """Create a session with the given tools, compatible with real SDK and mocks."""
     tool_names = [t.name for t in tools] if tools else []
-    log.info("session_creating", session_id=session_id, model=model,
-             tool_count=len(tools) if tools else 0, tool_names=tool_names,
-             has_mcp=mcp_servers is not None,
-             has_skills=skill_directories is not None,
-             prompt_len=len(system_prompt))
+    log.info(
+        "session_creating",
+        session_id=session_id,
+        model=model,
+        tool_count=len(tools) if tools else 0,
+        tool_names=tool_names,
+        has_mcp=mcp_servers is not None,
+        has_skills=skill_directories is not None,
+        prompt_len=len(system_prompt),
+    )
     try:
         kwargs: dict[str, Any] = {
             "on_permission_request": _approve_all,
@@ -154,8 +160,7 @@ class SwarmOrchestrator:
         """Stop per-agent clients after execution completes."""
         for agent in self.agents.values():
             await agent.cleanup()
-        log.info("agent_clients_cleaned_up", swarm_id=self.swarm_id,
-                 agent_count=len(self.agents))
+        log.info("agent_clients_cleaned_up", swarm_id=self.swarm_id, agent_count=len(self.agents))
 
     async def cancel(self) -> None:
         """Cancel the swarm execution."""
@@ -174,8 +179,7 @@ class SwarmOrchestrator:
         if not self.synthesis_session_id:
             raise ValueError("No synthesis session available")
 
-        log.info("chat_start", swarm_id=self.swarm_id,
-                 session_id=self.synthesis_session_id, message_len=len(message))
+        log.info("chat_start", swarm_id=self.swarm_id, session_id=self.synthesis_session_id, message_len=len(message))
 
         async with self._chat_lock:
             log.info("chat_resuming_session", session_id=self.synthesis_session_id)
@@ -217,48 +221,58 @@ class SwarmOrchestrator:
                         text_content.append(str(content))
                         # Also emit as delta so frontend gets streaming content
                         # even when SDK only sends complete messages (no deltas)
-                        self.event_bus.emit_sync("leader.chat_delta", {
-                            "delta": str(content),
-                            "message_id": message_id,
-                            "swarm_id": self.swarm_id,
-                        })
+                        self.event_bus.emit_sync(
+                            "leader.chat_delta",
+                            {
+                                "delta": str(content),
+                                "message_id": message_id,
+                                "swarm_id": self.swarm_id,
+                            },
+                        )
                 # Stream deltas via EventBus.emit_sync and accumulate
                 if "assistant.message_delta" in et:
                     data = getattr(event, "data", None)
                     delta = getattr(data, "content", "")
                     if delta:
                         delta_parts.append(str(delta))
-                        self.event_bus.emit_sync("leader.chat_delta", {
-                            "delta": str(delta),
-                            "message_id": message_id,
-                            "swarm_id": self.swarm_id,
-                        })
+                        self.event_bus.emit_sync(
+                            "leader.chat_delta",
+                            {
+                                "delta": str(delta),
+                                "message_id": message_id,
+                                "swarm_id": self.swarm_id,
+                            },
+                        )
                 # Tool events
                 if "tool.execution_start" in et:
                     data = getattr(event, "data", None)
                     tool_name = getattr(data, "tool_name", "")
                     tool_call_id = getattr(data, "tool_call_id", "")
                     tool_call_count[0] += 1
-                    log.info("chat_tool_start", swarm_id=self.swarm_id,
-                             tool_name=tool_name, tool_call_id=tool_call_id)
-                    self.event_bus.emit_sync("leader.chat_tool_start", {
-                        "tool_name": tool_name,
-                        "tool_call_id": tool_call_id,
-                        "message_id": message_id,
-                        "swarm_id": self.swarm_id,
-                    })
+                    log.info("chat_tool_start", swarm_id=self.swarm_id, tool_name=tool_name, tool_call_id=tool_call_id)
+                    self.event_bus.emit_sync(
+                        "leader.chat_tool_start",
+                        {
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        },
+                    )
                 if "tool.execution_complete" in et:
                     data = getattr(event, "data", None)
                     tool_call_id = getattr(data, "tool_call_id", "")
                     success = str(getattr(data, "success", "")).lower() == "true"
-                    log.info("chat_tool_result", swarm_id=self.swarm_id,
-                             tool_call_id=tool_call_id, success=success)
-                    self.event_bus.emit_sync("leader.chat_tool_result", {
-                        "tool_call_id": tool_call_id,
-                        "success": success,
-                        "message_id": message_id,
-                        "swarm_id": self.swarm_id,
-                    })
+                    log.info("chat_tool_result", swarm_id=self.swarm_id, tool_call_id=tool_call_id, success=success)
+                    self.event_bus.emit_sync(
+                        "leader.chat_tool_result",
+                        {
+                            "tool_call_id": tool_call_id,
+                            "success": success,
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        },
+                    )
 
             unsubscribe = session.on(_on_event)
             timeout = self.config.get("timeout", 300)
@@ -288,19 +302,23 @@ class SwarmOrchestrator:
             finally:
                 unsubscribe()
 
-            response = (
-                "\n".join(text_content) if text_content
-                else "".join(delta_parts) if delta_parts
-                else ""
-            )
+            response = "\n".join(text_content) if text_content else "".join(delta_parts) if delta_parts else ""
             duration_ms = int((time.monotonic() - start_time) * 1000)
-            log.info("chat_complete", swarm_id=self.swarm_id,
-                     response_len=len(response), chunks=len(text_content),
-                     tool_calls=tool_call_count[0], duration_ms=duration_ms)
-            await self._emit("leader.chat_message", {
-                "content": response,
-                "message_id": message_id,
-            })
+            log.info(
+                "chat_complete",
+                swarm_id=self.swarm_id,
+                response_len=len(response),
+                chunks=len(text_content),
+                tool_calls=tool_call_count[0],
+                duration_ms=duration_ms,
+            )
+            await self._emit(
+                "leader.chat_message",
+                {
+                    "content": response,
+                    "message_id": message_id,
+                },
+            )
             return response
 
     async def start_qa(self, goal: str) -> str:
@@ -317,14 +335,15 @@ class SwarmOrchestrator:
         begin_tool = create_begin_swarm_tool(goal_holder, self.qa_complete)
 
         mcp_servers = self._get_mcp_servers()
-        skill_dirs = (
-            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
-        )
+        skill_dirs = [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
 
         log.info("qa_session_creating", swarm_id=self.swarm_id)
         self.qa_session = await _create_session_with_tools(
-            self.client, leader_prompt, [begin_tool],
-            mcp_servers=mcp_servers, skill_directories=skill_dirs,
+            self.client,
+            leader_prompt,
+            [begin_tool],
+            mcp_servers=mcp_servers,
+            skill_directories=skill_dirs,
             model=self.model,
         )
 
@@ -338,30 +357,34 @@ class SwarmOrchestrator:
         def _on_init_event(event: Any) -> None:
             raw = getattr(event, "type", "")
             et = getattr(raw, "value", str(raw)).lower()
-            if "idle" in et:
-                done.set()
-            elif "session" in et and "error" in et:
+            if "idle" in et or ("session" in et and "error" in et):
                 done.set()
             if "assistant.message" in et and "delta" not in et:
                 data = getattr(event, "data", None)
                 content = getattr(data, "content", None)
                 if content and str(content).strip():
                     delta_parts.append(str(content))
-                    self.event_bus.emit_sync("leader.chat_delta", {
-                        "delta": str(content),
-                        "message_id": message_id,
-                        "swarm_id": self.swarm_id,
-                    })
+                    self.event_bus.emit_sync(
+                        "leader.chat_delta",
+                        {
+                            "delta": str(content),
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        },
+                    )
             if "assistant.message_delta" in et:
                 data = getattr(event, "data", None)
                 delta = getattr(data, "content", "")
                 if delta:
                     delta_parts.append(str(delta))
-                    self.event_bus.emit_sync("leader.chat_delta", {
-                        "delta": str(delta),
-                        "message_id": message_id,
-                        "swarm_id": self.swarm_id,
-                    })
+                    self.event_bus.emit_sync(
+                        "leader.chat_delta",
+                        {
+                            "delta": str(delta),
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        },
+                    )
 
         unsubscribe = self.qa_session.on(_on_init_event)
         timeout = self.config.get("timeout", 300)
@@ -382,10 +405,13 @@ class SwarmOrchestrator:
 
         # Emit complete message for the initial response
         if delta_parts:
-            await self._emit("leader.chat_message", {
-                "content": "".join(delta_parts),
-                "message_id": message_id,
-            })
+            await self._emit(
+                "leader.chat_message",
+                {
+                    "content": "".join(delta_parts),
+                    "message_id": message_id,
+                },
+            )
 
         # Wait for begin_swarm tool call (set by qa_chat messages or leader auto-completing)
         timeout = self.config.get("timeout", 300)
@@ -415,30 +441,34 @@ class SwarmOrchestrator:
             def _on_event(event: Any) -> None:
                 raw = getattr(event, "type", "")
                 et = getattr(raw, "value", str(raw)).lower()
-                if "idle" in et:
-                    done.set()
-                elif "session" in et and "error" in et:
+                if "idle" in et or ("session" in et and "error" in et):
                     done.set()
                 if "assistant.message" in et and "delta" not in et:
                     data = getattr(event, "data", None)
                     content = getattr(data, "content", None)
                     if content and str(content).strip():
                         text_content.append(str(content))
-                        self.event_bus.emit_sync("leader.chat_delta", {
-                            "delta": str(content),
-                            "message_id": message_id,
-                            "swarm_id": self.swarm_id,
-                        })
+                        self.event_bus.emit_sync(
+                            "leader.chat_delta",
+                            {
+                                "delta": str(content),
+                                "message_id": message_id,
+                                "swarm_id": self.swarm_id,
+                            },
+                        )
                 if "assistant.message_delta" in et:
                     data = getattr(event, "data", None)
                     delta = getattr(data, "content", "")
                     if delta:
                         delta_parts.append(str(delta))
-                        self.event_bus.emit_sync("leader.chat_delta", {
-                            "delta": str(delta),
-                            "message_id": message_id,
-                            "swarm_id": self.swarm_id,
-                        })
+                        self.event_bus.emit_sync(
+                            "leader.chat_delta",
+                            {
+                                "delta": str(delta),
+                                "message_id": message_id,
+                                "swarm_id": self.swarm_id,
+                            },
+                        )
 
             unsubscribe = self.qa_session.on(_on_event)
             timeout = self.config.get("timeout", 300)
@@ -451,17 +481,15 @@ class SwarmOrchestrator:
             finally:
                 unsubscribe()
 
-            response = (
-                "\n".join(text_content) if text_content
-                else "".join(delta_parts) if delta_parts
-                else ""
+            response = "\n".join(text_content) if text_content else "".join(delta_parts) if delta_parts else ""
+            log.info("qa_chat_complete", swarm_id=self.swarm_id, response_len=len(response))
+            await self._emit(
+                "leader.chat_message",
+                {
+                    "content": response,
+                    "message_id": message_id,
+                },
             )
-            log.info("qa_chat_complete", swarm_id=self.swarm_id,
-                     response_len=len(response))
-            await self._emit("leader.chat_message", {
-                "content": response,
-                "message_id": message_id,
-            })
             return response
 
     async def run(self, goal: str) -> str:
@@ -470,24 +498,23 @@ class SwarmOrchestrator:
             if self.work_dir:
                 self.work_dir.mkdir(parents=True, exist_ok=True)
                 log.info("work_dir_created", path=str(self.work_dir))
-                (self.work_dir / "goal.md").write_text(
-                    f"# Goal\n\n{goal}\n", encoding="utf-8"
-                )
+                (self.work_dir / "goal.md").write_text(f"# Goal\n\n{goal}\n", encoding="utf-8")
 
-            log.info("swarm_phase_planning", swarm_id=self.swarm_id,
-                     goal_len=len(goal),
-                     template=self.template.key if self.template else None,
-                     client_type=type(self.client).__name__ if self.client else "None")
+            log.info(
+                "swarm_phase_planning",
+                swarm_id=self.swarm_id,
+                goal_len=len(goal),
+                template=self.template.key if self.template else None,
+                client_type=type(self.client).__name__ if self.client else "None",
+            )
             await self._emit("swarm.phase_changed", {"phase": "planning"})
             plan = await self._plan(goal)
             task_count = len(plan.get("tasks", []))
-            log.info("swarm_plan_received", swarm_id=self.swarm_id,
-                     task_count=task_count)
+            log.info("swarm_plan_received", swarm_id=self.swarm_id, task_count=task_count)
 
             log.info("swarm_phase_spawning", swarm_id=self.swarm_id)
             await self._spawn(plan)
-            log.info("swarm_agents_spawned", swarm_id=self.swarm_id,
-                     agent_count=len(self.agents))
+            log.info("swarm_agents_spawned", swarm_id=self.swarm_id, agent_count=len(self.agents))
 
             log.info("swarm_phase_executing", swarm_id=self.swarm_id)
             await self._execute()
@@ -495,12 +522,10 @@ class SwarmOrchestrator:
 
             log.info("swarm_phase_synthesizing", swarm_id=self.swarm_id)
             report = await self._synthesize(goal)
-            log.info("swarm_complete", swarm_id=self.swarm_id,
-                     report_len=len(report) if report else 0)
+            log.info("swarm_complete", swarm_id=self.swarm_id, report_len=len(report) if report else 0)
             return report
         except Exception as e:
-            log.error("swarm_lifecycle_error", swarm_id=self.swarm_id,
-                      error=str(e), exc_info=True)
+            log.error("swarm_lifecycle_error", swarm_id=self.swarm_id, error=str(e), exc_info=True)
             await self._emit("swarm.error", {"message": str(e)})
             raise
 
@@ -518,12 +543,13 @@ class SwarmOrchestrator:
         plan_tool = create_plan_tool(plan_holder)
 
         mcp_servers = self._get_mcp_servers()
-        skill_dirs = (
-            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
-        )
+        skill_dirs = [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
         session = await _create_session_with_tools(
-            self.client, leader_prompt, [plan_tool],
-            mcp_servers=mcp_servers, skill_directories=skill_dirs,
+            self.client,
+            leader_prompt,
+            [plan_tool],
+            mcp_servers=mcp_servers,
+            skill_directories=skill_dirs,
             model=self.model,
         )
 
@@ -533,11 +559,7 @@ class SwarmOrchestrator:
         def _on_event(event: Any) -> None:
             raw = getattr(event, "type", "")
             event_type = getattr(raw, "value", str(raw)).lower()
-            if "turn_end" in event_type:
-                done.set()
-            elif "session" in event_type and "error" in event_type:
-                done.set()
-            elif "idle" in event_type:
+            if "turn_end" in event_type or ("session" in event_type and "error" in event_type) or "idle" in event_type:
                 done.set()
 
         unsubscribe = session.on(_on_event)
@@ -609,9 +631,7 @@ class SwarmOrchestrator:
 
             # MCP servers and skills from template (if available)
             mcp_servers = self._get_mcp_servers()
-            skill_dirs = (
-                [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
-            )
+            skill_dirs = [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
 
             # Compute per-worker disabled_skills from skills allowlist
             disabled_skills: list[str] | None = None
@@ -619,7 +639,9 @@ class SwarmOrchestrator:
                 if agent_def.skills == ["*"] or not agent_def.skills:
                     # Wildcard = no filtering; empty = disable all
                     if not agent_def.skills:
-                        disabled_skills = sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                        disabled_skills = (
+                            sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                        )
                 else:
                     # Map directory names to actual skill names
                     worker_skill_names = {
@@ -658,14 +680,21 @@ class SwarmOrchestrator:
 
             await self.registry.register(name, role, display_name)
             self.inbox.register_agent(name)
-            await self._emit("agent.spawned", {
-                "agent": {"name": name, "role": role, "display_name": display_name, "status": "idle", "tasks_completed": 0}
-            })
+            await self._emit(
+                "agent.spawned",
+                {
+                    "agent": {
+                        "name": name,
+                        "role": role,
+                        "display_name": display_name,
+                        "status": "idle",
+                        "tasks_completed": 0,
+                    }
+                },
+            )
 
         await self._emit("swarm.phase_changed", {"phase": "spawning"})
-        await self._emit(
-            "swarm.spawn_complete", {"agent_count": len(self.agents)}
-        )
+        await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
 
     # ------------------------------------------------------------------
     # Work directory file watcher
@@ -681,10 +710,13 @@ class SwarmOrchestrator:
             rel_path = str(f.relative_to(self.work_dir))
             if rel_path not in self._known_files:
                 self._known_files.add(rel_path)
-                await self._emit("file.created", {
-                    "filename": rel_path,
-                    "size_bytes": f.stat().st_size,
-                })
+                await self._emit(
+                    "file.created",
+                    {
+                        "filename": rel_path,
+                        "size_bytes": f.stat().st_size,
+                    },
+                )
 
     # ------------------------------------------------------------------
     # Agent restart (for stuck/failed agents)
@@ -801,9 +833,13 @@ class SwarmOrchestrator:
 
             # Mark agents as working
             for worker_name in assigned:
-                await self._emit("agent.status_changed", {
-                    "agent_name": worker_name, "status": "working",
-                })
+                await self._emit(
+                    "agent.status_changed",
+                    {
+                        "agent_name": worker_name,
+                        "status": "working",
+                    },
+                )
 
             # Prepare execution: base agent for first task, ephemeral for rest
             task_agent_pairs: list[tuple[str, Task]] = []
@@ -843,7 +879,7 @@ class SwarmOrchestrator:
                 await eph.cleanup()
             ephemeral_agents.clear()
 
-            for (worker_name, task), result in zip(task_agent_pairs, results):
+            for (worker_name, task), result in zip(task_agent_pairs, results, strict=False):
                 if isinstance(result, Exception):
                     log.warning("agent_task_failed", agent=worker_name, task_id=task.id, error=str(result))
                     current_task = next(
@@ -856,20 +892,27 @@ class SwarmOrchestrator:
                         "swarm.task_failed",
                         {"task_id": task.id, "agent": worker_name, "error": str(result)},
                     )
-                    await self._emit("agent.status_changed", {
-                        "agent_name": worker_name, "status": "failed",
-                    })
+                    await self._emit(
+                        "agent.status_changed",
+                        {
+                            "agent_name": worker_name,
+                            "status": "failed",
+                        },
+                    )
                 else:
                     # Count completed tasks for this agent
                     all_tasks = await self.task_board.get_tasks()
                     completed_count = sum(
-                        1 for t in all_tasks
-                        if t.worker_name == worker_name and t.status == TaskStatus.COMPLETED
+                        1 for t in all_tasks if t.worker_name == worker_name and t.status == TaskStatus.COMPLETED
                     )
-                    await self._emit("agent.status_changed", {
-                        "agent_name": worker_name, "status": "idle",
-                        "tasks_completed": completed_count,
-                    })
+                    await self._emit(
+                        "agent.status_changed",
+                        {
+                            "agent_name": worker_name,
+                            "status": "idle",
+                            "tasks_completed": completed_count,
+                        },
+                    )
 
             # Emit task.updated for all tasks that changed this round
             all_tasks = await self.task_board.get_tasks()
@@ -883,14 +926,16 @@ class SwarmOrchestrator:
         all_tasks = await self.task_board.get_tasks()
         unfinished = [t for t in all_tasks if t.status not in (TaskStatus.COMPLETED,)]
         if unfinished:
-            log.warning("swarm_rounds_exhausted",
-                        swarm_id=self.swarm_id,
-                        remaining_tasks=len(unfinished),
-                        max_rounds=max_rounds)
-            await self._emit("swarm.rounds_exhausted", {
-                "remaining_tasks": len(unfinished),
-                "max_rounds": max_rounds,
-            })
+            log.warning(
+                "swarm_rounds_exhausted", swarm_id=self.swarm_id, remaining_tasks=len(unfinished), max_rounds=max_rounds
+            )
+            await self._emit(
+                "swarm.rounds_exhausted",
+                {
+                    "remaining_tasks": len(unfinished),
+                    "max_rounds": max_rounds,
+                },
+            )
 
     # ------------------------------------------------------------------
     # Phase 4: Synthesis (tool-based structured output)
@@ -906,8 +951,7 @@ class SwarmOrchestrator:
         await self._emit("swarm.phase_changed", {"phase": "synthesizing"})
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
-            f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}"
-            for t in all_tasks
+            f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}" for t in all_tasks
         )
 
         # Include work directory files so synthesis agent has full research content
@@ -919,12 +963,11 @@ class SwarmOrchestrator:
                     text = f.read_text(encoding="utf-8")
                     if text.strip():
                         file_parts.append(f"### File: {f.name}\n\n{text}")
-                except Exception:
-                    pass
+                except Exception:  # noqa: S110
+                    pass  # Skip unreadable files (binary, encoding issues)
             if file_parts:
-                work_dir_content = (
-                    "\n\n---\n\n# Research Files from Work Directory\n\n"
-                    + "\n\n---\n\n".join(file_parts)
+                work_dir_content = "\n\n---\n\n# Research Files from Work Directory\n\n" + "\n\n---\n\n".join(
+                    file_parts
                 )
 
         synthesis_template = self.template.synthesis_prompt if self.template else SYNTHESIS_PROMPT_TEMPLATE
@@ -934,20 +977,22 @@ class SwarmOrchestrator:
         )
 
         synthesis_system = (
-            self.template.leader_prompt if self.template
+            self.template.leader_prompt
+            if self.template
             else "You are a synthesis agent. Provide a comprehensive report."
         )
 
         synthesis_session_id = f"synth-{self.swarm_id}" if self.swarm_id else None
         synth_mcp = self._get_mcp_servers()
-        synth_skills = (
-            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
-        )
+        synth_skills = [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
         try:
             session = await _create_session_with_tools(
-                self.client, synthesis_system, [],
+                self.client,
+                synthesis_system,
+                [],
                 session_id=synthesis_session_id,
-                mcp_servers=synth_mcp, skill_directories=synth_skills,
+                mcp_servers=synth_mcp,
+                skill_directories=synth_skills,
                 model=self.model,
             )
         except TypeError:
@@ -964,9 +1009,7 @@ class SwarmOrchestrator:
             raw = getattr(event, "type", "")
             et = getattr(raw, "value", str(raw)).lower()
 
-            if "idle" in et:
-                done.set()
-            elif "session" in et and "error" in et:
+            if "idle" in et or ("session" in et and "error" in et):
                 done.set()
             # Stream deltas to frontend and accumulate
             if "assistant.message_delta" in et:
@@ -974,10 +1017,13 @@ class SwarmOrchestrator:
                 delta = getattr(data, "content", "") or getattr(data, "delta_content", "")
                 if delta:
                     delta_parts.append(str(delta))
-                    self.event_bus.emit_sync("leader.report_delta", {
-                        "delta": str(delta),
-                        "swarm_id": self.swarm_id,
-                    })
+                    self.event_bus.emit_sync(
+                        "leader.report_delta",
+                        {
+                            "delta": str(delta),
+                            "swarm_id": self.swarm_id,
+                        },
+                    )
             # Capture assistant text
             if "assistant.message" in et and "delta" not in et:
                 data = getattr(event, "data", None)
@@ -997,8 +1043,10 @@ class SwarmOrchestrator:
             unsubscribe()
 
         report = (
-            "\n".join(text_content) if text_content
-            else "".join(delta_parts) if delta_parts
+            "\n".join(text_content)
+            if text_content
+            else "".join(delta_parts)
+            if delta_parts
             else "(Synthesis produced no output)"
         )
 

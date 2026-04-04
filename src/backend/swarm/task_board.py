@@ -43,9 +43,7 @@ class TaskBoard:
             self._tasks[id] = task
             return task
 
-    async def update_status(
-        self, task_id: str, status: str, result: str = ""
-    ) -> Task:
+    async def update_status(self, task_id: str, status: str, result: str = "") -> Task:
         """Transition a task to a new status.
 
         When transitioning to COMPLETED, dependency resolution is triggered
@@ -60,14 +58,10 @@ class TaskBoard:
                 self._resolve_dependencies(task_id)
             return task
 
-    async def get_runnable_tasks(
-        self, owner: str | None = None
-    ) -> list[Task]:
+    async def get_runnable_tasks(self, owner: str | None = None) -> list[Task]:
         """Return tasks in PENDING status, optionally filtered by *owner*."""
         async with self._lock:
-            tasks = [
-                t for t in self._tasks.values() if t.status is TaskStatus.PENDING
-            ]
+            tasks = [t for t in self._tasks.values() if t.status is TaskStatus.PENDING]
             if owner is not None:
                 tasks = [t for t in tasks if t.worker_name == owner]
             return tasks

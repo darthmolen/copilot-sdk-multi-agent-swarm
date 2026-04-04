@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import textwrap
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from prefill.interfaces import ContextBlock, SystemPromptBuilder
 from prefill.memory_strategy import MemoryStrategy, SQLiteMemoryStore
 from prefill.rag_strategy import RAGStrategy
 from prefill.vector_strategy import VectorStrategy
-
 
 # ---------------------------------------------------------------------------
 # Query router helpers

@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -24,18 +23,17 @@ class SwarmRepository:
     # ------------------------------------------------------------------
 
     async def create_swarm(
-        self, swarm_id: UUID, goal: str, template_key: str | None = None,
+        self,
+        swarm_id: UUID,
+        goal: str,
+        template_key: str | None = None,
     ) -> None:
         async with self._engine.begin() as conn:
-            await conn.execute(
-                swarms.insert().values(id=swarm_id, goal=goal, template_key=template_key)
-            )
+            await conn.execute(swarms.insert().values(id=swarm_id, goal=goal, template_key=template_key))
 
     async def get_swarm(self, swarm_id: UUID) -> dict[str, Any] | None:
         async with self._engine.connect() as conn:
-            row = (await conn.execute(
-                swarms.select().where(swarms.c.id == swarm_id)
-            )).mappings().first()
+            row = (await conn.execute(swarms.select().where(swarms.c.id == swarm_id))).mappings().first()
         return dict(row) if row else None
 
     async def update_phase(self, swarm_id: UUID, phase: str) -> None:
@@ -43,24 +41,18 @@ class SwarmRepository:
         if phase == "complete":
             values["completed_at"] = _now()
         async with self._engine.begin() as conn:
-            await conn.execute(
-                swarms.update().where(swarms.c.id == swarm_id).values(**values)
-            )
+            await conn.execute(swarms.update().where(swarms.c.id == swarm_id).values(**values))
 
     async def update_swarm(self, swarm_id: UUID, **kwargs: Any) -> None:
         kwargs["updated_at"] = _now()
         if kwargs.get("phase") == "complete":
             kwargs.setdefault("completed_at", _now())
         async with self._engine.begin() as conn:
-            await conn.execute(
-                swarms.update().where(swarms.c.id == swarm_id).values(**kwargs)
-            )
+            await conn.execute(swarms.update().where(swarms.c.id == swarm_id).values(**kwargs))
 
     async def list_swarms(self) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
-            rows = (await conn.execute(
-                swarms.select().order_by(swarms.c.created_at.desc())
-            )).mappings().all()
+            rows = (await conn.execute(swarms.select().order_by(swarms.c.created_at.desc()))).mappings().all()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -68,30 +60,45 @@ class SwarmRepository:
     # ------------------------------------------------------------------
 
     async def create_task(
-        self, swarm_id: UUID, task_id: str, subject: str, description: str,
-        worker_role: str, worker_name: str, blocked_by: list[str] | None = None,
+        self,
+        swarm_id: UUID,
+        task_id: str,
+        subject: str,
+        description: str,
+        worker_role: str,
+        worker_name: str,
+        blocked_by: list[str] | None = None,
         status: str = "pending",
     ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
                 tasks.insert().values(
-                    swarm_id=swarm_id, id=task_id, subject=subject,
-                    description=description, worker_role=worker_role,
-                    worker_name=worker_name, blocked_by=blocked_by or [],
+                    swarm_id=swarm_id,
+                    id=task_id,
+                    subject=subject,
+                    description=description,
+                    worker_role=worker_role,
+                    worker_name=worker_name,
+                    blocked_by=blocked_by or [],
                     status=status,
                 )
             )
 
     async def get_tasks(self, swarm_id: UUID) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
-            rows = (await conn.execute(
-                tasks.select().where(tasks.c.swarm_id == swarm_id)
-                .order_by(tasks.c.id)
-            )).mappings().all()
+            rows = (
+                (await conn.execute(tasks.select().where(tasks.c.swarm_id == swarm_id).order_by(tasks.c.id)))
+                .mappings()
+                .all()
+            )
         return [dict(r) for r in rows]
 
     async def update_task_status(
-        self, swarm_id: UUID, task_id: str, status: str, result: str = "",
+        self,
+        swarm_id: UUID,
+        task_id: str,
+        status: str,
+        result: str = "",
     ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
@@ -105,34 +112,42 @@ class SwarmRepository:
     # ------------------------------------------------------------------
 
     async def register_agent(
-        self, swarm_id: UUID, name: str, role: str,
-        display_name: str = "", session_id: str | None = None,
+        self,
+        swarm_id: UUID,
+        name: str,
+        role: str,
+        display_name: str = "",
+        session_id: str | None = None,
     ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
                 agents.insert().values(
-                    swarm_id=swarm_id, name=name, role=role,
-                    display_name=display_name, session_id=session_id,
+                    swarm_id=swarm_id,
+                    name=name,
+                    role=role,
+                    display_name=display_name,
+                    session_id=session_id,
                 )
             )
 
     async def get_agent(self, swarm_id: UUID, name: str) -> dict[str, Any] | None:
         async with self._engine.connect() as conn:
-            row = (await conn.execute(
-                agents.select().where(
-                    agents.c.swarm_id == swarm_id, agents.c.name == name
-                )
-            )).mappings().first()
+            row = (
+                (await conn.execute(agents.select().where(agents.c.swarm_id == swarm_id, agents.c.name == name)))
+                .mappings()
+                .first()
+            )
         return dict(row) if row else None
 
     async def update_agent(
-        self, swarm_id: UUID, name: str, **kwargs: Any,
+        self,
+        swarm_id: UUID,
+        name: str,
+        **kwargs: Any,
     ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
-                agents.update()
-                .where(agents.c.swarm_id == swarm_id, agents.c.name == name)
-                .values(**kwargs)
+                agents.update().where(agents.c.swarm_id == swarm_id, agents.c.name == name).values(**kwargs)
             )
 
     # ------------------------------------------------------------------
@@ -140,22 +155,33 @@ class SwarmRepository:
     # ------------------------------------------------------------------
 
     async def save_message(
-        self, swarm_id: UUID, sender: str, recipient: str, content: str,
+        self,
+        swarm_id: UUID,
+        sender: str,
+        recipient: str,
+        content: str,
     ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
                 messages.insert().values(
-                    swarm_id=swarm_id, sender=sender,
-                    recipient=recipient, content=content,
+                    swarm_id=swarm_id,
+                    sender=sender,
+                    recipient=recipient,
+                    content=content,
                 )
             )
 
     async def get_messages(self, swarm_id: UUID) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
-            rows = (await conn.execute(
-                messages.select().where(messages.c.swarm_id == swarm_id)
-                .order_by(messages.c.created_at)
-            )).mappings().all()
+            rows = (
+                (
+                    await conn.execute(
+                        messages.select().where(messages.c.swarm_id == swarm_id).order_by(messages.c.created_at)
+                    )
+                )
+                .mappings()
+                .all()
+            )
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -163,11 +189,16 @@ class SwarmRepository:
     # ------------------------------------------------------------------
 
     async def save_file(
-        self, swarm_id: UUID, path: str, size_bytes: int = 0,
+        self,
+        swarm_id: UUID,
+        path: str,
+        size_bytes: int = 0,
     ) -> None:
         async with self._engine.begin() as conn:
             stmt = pg_insert(files).values(
-                swarm_id=swarm_id, path=path, size_bytes=size_bytes,
+                swarm_id=swarm_id,
+                path=path,
+                size_bytes=size_bytes,
             )
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_files_swarm_path",
@@ -177,10 +208,11 @@ class SwarmRepository:
 
     async def get_files(self, swarm_id: UUID) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
-            rows = (await conn.execute(
-                files.select().where(files.c.swarm_id == swarm_id)
-                .order_by(files.c.path)
-            )).mappings().all()
+            rows = (
+                (await conn.execute(files.select().where(files.c.swarm_id == swarm_id).order_by(files.c.path)))
+                .mappings()
+                .all()
+            )
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -188,17 +220,24 @@ class SwarmRepository:
     # ------------------------------------------------------------------
 
     async def save_event(
-        self, swarm_id: UUID | None, event_type: str, data: dict[str, Any],
+        self,
+        swarm_id: UUID | None,
+        event_type: str,
+        data: dict[str, Any],
     ) -> None:
         async with self._engine.begin() as conn:
             await conn.execute(
                 events.insert().values(
-                    swarm_id=swarm_id, event_type=event_type, data_json=data,
+                    swarm_id=swarm_id,
+                    event_type=event_type,
+                    data_json=data,
                 )
             )
 
     async def get_events(
-        self, swarm_id: UUID, since: datetime | None = None,
+        self,
+        swarm_id: UUID,
+        since: datetime | None = None,
     ) -> list[dict[str, Any]]:
         stmt = events.select().where(events.c.swarm_id == swarm_id)
         if since is not None:
@@ -227,10 +266,11 @@ class SwarmRepository:
 
     async def _get_all_agents(self, swarm_id: UUID) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
-            rows = (await conn.execute(
-                agents.select().where(agents.c.swarm_id == swarm_id)
-                .order_by(agents.c.name)
-            )).mappings().all()
+            rows = (
+                (await conn.execute(agents.select().where(agents.c.swarm_id == swarm_id).order_by(agents.c.name)))
+                .mappings()
+                .all()
+            )
         return [dict(r) for r in rows]
 
 

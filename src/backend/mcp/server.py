@@ -6,8 +6,10 @@ live swarm state and restart stuck agents.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
@@ -28,9 +30,12 @@ mcp = FastMCP(
 _streamable_app = mcp.streamable_http_app()
 
 
-def get_session_manager():  # noqa: ANN201
+def get_session_manager():  # type: ignore[return-type]
     """Return the MCP session manager (created by streamable_http_app())."""
-    return mcp._session_manager
+    mgr = mcp._session_manager
+    if mgr is None:
+        raise RuntimeError("MCP session manager not initialized. Call streamable_http_app() first.")
+    return mgr
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +43,7 @@ def get_session_manager():  # noqa: ANN201
 # ---------------------------------------------------------------------------
 
 
-def _resolve_swarm_id(swarm_id: str | None) -> dict:
+def _resolve_swarm_id(swarm_id: str | None) -> dict[str, Any]:
     """Return the swarm state dict for the given (or inferred) swarm_id.
 
     Returns a dict with an "error" key on failure so tool callers
@@ -51,12 +56,12 @@ def _resolve_swarm_id(swarm_id: str | None) -> dict:
         state = store.get(swarm_id)
         if state is None:
             return {"error": f"Swarm '{swarm_id}' not found. Available: {list(store.keys())}"}
-        return state
+        return dict(state)
 
     if len(store) == 0:
         return {"error": "No active swarms."}
     if len(store) == 1:
-        return next(iter(store.values()))
+        return dict(next(iter(store.values())))
     return {"error": f"Multiple swarms active. Specify swarm_id. Available: {list(store.keys())}"}
 
 
@@ -66,7 +71,7 @@ def _resolve_swarm_id(swarm_id: str | None) -> dict:
 
 
 @mcp.tool()
-async def get_active_swarms() -> list[dict[str, str]]:
+async def get_active_swarms() -> list[dict[str, Any]]:
     """List all active swarms with their IDs, phase, goal, and template."""
     deps = get_deps()
     return [
@@ -74,7 +79,7 @@ async def get_active_swarms() -> list[dict[str, str]]:
             "swarm_id": state.get("swarm_id", sid),
             "phase": state.get("phase", "unknown"),
             "goal": state.get("goal", ""),
-            "template": state.get("template", ""),
+            "template": state.get("template") or "",
         }
         for sid, state in deps.swarm_store.items()
     ]
@@ -164,10 +169,8 @@ async def get_recent_events(
         since_dt = datetime.fromisoformat(since)
 
     sid = state["swarm_id"]
-    try:
+    with contextlib.suppress(ValueError):
         sid = UUID(sid)
-    except ValueError:
-        pass
     events = await deps.repository.get_events(sid, since=since_dt)
 
     # Return most recent N events
@@ -210,11 +213,13 @@ async def list_artifacts(swarm_id: str | None = None) -> list[dict] | dict:
     artifacts = []
     for f in swarm_dir.rglob("*"):
         if f.is_file():
-            artifacts.append({
-                "name": f.name,
-                "path": str(f.relative_to(swarm_dir)),
-                "size": f.stat().st_size,
-            })
+            artifacts.append(
+                {
+                    "name": f.name,
+                    "path": str(f.relative_to(swarm_dir)),
+                    "size": f.stat().st_size,
+                }
+            )
     return artifacts
 
 

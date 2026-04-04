@@ -81,11 +81,16 @@ MCP_HEADERS = {
 
 
 async def _mcp_init_body():
-    return {"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {
-        "protocolVersion": "2025-03-26",
-        "capabilities": {},
-        "clientInfo": {"name": "test-client", "version": "1.0"},
-    }}
+    return {
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "id": 1,
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "1.0"},
+        },
+    }
 
 
 class TestMCPServer:
@@ -151,9 +156,15 @@ class TestMCPServer:
                 # Parse tool names from SSE response body
                 body = tools_resp.text
                 expected_tools = [
-                    "get_active_swarms", "get_swarm_status", "list_tasks",
-                    "get_task_detail", "get_recent_events", "list_agents",
-                    "list_artifacts", "read_artifact", "restart_agent",
+                    "get_active_swarms",
+                    "get_swarm_status",
+                    "list_tasks",
+                    "get_task_detail",
+                    "get_recent_events",
+                    "list_agents",
+                    "list_artifacts",
+                    "read_artifact",
+                    "restart_agent",
                 ]
                 for tool_name in expected_tools:
                     assert tool_name in body, f"Tool '{tool_name}' not found in response"
@@ -166,14 +177,13 @@ class TestMCPAuth:
     async def test_rejects_without_key(self):
         """When SWARM_API_KEY is set, /mcp should require X-API-Key."""
         import backend.main as main_mod
+
         main_mod.ENVIRONMENT = "production"
         main_mod.SWARM_API_KEY = "test-secret-key"
 
         from backend.main import app
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://localhost"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
             resp = await client.post(
                 "/mcp/mcp",
                 json=await _mcp_init_body(),
@@ -188,6 +198,7 @@ class TestMCPAuth:
         initialized — but getting past 401 proves auth middleware worked.
         """
         import backend.main as main_mod
+
         main_mod.ENVIRONMENT = "production"
         main_mod.SWARM_API_KEY = "test-secret-key"
 
@@ -208,6 +219,7 @@ class TestMCPAuth:
     async def test_dev_mode_skips_auth(self):
         """In development with no key, /mcp should pass through without auth."""
         import backend.main as main_mod
+
         main_mod.ENVIRONMENT = "development"
         main_mod.SWARM_API_KEY = ""
 
