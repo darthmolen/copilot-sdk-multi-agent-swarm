@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
@@ -17,6 +16,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from backend.mcp.deps import get_deps
+from backend.swarm.models import SwarmState
 
 mcp = FastMCP(
     "swarm-state",
@@ -44,8 +44,8 @@ def get_session_manager():  # type: ignore[return-type]
 # ---------------------------------------------------------------------------
 
 
-def _resolve_swarm_id(swarm_id: str) -> dict[str, Any]:
-    """Return the swarm state dict for the given swarm_id.
+def _resolve_swarm(swarm_id: str) -> SwarmState:
+    """Return the typed SwarmState for the given swarm_id.
 
     Raises ToolError if the swarm is not found.
     """
@@ -53,7 +53,7 @@ def _resolve_swarm_id(swarm_id: str) -> dict[str, Any]:
     state = deps.swarm_store.get(swarm_id)
     if state is None:
         raise ToolError(f"Swarm '{swarm_id}' not found. Available: {list(deps.swarm_store.keys())}")
-    return dict(state)
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -62,28 +62,28 @@ def _resolve_swarm_id(swarm_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_active_swarms() -> list[dict[str, Any]]:
+async def get_active_swarms() -> list[dict[str, str | None]]:
     """List all active swarms with their IDs, phase, goal, and template."""
     deps = get_deps()
     return [
         {
-            "swarm_id": state.get("swarm_id", sid),
-            "phase": state.get("phase", "unknown"),
-            "goal": state.get("goal", ""),
-            "template": state.get("template") or "",
+            "swarm_id": state["swarm_id"],
+            "phase": state["phase"],
+            "goal": state["goal"],
+            "template": state["template"],
         }
-        for sid, state in deps.swarm_store.items()
+        for state in deps.swarm_store.values()
     ]
 
 
 @mcp.tool()
 async def get_swarm_status(swarm_id: str) -> dict:
     """Get current swarm phase, round number, active agent count, and task counts."""
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
     orch = state.get("orchestrator")
     if orch is None:
-        return {"phase": state.get("phase", "unknown"), "round_number": 0, "agent_count": 0, "task_counts": {}}
+        return {"phase": state["phase"], "round_number": state["round_number"], "agent_count": 0, "task_counts": {}}
 
     agents = await orch.service.registry.get_all()
     tasks = await orch.service.task_board.get_tasks()
@@ -95,8 +95,8 @@ async def get_swarm_status(swarm_id: str) -> dict:
 
     return {
         "swarm_id": state["swarm_id"],
-        "phase": state.get("phase", "unknown"),
-        "round_number": state.get("round_number", 0),
+        "phase": state["phase"],
+        "round_number": state["round_number"],
         "agent_count": len(agents),
         "task_counts": task_counts,
     }
@@ -109,9 +109,12 @@ async def list_tasks(
     worker: str | None = None,
 ) -> list[dict]:
     """List all tasks, optionally filtered by status or worker name."""
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
-    orch = state["orchestrator"]
+    orch = state.get("orchestrator")
+    if orch is None:
+        raise ToolError("Swarm has no orchestrator.")
+
     tasks = await orch.service.task_board.get_tasks(owner=worker)
 
     if status is not None:
@@ -123,9 +126,12 @@ async def list_tasks(
 @mcp.tool()
 async def get_task_detail(swarm_id: str, task_id: str) -> dict:
     """Get full detail for a specific task including result and timeline."""
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
-    orch = state["orchestrator"]
+    orch = state.get("orchestrator")
+    if orch is None:
+        raise ToolError("Swarm has no orchestrator.")
+
     tasks = await orch.service.task_board.get_tasks()
     for t in tasks:
         if t.id == task_id:
@@ -145,27 +151,29 @@ async def get_recent_events(
     if deps.repository is None:
         raise ToolError("Event history requires database persistence (DATABASE_URL).")
 
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
     since_dt = None
     if since is not None:
         since_dt = datetime.fromisoformat(since)
 
-    sid = state["swarm_id"]
+    sid: str | UUID = state["swarm_id"]
     with contextlib.suppress(ValueError):
         sid = UUID(sid)
     events = await deps.repository.get_events(sid, since=since_dt)
 
-    # Return most recent N events
     return events[-count:] if len(events) > count else events
 
 
 @mcp.tool()
 async def list_agents(swarm_id: str) -> list[dict]:
     """List all agents with their roles, status, and tasks completed."""
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
-    orch = state["orchestrator"]
+    orch = state.get("orchestrator")
+    if orch is None:
+        raise ToolError("Swarm has no orchestrator.")
+
     agents = await orch.service.registry.get_all()
     return [
         {
@@ -183,7 +191,7 @@ async def list_agents(swarm_id: str) -> list[dict]:
 async def list_artifacts(swarm_id: str) -> list[dict]:
     """List files created in the swarm work directory."""
     deps = get_deps()
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
     swarm_dir = Path(deps.work_dir) / state["swarm_id"]
     if not swarm_dir.is_dir():
@@ -206,7 +214,7 @@ async def list_artifacts(swarm_id: str) -> list[dict]:
 async def read_artifact(swarm_id: str, path: str) -> dict:
     """Read a file from the swarm work directory. Path is relative to the swarm dir."""
     deps = get_deps()
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
     swarm_dir = Path(deps.work_dir) / state["swarm_id"]
     target = (swarm_dir / path).resolve()
@@ -229,9 +237,12 @@ async def read_artifact(swarm_id: str, path: str) -> dict:
 @mcp.tool()
 async def restart_agent(swarm_id: str, agent_name: str) -> dict:
     """Restart a stuck or failed agent by recreating its session."""
-    state = _resolve_swarm_id(swarm_id)
+    state = _resolve_swarm(swarm_id)
 
-    orch = state["orchestrator"]
+    orch = state.get("orchestrator")
+    if orch is None:
+        raise ToolError("Swarm has no orchestrator.")
+
     try:
         await orch.restart_agent(agent_name)
     except KeyError as exc:
