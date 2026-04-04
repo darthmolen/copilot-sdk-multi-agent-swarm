@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -63,3 +63,24 @@ class InboxMessage(BaseModel):
     recipient: str
     content: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class _SwarmStateRequired(TypedDict):
+    """Required keys for swarm state."""
+
+    swarm_id: str
+    goal: str
+    template: str | None
+    phase: str
+    round_number: int
+
+
+class SwarmState(_SwarmStateRequired, total=False):
+    """In-memory swarm state stored in swarm_store.
+
+    Uses TypedDict (not Pydantic) because it holds a live SwarmOrchestrator
+    reference that isn't serializable.
+    """
+
+    orchestrator: Any  # SwarmOrchestrator — can't import here (circular)
+    report: str | None

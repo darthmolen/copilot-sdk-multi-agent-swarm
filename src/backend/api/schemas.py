@@ -24,11 +24,30 @@ class EnsureReportRequest(BaseModel):
     report: str = Field(..., min_length=1)
 
 
+class TaskSummary(BaseModel):
+    id: str
+    subject: str
+    description: str
+    worker_role: str
+    worker_name: str
+    status: str
+    blocked_by: list[str] = Field(default_factory=list)
+    result: str = ""
+
+
+class AgentSummary(BaseModel):
+    name: str
+    role: str
+    display_name: str
+    status: str
+    tasks_completed: int = 0
+
+
 class SwarmStatusResponse(BaseModel):
     swarm_id: str
     phase: str
-    tasks: list[dict]
-    agents: list[dict]
+    tasks: list[TaskSummary]
+    agents: list[AgentSummary]
     inbox_recent: list[dict]
     round_number: int
     report: str | None = None

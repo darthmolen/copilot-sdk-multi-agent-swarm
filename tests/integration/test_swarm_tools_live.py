@@ -21,6 +21,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _find_tool(tools, name: str):
     """Return the tool with the given name from a list of Tool instances."""
     for tool in tools:

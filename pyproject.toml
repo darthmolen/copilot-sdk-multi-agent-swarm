@@ -26,6 +26,9 @@ dev = [
     "pytest-asyncio>=0.21",
     "httpx>=0.24",
     "psycopg2-binary>=2.9",
+    "ruff>=0.8",
+    "pyright>=1.1",
+    "pre-commit>=3.0",
 ]
 
 [tool.pytest.ini_options]
@@ -35,6 +38,35 @@ markers = [
     "integration: requires live copilot-cli (deselect with '-m not integration')",
     "db: requires Postgres (deselect with '-m not db')",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "S101",  # assert used (fine in tests)
+    "E501",  # line-too-long — enforced by formatter, not linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106", "S108", "S110", "RUF006"]
+"src/hello_world/**" = ["T201"]
+"src/prefill/**" = ["T201"]
+"tests/integration/test_orchestrator_live.py" = ["T201"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

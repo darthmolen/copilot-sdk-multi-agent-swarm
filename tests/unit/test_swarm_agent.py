@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,8 +16,6 @@ from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.models import TaskStatus
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
-from backend.swarm.tools import Tool
-
 
 # ---------------------------------------------------------------------------
 # Mock boundary — only CopilotClient / CopilotSession are mocked
@@ -128,9 +128,7 @@ async def _make_task(board: TaskBoard) -> Any:
 # ---------------------------------------------------------------------------
 
 
-async def test_create_session_uses_system_message_replace(
-    agent: SwarmAgent, mock_client: MockClient
-) -> None:
+async def test_create_session_uses_system_message_replace(agent: SwarmAgent, mock_client: MockClient) -> None:
     """Session uses system_message mode:replace, not customAgents."""
     await agent.create_session(mock_client)
 
@@ -145,14 +143,22 @@ async def test_create_session_uses_system_message_replace(
 
 
 async def test_create_session_passes_model(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
 ) -> None:
     """Session passes the configured model."""
     agent = SwarmAgent(
-        name="coder", role="Code", display_name="Coder",
-        task_board=task_board, inbox=inbox, registry=registry,
-        event_bus=event_bus, model="gemini-3-pro-preview",
+        name="coder",
+        role="Code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        model="gemini-3-pro-preview",
     )
     await agent.create_session(mock_client)
 
@@ -161,15 +167,23 @@ async def test_create_session_passes_model(
 
 
 async def test_create_session_passes_mcp_servers(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
 ) -> None:
     """MCP server config is passed through to create_session kwargs."""
     mcp = {"playwright": {"type": "stdio", "command": "npx", "args": [], "tools": ["*"]}}
     agent = SwarmAgent(
-        name="coder", role="Code", display_name="Coder",
-        task_board=task_board, inbox=inbox, registry=registry,
-        event_bus=event_bus, mcp_servers=mcp,
+        name="coder",
+        role="Code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        mcp_servers=mcp,
     )
     await agent.create_session(mock_client)
 
@@ -178,16 +192,25 @@ async def test_create_session_passes_mcp_servers(
 
 
 async def test_create_session_passes_skill_directories(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient, tmp_path: Path,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
+    tmp_path: Path,
 ) -> None:
     """Skill directories are passed through to create_session kwargs."""
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
     agent = SwarmAgent(
-        name="coder", role="Code", display_name="Coder",
-        task_board=task_board, inbox=inbox, registry=registry,
-        event_bus=event_bus, skill_directories=[str(skills_dir)],
+        name="coder",
+        role="Code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        skill_directories=[str(skills_dir)],
     )
     await agent.create_session(mock_client)
 
@@ -196,14 +219,22 @@ async def test_create_session_passes_skill_directories(
 
 
 async def test_create_session_passes_disabled_skills(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
 ) -> None:
     """disabled_skills list is passed through to create_session kwargs."""
     agent = SwarmAgent(
-        name="coder", role="Code", display_name="Coder",
-        task_board=task_board, inbox=inbox, registry=registry,
-        event_bus=event_bus, disabled_skills=["skill-b", "skill-c"],
+        name="coder",
+        role="Code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
+        event_bus=event_bus,
+        disabled_skills=["skill-b", "skill-c"],
     )
     await agent.create_session(mock_client)
 
@@ -212,7 +243,8 @@ async def test_create_session_passes_disabled_skills(
 
 
 async def test_create_session_no_disabled_skills_when_none(
-    agent: SwarmAgent, mock_client: MockClient,
+    agent: SwarmAgent,
+    mock_client: MockClient,
 ) -> None:
     """Agent without disabled_skills does not include it in kwargs."""
     await agent.create_session(mock_client)
@@ -222,7 +254,8 @@ async def test_create_session_no_disabled_skills_when_none(
 
 
 async def test_create_session_no_mcp_no_skills_omits_kwargs(
-    agent: SwarmAgent, mock_client: MockClient,
+    agent: SwarmAgent,
+    mock_client: MockClient,
 ) -> None:
     """Without MCP or skills, those kwargs are not present."""
     await agent.create_session(mock_client)
@@ -232,9 +265,7 @@ async def test_create_session_no_mcp_no_skills_omits_kwargs(
     assert "skill_directories" not in kwargs
 
 
-async def test_create_session_registers_swarm_tools(
-    agent: SwarmAgent, mock_client: MockClient
-) -> None:
+async def test_create_session_registers_swarm_tools(agent: SwarmAgent, mock_client: MockClient) -> None:
     await agent.create_session(mock_client)
 
     kwargs = mock_client.create_session_kwargs
@@ -245,12 +276,19 @@ async def test_create_session_registers_swarm_tools(
 
 
 async def test_create_session_passes_available_tools(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
 ) -> None:
     agent = SwarmAgent(
-        name="coder", role="Code", display_name="Coder",
-        task_board=task_board, inbox=inbox, registry=registry,
+        name="coder",
+        role="Code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
         event_bus=event_bus,
         available_tools=["bash", "grep"],
         system_tools=["task_update", "inbox_send", "inbox_receive", "task_list"],
@@ -266,7 +304,8 @@ async def test_create_session_passes_available_tools(
 
 
 async def test_create_session_no_available_tools_when_none(
-    agent: SwarmAgent, mock_client: MockClient,
+    agent: SwarmAgent,
+    mock_client: MockClient,
 ) -> None:
     await agent.create_session(mock_client)
 
@@ -275,12 +314,19 @@ async def test_create_session_no_available_tools_when_none(
 
 
 async def test_create_session_uses_assembled_prompt(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
 ) -> None:
     agent = SwarmAgent(
-        name="researcher", role="Primary Researcher", display_name="Dr. Smith",
-        task_board=task_board, inbox=inbox, registry=registry,
+        name="researcher",
+        role="Primary Researcher",
+        display_name="Dr. Smith",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
         event_bus=event_bus,
         prompt_template="You are an expert in {role}.\n\nDo literature review.",
         system_preamble="## Protocol\nYou MUST call task_update.",
@@ -300,7 +346,9 @@ async def test_create_session_uses_assembled_prompt(
 
 
 async def test_execute_task_marks_in_progress(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     await agent.create_session(mock_client)
@@ -318,7 +366,9 @@ async def test_execute_task_marks_in_progress(
 
 
 async def test_execute_task_sends_prompt(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     await agent.create_session(mock_client)
@@ -338,7 +388,9 @@ async def test_execute_task_sends_prompt(
 
 
 async def test_execute_task_completes_on_session_idle(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     await agent.create_session(mock_client)
@@ -356,7 +408,9 @@ async def test_execute_task_completes_on_session_idle(
 
 
 async def test_execute_task_timeout_marks_task(
-    agent: SwarmAgent, mock_client: MockClient, task_board: TaskBoard,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    task_board: TaskBoard,
 ) -> None:
     await agent.create_session(mock_client)
     task = await _make_task(task_board)
@@ -367,7 +421,9 @@ async def test_execute_task_timeout_marks_task(
 
 
 async def test_execute_task_error_marks_failed(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     await agent.create_session(mock_client)
@@ -375,10 +431,12 @@ async def test_execute_task_error_marks_failed(
 
     async def _fire() -> None:
         await asyncio.sleep(0.01)
-        mock_session.fire_event(SessionEvent(
-            type=SessionEventType.SESSION_ERROR,
-            data=SessionEventData(error="boom"),
-        ))
+        mock_session.fire_event(
+            SessionEvent(
+                type=SessionEventType.SESSION_ERROR,
+                data=SessionEventData(error="boom"),
+            )
+        )
 
     asyncio.ensure_future(_fire())
     await agent.execute_task(task)
@@ -388,7 +446,9 @@ async def test_execute_task_error_marks_failed(
 
 
 async def test_execute_task_unsubscribes_on_completion(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     await agent.create_session(mock_client)
@@ -411,7 +471,9 @@ async def test_execute_task_unsubscribes_on_completion(
 
 
 async def test_circuit_breaker_trips_after_consecutive_tool_failures(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     """Agent stops execution after MAX_TOOL_FAILURES consecutive tool failures."""
@@ -422,14 +484,16 @@ async def test_circuit_breaker_trips_after_consecutive_tool_failures(
         await asyncio.sleep(0.01)
         # Fire 5 consecutive tool failures (no successes in between)
         for i in range(5):
-            mock_session.fire_event(SessionEvent(
-                type=SessionEventType.TOOL_EXECUTION_COMPLETE,
-                data=SessionEventData(
-                    tool_call_id=f"tc-{i}",
-                    success=False,
-                    error='"command": Required',
-                ),
-            ))
+            mock_session.fire_event(
+                SessionEvent(
+                    type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                    data=SessionEventData(
+                        tool_call_id=f"tc-{i}",
+                        success=False,
+                        error='"command": Required',
+                    ),
+                )
+            )
 
     asyncio.ensure_future(_fire_tool_failures())
     await agent.execute_task(task, timeout=5)
@@ -440,7 +504,9 @@ async def test_circuit_breaker_trips_after_consecutive_tool_failures(
 
 
 async def test_circuit_breaker_resets_on_successful_tool(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     """A successful tool call resets the consecutive failure counter."""
@@ -451,19 +517,25 @@ async def test_circuit_breaker_resets_on_successful_tool(
         await asyncio.sleep(0.01)
         # 4 failures, then 1 success, then 4 more failures — should NOT trip
         for i in range(4):
-            mock_session.fire_event(SessionEvent(
+            mock_session.fire_event(
+                SessionEvent(
+                    type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                    data=SessionEventData(tool_call_id=f"tc-{i}", success=False, error="err"),
+                )
+            )
+        mock_session.fire_event(
+            SessionEvent(
                 type=SessionEventType.TOOL_EXECUTION_COMPLETE,
-                data=SessionEventData(tool_call_id=f"tc-{i}", success=False, error="err"),
-            ))
-        mock_session.fire_event(SessionEvent(
-            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
-            data=SessionEventData(tool_call_id="tc-ok", success=True),
-        ))
+                data=SessionEventData(tool_call_id="tc-ok", success=True),
+            )
+        )
         for i in range(4):
-            mock_session.fire_event(SessionEvent(
-                type=SessionEventType.TOOL_EXECUTION_COMPLETE,
-                data=SessionEventData(tool_call_id=f"tc-b{i}", success=False, error="err"),
-            ))
+            mock_session.fire_event(
+                SessionEvent(
+                    type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                    data=SessionEventData(tool_call_id=f"tc-b{i}", success=False, error="err"),
+                )
+            )
         # Then idle — task should complete normally, not circuit break
         mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
 
@@ -480,15 +552,22 @@ async def test_circuit_breaker_resets_on_successful_tool(
 
 
 async def test_create_session_wires_event_callback(
-    task_board: TaskBoard, inbox: InboxSystem, registry: TeamRegistry,
-    event_bus: EventBus, mock_client: MockClient,
+    task_board: TaskBoard,
+    inbox: InboxSystem,
+    registry: TeamRegistry,
+    event_bus: EventBus,
+    mock_client: MockClient,
 ) -> None:
     events: list[tuple[str, dict]] = []
     event_bus.subscribe(lambda t, d: events.append((t, d)))
 
     agent = SwarmAgent(
-        name="coder", role="Code", display_name="Coder",
-        task_board=task_board, inbox=inbox, registry=registry,
+        name="coder",
+        role="Code",
+        display_name="Coder",
+        task_board=task_board,
+        inbox=inbox,
+        registry=registry,
         event_bus=event_bus,
     )
     await agent.create_session(mock_client)
@@ -498,6 +577,7 @@ async def test_create_session_wires_event_callback(
     assert len(tools) == 4
 
     from backend.swarm.tools import ToolInvocation
+
     inbox.register_agent("coder")
     inbox.register_agent("target")
 
@@ -516,7 +596,9 @@ async def test_create_session_wires_event_callback(
 
 
 async def test_timed_out_task_recovers_on_late_completion(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     """A timed-out task should recover to COMPLETED when session.idle fires late."""
@@ -543,7 +625,9 @@ async def test_timed_out_task_recovers_on_late_completion(
 
 
 async def test_late_completion_captures_content(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     """Late completion should capture assistant.message content as the task result."""
@@ -552,10 +636,12 @@ async def test_late_completion_captures_content(
 
     async def _fire_late_with_content() -> None:
         await asyncio.sleep(0.15)
-        mock_session.fire_event(SessionEvent(
-            type=SessionEventType.ASSISTANT_MESSAGE,
-            data=SessionEventData(content="Late result from agent"),
-        ))
+        mock_session.fire_event(
+            SessionEvent(
+                type=SessionEventType.ASSISTANT_MESSAGE,
+                data=SessionEventData(content="Late result from agent"),
+            )
+        )
         mock_session.fire_event(SessionEvent(type=SessionEventType.SESSION_IDLE))
 
     asyncio.ensure_future(_fire_late_with_content())
@@ -569,7 +655,9 @@ async def test_late_completion_captures_content(
 
 
 async def test_monitor_expires_without_completion(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
     task_board: TaskBoard,
 ) -> None:
     """Monitor should give up after its own timeout and unsubscribe."""
@@ -597,7 +685,9 @@ async def test_monitor_expires_without_completion(
 
 
 async def test_agent_cleanup_stops_owned_client(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
 ) -> None:
     """Agent with owns_client=True calls client.stop() on cleanup."""
     mock_client.stopped = False
@@ -614,7 +704,9 @@ async def test_agent_cleanup_stops_owned_client(
 
 
 async def test_agent_cleanup_skips_shared_client(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
 ) -> None:
     """Agent with owns_client=False does NOT call client.stop()."""
     mock_client.stopped = False
@@ -643,7 +735,9 @@ async def test_agent_cleanup_safe_without_session(
 
 
 async def test_agent_captures_session_id(
-    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+    agent: SwarmAgent,
+    mock_client: MockClient,
+    mock_session: MockSession,
 ) -> None:
     """After create_session(), agent.session_id is set."""
     mock_session.session_id = "test-session-123"

@@ -6,10 +6,6 @@ Tests the full chain from tool invocation to frontend event delivery.
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any
-
-import pytest
 
 from backend.events import EventBus
 from backend.swarm.inbox_system import InboxSystem
@@ -35,15 +31,11 @@ async def test_inbox_send_event_reaches_eventbus_subscriber() -> None:
         event_name = event_data.get("event", "tool_event")
         event_bus.emit_sync(event_name, event_data)
 
-    tools = create_swarm_tools(
-        "sender_agent", task_board, inbox, event_callback=_tool_event_callback
-    )
+    tools = create_swarm_tools("sender_agent", task_board, inbox, event_callback=_tool_event_callback)
     inbox_tool = next(t for t in tools if t.name == "inbox_send")
 
     # Invoke the tool
-    await inbox_tool.handler(
-        ToolInvocation(arguments={"to": "receiver_agent", "message": "hello from sender"})
-    )
+    await inbox_tool.handler(ToolInvocation(arguments={"to": "receiver_agent", "message": "hello from sender"}))
 
     # emit_sync schedules on the event loop — yield control
     await asyncio.sleep(0.05)
@@ -90,8 +82,11 @@ async def test_task_update_event_reaches_eventbus() -> None:
     inbox = InboxSystem()
     event_bus = EventBus()
     await task_board.add_task(
-        id="t1", subject="Test", description="D",
-        worker_role="R", worker_name="worker",
+        id="t1",
+        subject="Test",
+        description="D",
+        worker_role="R",
+        worker_name="worker",
     )
 
     received: list[tuple[str, dict]] = []
@@ -103,9 +98,7 @@ async def test_task_update_event_reaches_eventbus() -> None:
     tools = create_swarm_tools("worker", task_board, inbox, event_callback=_cb)
     update_tool = next(t for t in tools if t.name == "task_update")
 
-    await update_tool.handler(
-        ToolInvocation(arguments={"task_id": "t1", "status": "in_progress"})
-    )
+    await update_tool.handler(ToolInvocation(arguments={"task_id": "t1", "status": "in_progress"}))
 
     await asyncio.sleep(0.05)
 

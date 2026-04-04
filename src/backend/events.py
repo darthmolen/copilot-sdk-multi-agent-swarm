@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, Union
+import contextlib
+from collections.abc import Awaitable, Callable
 
 import structlog
 
 log = structlog.get_logger()
 
-Callback = Callable[[str, dict], Union[Awaitable[None], None]]
+Callback = Callable[[str, dict], Awaitable[None] | None]
 
 
 class EventBus:
@@ -32,10 +33,8 @@ class EventBus:
         self._subscribers.append(callback)
 
         def unsubscribe() -> None:
-            try:
+            with contextlib.suppress(ValueError):
                 self._subscribers.remove(callback)
-            except ValueError:
-                pass  # already removed
 
         return unsubscribe
 

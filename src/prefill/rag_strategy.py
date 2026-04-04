@@ -10,12 +10,11 @@ from __future__ import annotations
 import hashlib
 import textwrap
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
 from prefill.interfaces import ContextBlock, RetrievalStrategy
-
 
 # ---------------------------------------------------------------------------
 # Internal chunk representation

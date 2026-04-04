@@ -8,6 +8,7 @@ Requires: docker compose up -d postgres
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 from pathlib import Path
@@ -15,9 +16,8 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text, create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine
-
 
 # ---------------------------------------------------------------------------
 # Copilot / EventBus / Template fixtures (used by live integration tests)
@@ -133,12 +133,8 @@ def cleanup_test_databases():
     sync_admin = ADMIN_URL.replace("+asyncpg", "")
     engine = create_engine(sync_admin, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
-        rows = conn.execute(text(
-            "SELECT datname FROM pg_database WHERE datname LIKE 'test_%'"
-        )).fetchall()
+        rows = conn.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'test_%'")).fetchall()
         for (db_name,) in rows:
-            try:
+            with contextlib.suppress(Exception):
                 conn.execute(text(f'DROP DATABASE "{db_name}" WITH (FORCE)'))
-            except Exception:
-                pass
     engine.dispose()

@@ -9,7 +9,6 @@ import pytest
 from backend.swarm.models import AgentInfo, AgentStatus
 from backend.swarm.team_registry import TeamRegistry
 
-
 # ---------------------------------------------------------------------------
 # 1. register + get_all returns agent with correct name/role/status (IDLE)
 # ---------------------------------------------------------------------------

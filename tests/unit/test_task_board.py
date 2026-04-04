@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_board() -> TaskBoard:
     return TaskBoard()
@@ -39,6 +37,7 @@ async def _add_simple(
 # 1. add_task returns task with PENDING status (no dependencies)
 # ---------------------------------------------------------------------------
 
+
 async def test_add_task_pending() -> None:
     board = _make_board()
     task = await _add_simple(board, id="t1")
@@ -52,6 +51,7 @@ async def test_add_task_pending() -> None:
 # 2. add_task with blocked_by returns task with BLOCKED status
 # ---------------------------------------------------------------------------
 
+
 async def test_add_task_blocked() -> None:
     board = _make_board()
     await _add_simple(board, id="task-1")
@@ -64,6 +64,7 @@ async def test_add_task_blocked() -> None:
 # ---------------------------------------------------------------------------
 # 3. update_status transitions PENDING -> IN_PROGRESS -> COMPLETED
 # ---------------------------------------------------------------------------
+
 
 async def test_update_status_lifecycle() -> None:
     board = _make_board()
@@ -81,6 +82,7 @@ async def test_update_status_lifecycle() -> None:
 # 4. Dependency resolution — blocked task becomes PENDING when blocker completes
 # ---------------------------------------------------------------------------
 
+
 async def test_resolve_dependencies() -> None:
     board = _make_board()
     await _add_simple(board, id="task-a")
@@ -88,7 +90,7 @@ async def test_resolve_dependencies() -> None:
 
     # task-b is blocked
     tasks = await board.get_tasks()
-    blocked = [t for t in tasks if t.id == "task-b"][0]
+    blocked = next(t for t in tasks if t.id == "task-b")
     assert blocked.status is TaskStatus.BLOCKED
 
     # Complete task-a -> task-b should become PENDING
@@ -96,7 +98,7 @@ async def test_resolve_dependencies() -> None:
     await board.update_status("task-a", "completed")
 
     tasks = await board.get_tasks()
-    formerly_blocked = [t for t in tasks if t.id == "task-b"][0]
+    formerly_blocked = next(t for t in tasks if t.id == "task-b")
     assert formerly_blocked.status is TaskStatus.PENDING
     assert formerly_blocked.blocked_by == []
 
@@ -110,14 +112,14 @@ async def test_resolve_dependencies_multiple_blockers() -> None:
     # Complete only a — c should stay BLOCKED (still waiting on b)
     await board.update_status("a", "completed")
     tasks = await board.get_tasks()
-    c = [t for t in tasks if t.id == "c"][0]
+    c = next(t for t in tasks if t.id == "c")
     assert c.status is TaskStatus.BLOCKED
     assert c.blocked_by == ["b"]
 
     # Complete b — now c becomes PENDING
     await board.update_status("b", "completed")
     tasks = await board.get_tasks()
-    c = [t for t in tasks if t.id == "c"][0]
+    c = next(t for t in tasks if t.id == "c")
     assert c.status is TaskStatus.PENDING
     assert c.blocked_by == []
 
@@ -125,6 +127,7 @@ async def test_resolve_dependencies_multiple_blockers() -> None:
 # ---------------------------------------------------------------------------
 # 5. get_runnable_tasks returns only PENDING tasks
 # ---------------------------------------------------------------------------
+
 
 async def test_get_runnable_tasks() -> None:
     board = _make_board()
@@ -145,6 +148,7 @@ async def test_get_runnable_tasks() -> None:
 # 6. get_runnable_tasks(owner=...) filters by worker_name
 # ---------------------------------------------------------------------------
 
+
 async def test_get_runnable_tasks_by_owner() -> None:
     board = _make_board()
     await _add_simple(board, id="t1", worker_name="alice")
@@ -160,6 +164,7 @@ async def test_get_runnable_tasks_by_owner() -> None:
 # ---------------------------------------------------------------------------
 # 7. Concurrent access — two async updates don't corrupt state
 # ---------------------------------------------------------------------------
+
 
 async def test_concurrent_updates() -> None:
     board = _make_board()
@@ -205,6 +210,7 @@ async def test_concurrent_add_and_resolve() -> None:
 # ---------------------------------------------------------------------------
 # 8. get_tasks returns all tasks / filters by owner
 # ---------------------------------------------------------------------------
+
 
 async def test_get_tasks_all() -> None:
     board = _make_board()

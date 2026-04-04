@@ -12,7 +12,6 @@ from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.tools import Tool, ToolInvocation, create_swarm_tools
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -92,9 +91,7 @@ async def test_task_update_mutates_real_taskboard():
     tools = create_swarm_tools("worker_1", board, inbox)
     tool = _find_tool(tools, "task_update")
 
-    invocation = ToolInvocation(
-        arguments={"task_id": "t1", "status": "completed", "result": "done"}
-    )
+    invocation = ToolInvocation(arguments={"task_id": "t1", "status": "completed", "result": "done"})
     result = await tool.handler(invocation)
 
     assert result.result_type == "success"
@@ -119,9 +116,7 @@ async def test_inbox_send_delivers_to_real_inbox():
     tools = create_swarm_tools("worker_1", board, inbox)
     tool = _find_tool(tools, "inbox_send")
 
-    invocation = ToolInvocation(
-        arguments={"to": "worker_2", "message": "hello there"}
-    )
+    invocation = ToolInvocation(arguments={"to": "worker_2", "message": "hello there"})
     result = await tool.handler(invocation)
 
     assert result.result_type == "success"
@@ -221,9 +216,7 @@ async def test_event_callback_called_on_task_update():
     tools = create_swarm_tools("worker_1", board, inbox, event_callback=events.append)
     tool = _find_tool(tools, "task_update")
 
-    invocation = ToolInvocation(
-        arguments={"task_id": "t1", "status": "in_progress"}
-    )
+    invocation = ToolInvocation(arguments={"task_id": "t1", "status": "in_progress"})
     await tool.handler(invocation)
 
     assert len(events) == 1
@@ -244,9 +237,7 @@ async def test_sender_stamped_from_closure():
     tool = _find_tool(tools, "inbox_send")
 
     # The LLM cannot override the sender — it is closure-bound to "worker_1"
-    invocation = ToolInvocation(
-        arguments={"to": "victim", "message": "spoofed"}
-    )
+    invocation = ToolInvocation(arguments={"to": "victim", "message": "spoofed"})
     await tool.handler(invocation)
 
     messages = await inbox.receive("victim")
@@ -290,25 +281,27 @@ async def test_plan_tool_handler_captures_valid_plan():
     holder: list[dict] = []
     tool = create_plan_tool(holder)
 
-    invocation = ToolInvocation(arguments={
-        "team_description": "Test team",
-        "tasks": [
-            {
-                "subject": "Design",
-                "description": "Design the system",
-                "worker_role": "Architect",
-                "worker_name": "architect",
-                "blocked_by_indices": [],
-            },
-            {
-                "subject": "Implement",
-                "description": "Build it",
-                "worker_role": "Developer",
-                "worker_name": "developer",
-                "blocked_by_indices": [0],
-            },
-        ],
-    })
+    invocation = ToolInvocation(
+        arguments={
+            "team_description": "Test team",
+            "tasks": [
+                {
+                    "subject": "Design",
+                    "description": "Design the system",
+                    "worker_role": "Architect",
+                    "worker_name": "architect",
+                    "blocked_by_indices": [],
+                },
+                {
+                    "subject": "Implement",
+                    "description": "Build it",
+                    "worker_role": "Developer",
+                    "worker_name": "developer",
+                    "blocked_by_indices": [0],
+                },
+            ],
+        }
+    )
     result = await tool.handler(invocation)
 
     assert result.result_type == "success"
@@ -464,6 +457,7 @@ async def test_task_list_none_arguments_still_works():
 async def test_task_update_logs_arguments_on_error(caplog):
     """task_update logs the actual arguments received when it fails."""
     import logging
+
     board = TaskBoard()
     inbox = InboxSystem()
     tools = create_swarm_tools("worker_1", board, inbox)
@@ -526,9 +520,9 @@ async def test_begin_swarm_captures_refined_goal():
     event = asyncio.Event()
     tool = create_begin_swarm_tool(holder, event)
 
-    invocation = ToolInvocation(arguments={
-        "refined_goal": "Build a mid-size AKS platform for 12 legacy apps with pragmatic security."
-    })
+    invocation = ToolInvocation(
+        arguments={"refined_goal": "Build a mid-size AKS platform for 12 legacy apps with pragmatic security."}
+    )
     result = await tool.handler(invocation)
 
     assert result.result_type == "success"

@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 
 import yaml
 
-
 KNOWN_TOOLS = {"task_update", "inbox_send", "inbox_receive", "task_list"}
 
 TEMPLATE_YAML_REQUIRED = {"key", "name", "description", "goal_template"}
@@ -50,7 +49,7 @@ def _parse_frontmatter(content: str) -> tuple[dict | None, str, ValidationError 
         return None, content, ValidationError("Missing frontmatter: no closing --- found", line=1)
 
     yaml_text = "\n".join(lines[1:close_idx])
-    body = "\n".join(lines[close_idx + 1:])
+    body = "\n".join(lines[close_idx + 1 :])
 
     try:
         data = yaml.safe_load(yaml_text)
@@ -59,8 +58,9 @@ def _parse_frontmatter(content: str) -> tuple[dict | None, str, ValidationError 
         return data, body, None
     except yaml.YAMLError as e:
         line_num = None
-        if hasattr(e, "problem_mark") and e.problem_mark is not None:
-            line_num = e.problem_mark.line + 2  # +1 for 0-index, +1 for opening ---
+        mark = getattr(e, "problem_mark", None)
+        if mark is not None:
+            line_num = mark.line + 2  # +1 for 0-index, +1 for opening ---
         return None, body, ValidationError(f"Invalid YAML: {e}", line=line_num)
 
 
@@ -110,17 +110,14 @@ def validate_template_file(filename: str, content: str) -> ValidationResult:
         elif skills != ["*"]:
             for s in skills:
                 if not isinstance(s, str):
-                    errors.append(
-                        ValidationError(f"Each skill must be a string, got: {type(s).__name__}")
-                    )
+                    errors.append(ValidationError(f"Each skill must be a string, got: {type(s).__name__}"))
 
     # maxInstances validation (worker files only)
     max_instances = frontmatter.get("maxInstances")
-    if max_instances is not None:
-        if not isinstance(max_instances, int) or isinstance(max_instances, bool) or max_instances < 1:
-            errors.append(
-                ValidationError("maxInstances must be a positive integer (>= 1)")
-            )
+    if max_instances is not None and (
+        not isinstance(max_instances, int) or isinstance(max_instances, bool) or max_instances < 1
+    ):
+        errors.append(ValidationError("maxInstances must be a positive integer (>= 1)"))
 
     # Tools validation (applies to all files with tools)
     tools = frontmatter.get("tools")
@@ -131,9 +128,7 @@ def validate_template_file(filename: str, content: str) -> ValidationResult:
             unknown = set(tools) - KNOWN_TOOLS
             for tool_name in sorted(unknown):
                 errors.append(
-                    ValidationError(
-                        f"Unknown tool: {tool_name}. Known tools: {', '.join(sorted(KNOWN_TOOLS))}"
-                    )
+                    ValidationError(f"Unknown tool: {tool_name}. Known tools: {', '.join(sorted(KNOWN_TOOLS))}")
                 )
 
     return ValidationResult(valid=len(errors) == 0, errors=errors)

@@ -49,10 +49,7 @@ def get_template(key: str) -> SwarmTemplate | None:
 
 def list_templates() -> list[dict]:
     """Return summary dicts for all templates (used by the API)."""
-    return [
-        {"key": t.key, "name": t.name, "description": t.description}
-        for t in TEMPLATES.values()
-    ]
+    return [{"key": t.key, "name": t.name, "description": t.description} for t in TEMPLATES.values()]
 
 
 def format_goal(template_key: str, user_input: str) -> str:

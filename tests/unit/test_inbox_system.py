@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from backend.swarm.inbox_system import InboxSystem
-
 
 # ---------------------------------------------------------------------------
 # 1. send + receive delivers message with correct sender/recipient/content
 # ---------------------------------------------------------------------------
+
 
 async def test_send_and_receive_delivers_correct_message():
     inbox = InboxSystem()
@@ -34,6 +32,7 @@ async def test_send_and_receive_delivers_correct_message():
 # 2. receive is destructive (second call returns empty list)
 # ---------------------------------------------------------------------------
 
+
 async def test_receive_is_destructive():
     inbox = InboxSystem()
 
@@ -49,6 +48,7 @@ async def test_receive_is_destructive():
 # ---------------------------------------------------------------------------
 # 3. peek is non-destructive (message still there after peek)
 # ---------------------------------------------------------------------------
+
 
 async def test_peek_is_non_destructive():
     inbox = InboxSystem()
@@ -72,6 +72,7 @@ async def test_peek_is_non_destructive():
 # ---------------------------------------------------------------------------
 # 4. broadcast delivers to all registered agents except sender
 # ---------------------------------------------------------------------------
+
 
 async def test_broadcast_delivers_to_all_except_sender():
     inbox = InboxSystem()
@@ -126,6 +127,7 @@ async def test_broadcast_respects_exclude_list():
 # 5. Multiple messages queue in order (FIFO)
 # ---------------------------------------------------------------------------
 
+
 async def test_multiple_messages_fifo_order():
     inbox = InboxSystem()
 
@@ -143,6 +145,7 @@ async def test_multiple_messages_fifo_order():
 # ---------------------------------------------------------------------------
 # 6. Concurrent send/receive don't corrupt state (asyncio.Lock)
 # ---------------------------------------------------------------------------
+
 
 async def test_concurrent_send_receive_no_corruption():
     inbox = InboxSystem()

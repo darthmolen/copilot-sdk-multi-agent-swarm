@@ -4,25 +4,21 @@ from __future__ import annotations
 
 import threading
 
-from fastapi.testclient import TestClient
-
-from backend.api.rest import swarm_store
-from backend.api.websocket import ConnectionManager
-from backend.main import app, manager
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
 import pytest
+from fastapi.testclient import TestClient
+
+from backend.api.rest import swarm_store
+from backend.main import app, manager
 
 
 @pytest.fixture(autouse=True)
 def _reset_auth_state():
     """Reset auth to dev-mode defaults before/after every test."""
     import backend.main as main_mod
+
     main_mod.ENVIRONMENT = "development"
     main_mod.SWARM_API_KEY = ""
     yield
@@ -52,9 +48,7 @@ def test_websocket_connect_and_receive_broadcast() -> None:
 
         def _broadcast() -> None:
             loop = asyncio.new_event_loop()
-            loop.run_until_complete(
-                manager.broadcast("test-swarm", {"type": "ping", "value": 42})
-            )
+            loop.run_until_complete(manager.broadcast("test-swarm", {"type": "ping", "value": 42}))
             loop.close()
 
         t = threading.Thread(target=_broadcast)
@@ -71,30 +65,25 @@ def test_multiple_websocket_connections_receive_broadcast() -> None:
     _clear_swarm_store()
     client = TestClient(app)
 
-    with client.websocket_connect("/ws/multi-swarm") as ws1:
-        with client.websocket_connect("/ws/multi-swarm") as ws2:
-            import asyncio
+    with client.websocket_connect("/ws/multi-swarm") as ws1, client.websocket_connect("/ws/multi-swarm") as ws2:
+        import asyncio
 
-            def _broadcast() -> None:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(
-                    manager.broadcast(
-                        "multi-swarm", {"type": "update", "round": 1}
-                    )
-                )
-                loop.close()
+        def _broadcast() -> None:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(manager.broadcast("multi-swarm", {"type": "update", "round": 1}))
+            loop.close()
 
-            t = threading.Thread(target=_broadcast)
-            t.start()
-            t.join()
+        t = threading.Thread(target=_broadcast)
+        t.start()
+        t.join()
 
-            d1 = ws1.receive_json()
-            d2 = ws2.receive_json()
+        d1 = ws1.receive_json()
+        d2 = ws2.receive_json()
 
-            assert d1["type"] == "update"
-            assert d1["round"] == 1
-            assert d2["type"] == "update"
-            assert d2["round"] == 1
+        assert d1["type"] == "update"
+        assert d1["round"] == 1
+        assert d2["type"] == "update"
+        assert d2["round"] == 1
 
 
 def test_websocket_disconnect_stops_messages() -> None:
@@ -102,16 +91,14 @@ def test_websocket_disconnect_stops_messages() -> None:
     _clear_swarm_store()
     client = TestClient(app)
 
-    with client.websocket_connect("/ws/disc-swarm") as ws:
+    with client.websocket_connect("/ws/disc-swarm"):
         pass  # context exit closes the WS
 
     # Broadcast to the now-empty swarm_id should not raise
     import asyncio
 
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(
-        manager.broadcast("disc-swarm", {"type": "after-disconnect"})
-    )
+    loop.run_until_complete(manager.broadcast("disc-swarm", {"type": "after-disconnect"}))
     loop.close()
 
 
@@ -125,9 +112,7 @@ def test_post_swarm_start_returns_swarm_id() -> None:
     _clear_swarm_store()
     client = TestClient(app)
 
-    response = client.post(
-        "/api/swarm/start", json={"goal": "Build a website"}
-    )
+    response = client.post("/api/swarm/start", json={"goal": "Build a website"})
     assert response.status_code == 200
     body = response.json()
     assert "swarm_id" in body
@@ -141,9 +126,7 @@ def test_get_swarm_status_returns_state() -> None:
     client = TestClient(app)
 
     # Create a swarm first
-    create_resp = client.post(
-        "/api/swarm/start", json={"goal": "Analyze data"}
-    )
+    create_resp = client.post("/api/swarm/start", json={"goal": "Analyze data"})
     swarm_id = create_resp.json()["swarm_id"]
 
     response = client.get(f"/api/swarm/{swarm_id}/status")
@@ -163,9 +146,7 @@ def test_get_swarm_status_returns_report_when_complete() -> None:
     _clear_swarm_store()
     client = TestClient(app)
 
-    create_resp = client.post(
-        "/api/swarm/start", json={"goal": "Test report"}
-    )
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test report"})
     swarm_id = create_resp.json()["swarm_id"]
 
     # Simulate completion with a report
@@ -183,15 +164,82 @@ def test_get_swarm_status_returns_null_report_when_incomplete() -> None:
     _clear_swarm_store()
     client = TestClient(app)
 
-    create_resp = client.post(
-        "/api/swarm/start", json={"goal": "Test"}
-    )
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test"})
     swarm_id = create_resp.json()["swarm_id"]
 
     response = client.get(f"/api/swarm/{swarm_id}/status")
     assert response.status_code == 200
     body = response.json()
     assert body["report"] is None
+
+
+def test_get_swarm_status_returns_live_task_and_agent_data() -> None:
+    """GET status returns live tasks/agents from orchestrator service, not stale store data."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from backend.swarm.task_board import TaskBoard
+    from backend.swarm.team_registry import TeamRegistry
+
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test live data"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    # Set up a mock orchestrator with real TaskBoard/TeamRegistry containing data
+    task_board = TaskBoard()
+    registry = TeamRegistry()
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(
+        task_board.add_task(
+            id="t1",
+            subject="Analyze",
+            description="Do analysis",
+            worker_role="analyst",
+            worker_name="analyst",
+        )
+    )
+    loop.run_until_complete(task_board.update_status("t1", "completed", "Found 3 issues"))
+    loop.run_until_complete(
+        task_board.add_task(
+            id="t2",
+            subject="Write",
+            description="Write report",
+            worker_role="writer",
+            worker_name="writer",
+        )
+    )
+    loop.run_until_complete(registry.register("analyst", "Data Analyst", "Analyst"))
+    loop.run_until_complete(registry.register("writer", "Writer", "Writer"))
+    loop.close()
+
+    orch = MagicMock()
+    orch.service = MagicMock()
+    orch.service.task_board = task_board
+    orch.service.registry = registry
+
+    swarm_store[swarm_id]["orchestrator"] = orch
+    swarm_store[swarm_id]["phase"] = "executing"
+
+    response = client.get(f"/api/swarm/{swarm_id}/status")
+    assert response.status_code == 200
+    body = response.json()
+
+    # Should return live data, not empty lists
+    assert len(body["tasks"]) == 2
+    assert len(body["agents"]) == 2
+
+    # Verify task structure
+    completed = next(t for t in body["tasks"] if t["id"] == "t1")
+    assert completed["status"] == "completed"
+    assert completed["subject"] == "Analyze"
+
+    # Verify agent structure
+    analyst = next(a for a in body["agents"] if a["name"] == "analyst")
+    assert analyst["role"] == "Data Analyst"
+    assert analyst["display_name"] == "Analyst"
 
 
 def test_get_swarm_status_unknown_returns_404() -> None:
@@ -228,6 +276,7 @@ def test_list_templates_returns_templates() -> None:
 def _set_auth(environment: str, api_key: str) -> None:
     """Helper to set auth config for tests."""
     import backend.main as main_mod
+
     main_mod.ENVIRONMENT = environment
     main_mod.SWARM_API_KEY = api_key
 
@@ -235,6 +284,7 @@ def _set_auth(environment: str, api_key: str) -> None:
 def _clear_auth() -> None:
     """Reset auth to dev-mode defaults after test."""
     import backend.main as main_mod
+
     main_mod.ENVIRONMENT = "development"
     main_mod.SWARM_API_KEY = ""
 
@@ -247,8 +297,6 @@ def test_api_returns_401_without_key_when_configured() -> None:
     client = TestClient(app)
     response = client.post("/api/swarm/start", json={"goal": "Test"})
     assert response.status_code == 401
-
-
 
 
 def test_api_returns_200_with_correct_key() -> None:
@@ -265,8 +313,6 @@ def test_api_returns_200_with_correct_key() -> None:
     assert response.status_code == 200
 
 
-
-
 def test_api_returns_401_with_wrong_key() -> None:
     """POST /api/swarm/start returns 401 when wrong key is sent."""
     _clear_swarm_store()
@@ -281,8 +327,6 @@ def test_api_returns_401_with_wrong_key() -> None:
     assert response.status_code == 401
 
 
-
-
 def test_auth_disabled_in_development_with_no_key() -> None:
     """In development mode with no key, requests pass without auth."""
     _clear_swarm_store()
@@ -291,8 +335,6 @@ def test_auth_disabled_in_development_with_no_key() -> None:
     client = TestClient(app)
     response = client.post("/api/swarm/start", json={"goal": "Test"})
     assert response.status_code == 200
-
-
 
 
 def test_production_without_key_returns_500() -> None:
@@ -306,8 +348,6 @@ def test_production_without_key_returns_500() -> None:
     assert "SWARM_API_KEY not configured" in response.json()["detail"]
 
 
-
-
 def test_ws_rejected_with_wrong_key() -> None:
     """WS connection is rejected when wrong key query param is provided."""
     _clear_swarm_store()
@@ -315,12 +355,10 @@ def test_ws_rejected_with_wrong_key() -> None:
 
     client = TestClient(app)
     try:
-        with client.websocket_connect("/ws/test-swarm?key=wrong") as ws:
-            assert False, "WS should have been rejected"
+        with client.websocket_connect("/ws/test-swarm?key=wrong"):
+            raise AssertionError("WS should have been rejected")
     except Exception:
         pass
-
-
 
 
 def test_ws_accepted_with_correct_key() -> None:
@@ -329,10 +367,8 @@ def test_ws_accepted_with_correct_key() -> None:
     _set_auth("production", "ws-secret")
 
     client = TestClient(app)
-    with client.websocket_connect("/ws/test-swarm?key=ws-secret") as ws:
+    with client.websocket_connect("/ws/test-swarm?key=ws-secret"):
         pass
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +415,7 @@ def test_chat_returns_200_for_complete_swarm() -> None:
 
     # Simulate completion
     from unittest.mock import AsyncMock, MagicMock
+
     mock_orch = MagicMock()
     mock_orch.synthesis_session_id = "synth-test"
     mock_orch.chat = AsyncMock(return_value="Refined response")
@@ -402,6 +439,7 @@ def test_chat_returns_200_for_qa_phase() -> None:
     swarm_id = create_resp.json()["swarm_id"]
 
     from unittest.mock import AsyncMock, MagicMock
+
     mock_orch = MagicMock()
     mock_orch.qa_session = MagicMock()  # Q&A session exists
     mock_orch.qa_chat = AsyncMock(return_value="What is your team size?")
@@ -435,9 +473,11 @@ def test_chat_resumes_session_for_unknown_swarm() -> None:
     client = TestClient(app)
 
     # Inject a mock copilot client + event bus so on-the-fly orchestrator can be created
-    from unittest.mock import MagicMock, AsyncMock
-    from backend.events import EventBus
+    from unittest.mock import AsyncMock, MagicMock
+
     import backend.api.rest as rest_mod
+    from backend.events import EventBus
+
     old_client, old_bus = rest_mod._copilot_client, rest_mod._event_bus
 
     mock_client = MagicMock()
@@ -446,11 +486,14 @@ def test_chat_resumes_session_for_unknown_swarm() -> None:
     class _ResumedSession:
         def __init__(self):
             self._handlers = []
+
         def on(self, handler):
             self._handlers.append(handler)
             return lambda: None
+
         async def send(self, prompt, **kw):
             from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
+
             for h in self._handlers:
                 h(SessionEvent(type=SessionEventType.SESSION_IDLE, data=SessionEventData(turn_id="t1")))
             return "msg-1"
@@ -481,12 +524,11 @@ def test_chat_resumes_session_for_unknown_swarm() -> None:
 def test_swarm_timeout_defaults_to_env_value() -> None:
     """Orchestrator should receive timeout from SWARM_TASK_TIMEOUT env var."""
     import backend.main as main_mod
-    import backend.api.rest as rest_mod
 
     _clear_swarm_store()
 
     # Save original and set custom timeout
-    original_timeout = getattr(main_mod, 'SWARM_TASK_TIMEOUT', 300)
+    original_timeout = getattr(main_mod, "SWARM_TASK_TIMEOUT", 300)
     main_mod.SWARM_TASK_TIMEOUT = 1800.0
 
     client = TestClient(app)
@@ -494,7 +536,7 @@ def test_swarm_timeout_defaults_to_env_value() -> None:
         # Start a swarm — won't actually run (no copilot client) but creates state
         response = client.post("/api/swarm/start", json={"goal": "Test timeout"})
         assert response.status_code == 200
-        swarm_id = response.json()["swarm_id"]
+        response.json()["swarm_id"]
 
         # The swarm_store entry exists but orchestrator is None (no client)
         # Verify the timeout value is accessible from the module
@@ -506,7 +548,7 @@ def test_swarm_timeout_defaults_to_env_value() -> None:
 def test_chat_endpoint_logs_request_received(caplog: pytest.fixture) -> None:
     """POST /api/swarm/{id}/chat logs chat_request_received with swarm_id and message_length."""
     import logging
-    from unittest.mock import MagicMock, AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
     _clear_swarm_store()
     client = TestClient(app)
@@ -548,7 +590,6 @@ def test_list_files_returns_empty_for_missing_workdir() -> None:
 
 def test_list_files_returns_files_in_workdir(tmp_path: pytest.fixture) -> None:
     """GET /api/swarm/{id}/files lists files in workdir."""
-    import backend.api.rest as rest_mod
 
     # Create a temp workdir with files
     swarm_id = "test-files-swarm"
@@ -558,11 +599,11 @@ def test_list_files_returns_files_in_workdir(tmp_path: pytest.fixture) -> None:
     (work_dir / "notes.md").write_text("# Notes")
 
     # Patch the workdir base path
-    original_list = rest_mod.router
     client = TestClient(app)
 
     # We need to create files in the actual workdir path the endpoint uses
     from pathlib import Path
+
     actual_dir = Path("workdir") / swarm_id
     actual_dir.mkdir(parents=True, exist_ok=True)
     (actual_dir / "report.md").write_text("# Report")
@@ -578,12 +619,14 @@ def test_list_files_returns_files_in_workdir(tmp_path: pytest.fixture) -> None:
         assert "notes.md" in names
     finally:
         import shutil
+
         shutil.rmtree(actual_dir, ignore_errors=True)
 
 
 def test_get_file_returns_content() -> None:
     """GET /api/swarm/{id}/files/{path} returns file content."""
     from pathlib import Path
+
     swarm_id = "test-read-swarm"
     work_dir = Path("workdir") / swarm_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -596,6 +639,7 @@ def test_get_file_returns_content() -> None:
         assert response.json()["content"] == "Hello world"
     finally:
         import shutil
+
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -608,8 +652,9 @@ def test_get_file_404_for_missing() -> None:
 
 def test_get_file_403_for_path_traversal() -> None:
     """Path traversal via symlink or encoded path is blocked."""
-    from pathlib import Path
     import shutil
+    from pathlib import Path
+
     # Create a workdir with a symlink pointing outside
     swarm_id = "test-traversal"
     work_dir = Path("workdir") / swarm_id
@@ -633,8 +678,9 @@ def test_get_file_403_for_path_traversal() -> None:
 
 def test_ensure_report_creates_file_when_missing() -> None:
     """POST /api/swarm/{id}/files/ensure-report creates the file if missing."""
-    from pathlib import Path
     import shutil
+    from pathlib import Path
+
     swarm_id = "test-ensure-swarm"
     work_dir = Path("workdir") / swarm_id
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -655,8 +701,9 @@ def test_ensure_report_creates_file_when_missing() -> None:
 
 def test_ensure_report_does_not_overwrite_existing() -> None:
     """POST /api/swarm/{id}/files/ensure-report leaves existing file alone."""
-    from pathlib import Path
     import shutil
+    from pathlib import Path
+
     swarm_id = "test-ensure-existing"
     work_dir = Path("workdir") / swarm_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -678,9 +725,9 @@ def test_ensure_report_does_not_overwrite_existing() -> None:
 def test_download_zip_returns_zip_for_existing_workdir() -> None:
     """GET /api/swarm/{id}/files/download-zip returns a valid ZIP with all files."""
     import io
+    import shutil
     import zipfile
     from pathlib import Path
-    import shutil
 
     swarm_id = "test-zip-download"
     work_dir = Path("workdir") / swarm_id
@@ -723,9 +770,9 @@ def test_download_zip_returns_empty_zip_for_missing_workdir() -> None:
 def test_download_zip_excludes_symlinks_outside_workdir() -> None:
     """Symlinks resolving outside workdir are excluded from the ZIP."""
     import io
+    import shutil
     import zipfile
     from pathlib import Path
-    import shutil
 
     swarm_id = "test-zip-traversal"
     work_dir = Path("workdir") / swarm_id
@@ -755,9 +802,9 @@ def test_download_zip_excludes_symlinks_outside_workdir() -> None:
 def test_download_zip_includes_nested_files() -> None:
     """Nested files in subdirectories are included with correct paths."""
     import io
+    import shutil
     import zipfile
     from pathlib import Path
-    import shutil
 
     swarm_id = "test-zip-nested"
     work_dir = Path("workdir") / swarm_id
@@ -787,9 +834,7 @@ def test_websocket_receives_swarm_events() -> None:
     client = TestClient(app)
 
     # Start a swarm to get its ID
-    create_resp = client.post(
-        "/api/swarm/start", json={"goal": "Test events"}
-    )
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test events"})
     swarm_id = create_resp.json()["swarm_id"]
 
     with client.websocket_connect(f"/ws/{swarm_id}") as ws:
@@ -852,6 +897,7 @@ def test_update_template_file_validates() -> None:
     """PUT /api/templates/{key}/files/{filename} validates and saves valid content."""
     import shutil
     from pathlib import Path
+
     # Create a temp template
     template_dir = Path("src/templates/_test-crud")
     template_dir.mkdir(parents=True, exist_ok=True)
@@ -879,6 +925,7 @@ def test_update_template_file_rejects_invalid() -> None:
     """PUT /api/templates/{key}/files/{filename} returns 422 for invalid content."""
     import shutil
     from pathlib import Path
+
     template_dir = Path("src/templates/_test-invalid")
     template_dir.mkdir(parents=True, exist_ok=True)
     (template_dir / "_template.yaml").write_text(
@@ -894,8 +941,8 @@ def test_update_template_file_rejects_invalid() -> None:
         )
         assert response.status_code == 422
         body = response.json()
-        assert "errors" in body
-        assert len(body["errors"]) > 0
+        assert "errors" in body["detail"]
+        assert len(body["detail"]["errors"]) > 0
     finally:
         shutil.rmtree(template_dir, ignore_errors=True)
 
@@ -935,6 +982,7 @@ def test_delete_template_removes_directory() -> None:
     """DELETE /api/templates/{key} removes the template directory."""
     import shutil
     from pathlib import Path
+
     template_dir = Path("src/templates/_test-delete")
     template_dir.mkdir(parents=True, exist_ok=True)
     (template_dir / "_template.yaml").write_text(
@@ -957,8 +1005,10 @@ def test_delete_template_removes_directory() -> None:
 
 def test_safe_template_path_rejects_traversal() -> None:
     """_safe_template_path raises 403 for path traversal attempts."""
-    from backend.api.rest import _safe_template_path
     from fastapi import HTTPException
+
+    from backend.api.rest import _safe_template_path
+
     # ".." resolves to parent of templates dir
     with pytest.raises(HTTPException) as exc_info:
         _safe_template_path("../../etc")
@@ -972,8 +1022,10 @@ def test_safe_template_path_rejects_traversal() -> None:
 
 def test_safe_template_file_path_rejects_traversal() -> None:
     """_safe_template_file_path raises 403 for filename traversal."""
-    from backend.api.rest import _safe_template_file_path
     from fastapi import HTTPException
+
+    from backend.api.rest import _safe_template_file_path
+
     with pytest.raises(HTTPException) as exc_info:
         _safe_template_file_path("deep-research", "../../etc/passwd")
     assert exc_info.value.status_code == 403
@@ -1008,6 +1060,7 @@ def _make_template_zip(key: str = "test-deploy", extra_files: dict[str, str] | N
     """Create an in-memory zip with a valid template structure."""
     import io
     import zipfile
+
     import yaml
 
     buf = io.BytesIO()
@@ -1096,6 +1149,7 @@ def test_deploy_template_zip_rejects_key_mismatch() -> None:
     """POST /api/templates/deploy rejects if directory name != _template.yaml key."""
     import io
     import zipfile
+
     import yaml
 
     buf = io.BytesIO()
