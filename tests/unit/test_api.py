@@ -1364,8 +1364,9 @@ class TestResumeEndpoint:
         """POST /resume returns 404 for unknown swarm_id."""
         _clear_swarm_store()
 
-        import backend.api.rest as rest_mod
         from unittest.mock import AsyncMock, MagicMock
+
+        import backend.api.rest as rest_mod
 
         old_repo = rest_mod._repository
         mock_repo = MagicMock()
@@ -1386,19 +1387,22 @@ class TestResumeEndpoint:
         """POST /resume returns 409 if swarm is not suspended."""
         _clear_swarm_store()
 
-        import backend.api.rest as rest_mod
         from unittest.mock import AsyncMock, MagicMock
         from uuid import UUID
+
+        import backend.api.rest as rest_mod
 
         old_repo = rest_mod._repository
         mock_repo = MagicMock()
         swarm_id = "00000000-0000-0000-0000-000000000002"
-        mock_repo.get_swarm = AsyncMock(return_value={
-            "id": UUID(swarm_id),
-            "goal": "test goal",
-            "phase": "executing",
-            "template_key": None,
-        })
+        mock_repo.get_swarm = AsyncMock(
+            return_value={
+                "id": UUID(swarm_id),
+                "goal": "test goal",
+                "phase": "executing",
+                "template_key": None,
+            }
+        )
         rest_mod._repository = mock_repo
 
         try:
@@ -1432,9 +1436,10 @@ class TestResumeEndpoint:
         """POST /resume builds orchestrator and starts background task."""
         _clear_swarm_store()
 
-        import backend.api.rest as rest_mod
         from unittest.mock import AsyncMock, MagicMock, patch
         from uuid import UUID
+
+        import backend.api.rest as rest_mod
 
         swarm_id = "00000000-0000-0000-0000-000000000003"
 
@@ -1444,23 +1449,27 @@ class TestResumeEndpoint:
         old_factory = rest_mod._client_factory
 
         mock_repo = MagicMock()
-        mock_repo.get_swarm = AsyncMock(return_value={
-            "id": UUID(swarm_id),
-            "goal": "build something",
-            "qa_refined_goal": "build something refined",
-            "phase": "suspended",
-            "template_key": None,
-            "max_rounds": 5,
-        })
+        mock_repo.get_swarm = AsyncMock(
+            return_value={
+                "id": UUID(swarm_id),
+                "goal": "build something",
+                "qa_refined_goal": "build something refined",
+                "phase": "suspended",
+                "template_key": None,
+                "max_rounds": 5,
+            }
+        )
         rest_mod._repository = mock_repo
         rest_mod._copilot_client = MagicMock()
         rest_mod._event_bus = MagicMock()
         rest_mod._client_factory = None
 
         try:
-            with patch("backend.swarm.orchestrator.SwarmOrchestrator") as mock_orch_cls, \
-                 patch("backend.services.swarm_service.SwarmService") as mock_svc_cls, \
-                 patch("backend.api.rest.asyncio.create_task") as mock_create_task:
+            with (
+                patch("backend.swarm.orchestrator.SwarmOrchestrator") as mock_orch_cls,
+                patch("backend.services.swarm_service.SwarmService") as mock_svc_cls,
+                patch("backend.api.rest.asyncio.create_task") as mock_create_task,
+            ):
                 mock_orch = MagicMock()
                 mock_orch.resume = AsyncMock()
                 mock_orch_cls.return_value = mock_orch
@@ -1509,15 +1518,19 @@ class TestOrphanRecovery:
 
         mock_repo = MagicMock()
         orphan_id = UUID("00000000-0000-0000-0000-000000000010")
-        mock_repo.list_swarms_by_phase = AsyncMock(return_value=[
-            {"id": orphan_id, "phase": "executing"},
-        ])
+        mock_repo.list_swarms_by_phase = AsyncMock(
+            return_value=[
+                {"id": orphan_id, "phase": "executing"},
+            ]
+        )
         mock_repo.suspend_swarm = AsyncMock()
 
         await recover_orphaned_swarms(mock_repo)
 
         mock_repo.list_swarms_by_phase.assert_called_once_with(
-            "executing", "planning", "spawning",
+            "executing",
+            "planning",
+            "spawning",
         )
         mock_repo.suspend_swarm.assert_called_once_with(orphan_id)
 

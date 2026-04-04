@@ -42,7 +42,7 @@ router = APIRouter()
 swarm_store: dict[str, SwarmState] = {}
 
 # Strong references for fire-and-forget background tasks (prevents GC).
-_background_tasks: set[asyncio.Task[None]] = set()
+_background_tasks: set[asyncio.Task[object]] = set()
 
 # Injected dependencies (set by main.py lifespan)
 _event_bus: Any = None
