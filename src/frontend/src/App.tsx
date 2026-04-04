@@ -431,9 +431,18 @@ function SwarmDashboard() {
           onSelectTask={setInterventionTaskId}
           agentOutputs={allOutputs}
           onBack={() => setInterventionTaskId(null)}
-          onSaveAndRetry={() => {
-            // TODO: Wire to actual retry endpoint
-            setInterventionTaskId(null);
+          onSaveAndRetry={async () => {
+            if (!interventionSwarmId) return;
+            const apiKey = getApiKey();
+            try {
+              await fetch(`${API_BASE}/api/swarm/${interventionSwarmId}/continue`, {
+                method: 'POST',
+                headers: apiKey ? { 'X-API-Key': apiKey } : {},
+              });
+              setInterventionTaskId(null);
+            } catch (err) {
+              console.error('Failed to continue swarm:', err);
+            }
           }}
         />
       </div>

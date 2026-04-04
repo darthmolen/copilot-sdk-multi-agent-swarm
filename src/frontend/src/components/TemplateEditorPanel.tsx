@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
@@ -37,6 +37,9 @@ export function TemplateEditorPanel({
   const [originalContents, setOriginalContents] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
+  // Ref to track the last-saved/loaded content for accurate dirty comparison
+  const savedContentRef = useRef<Record<string, string>>({});
+
   // Fetch template files and filter to the relevant worker
   const fetchTemplateFiles = useCallback(async () => {
     setLoading(true);
@@ -47,6 +50,7 @@ export function TemplateEditorPanel({
       if (!res.ok) {
         setFiles([]);
         setLoading(false);
+        onModified(false);
         return;
       }
       const data = await res.json();
@@ -70,23 +74,36 @@ export function TemplateEditorPanel({
         originals[f.filename] = f.content;
       }
       setOriginalContents(originals);
+      savedContentRef.current = { ...originals };
 
       // Select the first file by default
       if (relevantFiles.length > 0) {
         setSelectedFile(relevantFiles[0].filename);
         setEditorContent(relevantFiles[0].content);
       }
+
+      // Reset dirty state on fresh load
+      onModified(false);
     } catch {
       // Network error -- leave files empty
       setFiles([]);
+      onModified(false);
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateKey, workerName]);
 
   useEffect(() => {
     fetchTemplateFiles();
   }, [fetchTemplateFiles]);
+
+  // Reset dirty state when workerName changes (component re-keys in parent,
+  // but this guards against prop changes without re-mount)
+  useEffect(() => {
+    onModified(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workerName]);
 
   // Select a file tab
   function handleSelectFile(filename: string) {
@@ -111,15 +128,16 @@ export function TemplateEditorPanel({
   function handleContentChange(value: string) {
     setEditorContent(value);
 
-    // Check dirty state: compare current content against originals
+    // Check dirty state: compare current content against saved/loaded content
+    const saved = savedContentRef.current;
     const currentDirty = selectedFile
-      ? value !== (originalContents[selectedFile] ?? '')
+      ? value !== (saved[selectedFile] ?? '')
       : false;
 
     // Also check other files for unsaved changes
     const otherDirty = files.some((f) => {
       if (f.filename === selectedFile) return false;
-      return f.content !== (originalContents[f.filename] ?? '');
+      return f.content !== (saved[f.filename] ?? '');
     });
 
     onModified(currentDirty || otherDirty);
@@ -153,10 +171,16 @@ export function TemplateEditorPanel({
           ...prev,
           [selectedFile]: editorContent,
         }));
-        // Recheck dirty state
+        // Update the saved content ref so dirty tracking stays accurate
+        savedContentRef.current = {
+          ...savedContentRef.current,
+          [selectedFile]: editorContent,
+        };
+        // Recheck dirty state against the now-updated saved content
+        const saved = savedContentRef.current;
         const otherDirty = files.some((f) => {
           if (f.filename === selectedFile) return false;
-          return f.content !== (originalContents[f.filename] ?? '');
+          return f.content !== (saved[f.filename] ?? '');
         });
         onModified(otherDirty);
       } else if (res.status === 422) {
