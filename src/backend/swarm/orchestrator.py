@@ -136,7 +136,9 @@ class SwarmOrchestrator:
     def _get_mcp_servers(self) -> dict | None:
         """Merge template MCP servers with the in-process swarm-state server."""
         template_mcp = self.template.mcp_servers if self.template else None
-        swarm_mcp_url = os.environ.get("SWARM_MCP_URL", "http://localhost:8000/mcp/")
+        host = os.environ.get("SWARM_MCP_HOST", "0.0.0.0")  # noqa: S104
+        port = os.environ.get("PORT", "8000")
+        swarm_mcp_url = os.environ.get("SWARM_MCP_URL", f"http://{host}:{port}/mcp/")
         api_key = os.environ.get("SWARM_API_KEY", "")
         swarm_state_mcp: dict[str, Any] = {
             "swarm-state": {
