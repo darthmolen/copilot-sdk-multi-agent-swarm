@@ -194,6 +194,65 @@ def test_get_swarm_status_returns_null_report_when_incomplete() -> None:
     assert body["report"] is None
 
 
+def test_get_swarm_status_returns_live_task_and_agent_data() -> None:
+    """GET status returns live tasks/agents from orchestrator service, not stale store data."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from backend.swarm.task_board import TaskBoard
+    from backend.swarm.team_registry import TeamRegistry
+
+    _clear_swarm_store()
+    client = TestClient(app)
+
+    create_resp = client.post("/api/swarm/start", json={"goal": "Test live data"})
+    swarm_id = create_resp.json()["swarm_id"]
+
+    # Set up a mock orchestrator with real TaskBoard/TeamRegistry containing data
+    task_board = TaskBoard()
+    registry = TeamRegistry()
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(task_board.add_task(
+        id="t1", subject="Analyze", description="Do analysis",
+        worker_role="analyst", worker_name="analyst",
+    ))
+    loop.run_until_complete(task_board.update_status("t1", "completed", "Found 3 issues"))
+    loop.run_until_complete(task_board.add_task(
+        id="t2", subject="Write", description="Write report",
+        worker_role="writer", worker_name="writer",
+    ))
+    loop.run_until_complete(registry.register("analyst", "Data Analyst", "Analyst"))
+    loop.run_until_complete(registry.register("writer", "Writer", "Writer"))
+    loop.close()
+
+    orch = MagicMock()
+    orch.service = MagicMock()
+    orch.service.task_board = task_board
+    orch.service.registry = registry
+
+    swarm_store[swarm_id]["orchestrator"] = orch
+    swarm_store[swarm_id]["phase"] = "executing"
+
+    response = client.get(f"/api/swarm/{swarm_id}/status")
+    assert response.status_code == 200
+    body = response.json()
+
+    # Should return live data, not empty lists
+    assert len(body["tasks"]) == 2
+    assert len(body["agents"]) == 2
+
+    # Verify task structure
+    completed = next(t for t in body["tasks"] if t["id"] == "t1")
+    assert completed["status"] == "completed"
+    assert completed["subject"] == "Analyze"
+
+    # Verify agent structure
+    analyst = next(a for a in body["agents"] if a["name"] == "analyst")
+    assert analyst["role"] == "Data Analyst"
+    assert analyst["display_name"] == "Analyst"
+
+
 def test_get_swarm_status_unknown_returns_404() -> None:
     """GET status for a nonexistent swarm_id returns 404."""
     _clear_swarm_store()

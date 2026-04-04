@@ -18,14 +18,17 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.schemas import (
+    AgentSummary,
     ChatRequest,
     CreateTemplateRequest,
     EnsureReportRequest,
     SwarmStartRequest,
     SwarmStartResponse,
     SwarmStatusResponse,
+    TaskSummary,
     UpdateTemplateFileRequest,
 )
+from backend.swarm.models import SwarmState
 from backend.swarm.template_validator import validate_template_file
 from backend.swarm.template_loader import TemplateLoader
 from backend.swarm.templates import format_goal
@@ -37,7 +40,7 @@ router = APIRouter()
 
 # In-memory swarm state store, keyed by swarm_id.
 # Each entry holds the mutable state for one swarm run.
-swarm_store: dict[str, dict] = {}
+swarm_store: dict[str, SwarmState] = {}
 
 # Injected dependencies (set by main.py lifespan)
 _event_bus: Any = None
@@ -69,18 +72,14 @@ def configure(
     _repository = repository
 
 
-def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> dict:
+def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> SwarmState:
     """Create initial swarm state and store it."""
-    state = {
+    state: SwarmState = {
         "swarm_id": swarm_id,
         "goal": goal,
         "template": template,
         "phase": "starting",
-        "tasks": [],
-        "agents": [],
-        "inbox_recent": [],
         "round_number": 0,
-        "orchestrator": None,
     }
     swarm_store[swarm_id] = state
     return state
@@ -202,13 +201,30 @@ async def get_swarm_status(swarm_id: str) -> SwarmStatusResponse:
         raise HTTPException(status_code=404, detail="Swarm not found")
 
     state = swarm_store[swarm_id]
+    orch = state.get("orchestrator")
+
+    tasks: list[TaskSummary] = []
+    agents: list[AgentSummary] = []
+
+    if orch is not None:
+        live_tasks = await orch.service.task_board.get_tasks()
+        tasks = [TaskSummary(**t.to_dict()) for t in live_tasks]
+        live_agents = await orch.service.registry.get_all()
+        agents = [
+            AgentSummary(
+                name=a.name, role=a.role, display_name=a.display_name,
+                status=a.status.value, tasks_completed=a.tasks_completed,
+            )
+            for a in live_agents
+        ]
+
     return SwarmStatusResponse(
         swarm_id=state["swarm_id"],
         phase=state["phase"],
-        tasks=state["tasks"],
-        agents=state["agents"],
-        inbox_recent=state["inbox_recent"],
-        round_number=state["round_number"],
+        tasks=tasks,
+        agents=agents,
+        inbox_recent=[],
+        round_number=state.get("round_number", 0),
         report=state.get("report"),
     )
 

@@ -1,0 +1,10 @@
+{
+    "include": ["src"],
+    "pythonVersion": "3.10",
+    "typeCheckingMode": "basic",
+    "reportMissingTypeStubs": false,
+    "reportUnknownMemberType": false,
+    "reportUnknownParameterType": false,
+    "reportUnknownVariableType": false,
+    "reportUnknownArgumentType": false
+}
