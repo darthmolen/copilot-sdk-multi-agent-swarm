@@ -253,6 +253,32 @@ async def cancel_swarm(swarm_id: str) -> dict:
     return {"status": "cancelled"}
 
 
+@router.post("/api/swarm/{swarm_id}/continue")
+async def continue_swarm(swarm_id: str) -> dict[str, object]:
+    """Continue execution after rounds exhausted."""
+    entry = swarm_store.get(swarm_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Swarm not found")
+    orch = entry.get("orchestrator")
+    if not orch or not getattr(orch, "_continue_event", None):
+        raise HTTPException(status_code=404, detail="Swarm not paused")
+    orch.signal_continue()
+    return {"ok": True, "swarm_id": swarm_id, "action": "continue"}
+
+
+@router.post("/api/swarm/{swarm_id}/skip-to-synthesis")
+async def skip_to_synthesis(swarm_id: str) -> dict[str, object]:
+    """Skip remaining tasks and proceed to synthesis."""
+    entry = swarm_store.get(swarm_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Swarm not found")
+    orch = entry.get("orchestrator")
+    if not orch or not getattr(orch, "_continue_event", None):
+        raise HTTPException(status_code=404, detail="Swarm not paused")
+    orch.signal_skip()
+    return {"ok": True, "swarm_id": swarm_id, "action": "skip"}
+
+
 @router.post("/api/swarm/{swarm_id}/chat")
 async def chat_with_swarm(
     swarm_id: str,

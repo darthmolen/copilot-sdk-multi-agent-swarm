@@ -2,7 +2,7 @@
 name: iac-developer
 displayName: IaC Developer
 description: Writes Bicep or Terraform modules for Azure infrastructure provisioning
-maxInstances: 4
+maxInstances: 5
 skills:
   - azure-engineer
   - azure-developer

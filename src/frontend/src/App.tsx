@@ -4,6 +4,7 @@ import { multiSwarmReducer, initialMultiSwarmState, isThinking, shouldShowReport
 import { chatReducer, initialChatStore } from './hooks/useChatState';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SwarmControls } from './components/SwarmControls';
+import { SwarmStatusWindow } from './components/SwarmStatusWindow';
 import { TaskBoard } from './components/TaskBoard';
 import { AgentRoster } from './components/AgentRoster';
 import { ChatPanel } from './components/ChatPanel';
@@ -200,6 +201,11 @@ function SwarmDashboard() {
         // All other events go to swarm reducer
         swarmDispatch({ type: 'swarm.event', swarmId, event });
 
+        // Notify user when swarm is suspended
+        if (event.type === 'swarm.suspended') {
+          toast('Swarm paused — action required', { icon: '\u23F8', duration: 8000 });
+        }
+
         // Auto-switch to report view when Q&A phase starts
         if (event.type === 'swarm.phase_changed' && event.data.phase === 'qa') {
           setReportSwarmId(swarmId);
@@ -366,6 +372,12 @@ function SwarmDashboard() {
   }
   const allActiveTools: ActiveTool[] = Object.values(store.swarms).flatMap((s) => s.activeTools);
 
+  // Latest active swarm for status window
+  const latestActiveSwarmId = store.activeSwarmIds.length > 0
+    ? store.activeSwarmIds[store.activeSwarmIds.length - 1]
+    : null;
+  const latestActiveSwarm = latestActiveSwarmId ? store.swarms[latestActiveSwarmId] ?? null : null;
+
   // Header status
   const anyConnected = store.activeSwarmIds.length > 0;
   const anyThinking = Object.values(store.swarms).some((s) => isThinking(s.phase));
@@ -487,7 +499,21 @@ function SwarmDashboard() {
           activeId={reportSwarmId}
           onSelect={setReportSwarmId}
         />
-        <SwarmControls onStart={handleStartSwarm} />
+        <div className="controls-stack">
+          {latestActiveSwarm && latestActiveSwarmId && (
+            <SwarmStatusWindow
+              swarmId={latestActiveSwarmId}
+              phase={latestActiveSwarm.phase ?? 'starting'}
+              tasks={latestActiveSwarm.tasks}
+              agents={latestActiveSwarm.agents}
+              roundNumber={latestActiveSwarm.roundNumber}
+              suspended={latestActiveSwarm.suspended}
+              onGoToReport={() => setReportSwarmId(latestActiveSwarmId)}
+              onClose={() => swarmDispatch({ type: 'swarm.remove', swarmId: latestActiveSwarmId })}
+            />
+          )}
+          <SwarmControls onStart={handleStartSwarm} />
+        </div>
       </div>
 
       {/* WS connections — one per active swarm */}

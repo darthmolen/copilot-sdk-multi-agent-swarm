@@ -20,6 +20,9 @@ swarms = sa.Table(
         "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()
     ),
     sa.Column("completed_at", sa.DateTime(timezone=True)),
+    sa.Column("current_round", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("max_rounds", sa.Integer, nullable=False, server_default="8"),
+    sa.Column("suspended_at", sa.DateTime(timezone=True)),
 )
 
 tasks = sa.Table(

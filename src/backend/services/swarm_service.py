@@ -32,6 +32,8 @@ class SwarmService:
         self.registry = TeamRegistry()
         self._repo = repo
         self._swarm_id: str | None = None
+        self._phase: str = "starting"
+        self._current_round: int = 0
 
     # ------------------------------------------------------------------
     # Swarm lifecycle
@@ -44,12 +46,27 @@ class SwarmService:
         template_key: str | None = None,
     ) -> None:
         self._swarm_id = swarm_id
+        self._phase = "starting"
+        self._current_round = 0
         if self._repo:
             await self._repo.create_swarm(UUID(swarm_id), goal=goal, template_key=template_key)
 
     async def update_phase(self, phase: str) -> None:
+        self._phase = phase
         if self._repo and self._swarm_id:
             await self._repo.update_phase(UUID(self._swarm_id), phase)
+
+    async def suspend(self, reason: str = "") -> None:
+        """Mark swarm as suspended. Persists to repo if available."""
+        self._phase = "suspended"
+        if self._repo and self._swarm_id:
+            await self._repo.suspend_swarm(UUID(self._swarm_id))
+
+    async def update_round(self, round_number: int) -> None:
+        """Update current round number. Persists to repo if available."""
+        self._current_round = round_number
+        if self._repo and self._swarm_id:
+            await self._repo.update_round(UUID(self._swarm_id), round_number)
 
     async def update_swarm(self, **kwargs: Any) -> None:
         if self._repo and self._swarm_id:
