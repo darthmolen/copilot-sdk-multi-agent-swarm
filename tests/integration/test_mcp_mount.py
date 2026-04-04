@@ -52,6 +52,8 @@ def _with_swarm():
     orch.agents = {}
     swarm_store["test-swarm"] = {
         "swarm_id": "test-swarm",
+        "goal": "Test goal",
+        "template": None,
         "phase": "executing",
         "round_number": 1,
         "orchestrator": orch,
@@ -65,6 +67,7 @@ def _make_mcp_app():
     fresh_mcp = FastMCP(
         "swarm-state-test",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        streamable_http_path="/",
     )
     # Re-register all tools from the real server
     for name, tool in mcp_mod.mcp._tool_manager._tools.items():
@@ -113,13 +116,13 @@ class TestMCPServer:
                 transport=ASGITransport(app=starlette_app),
                 base_url="http://localhost",
             ) as client:
-                resp = await client.post("/mcp", json=await _mcp_init_body(), headers=MCP_HEADERS)
+                resp = await client.post("/", json=await _mcp_init_body(), headers=MCP_HEADERS)
                 assert resp.status_code == 200
                 # Response is SSE; parse the JSON-RPC result from event stream
                 assert "swarm-state-test" in resp.text
             tg.cancel_scope.cancel()
 
-    async def test_tools_list_returns_8_tools(self, _with_swarm):
+    async def test_tools_list_returns_9_tools(self, _with_swarm):
         starlette_app, session_mgr = _make_mcp_app()
 
         async def _run(*, task_status=anyio.TASK_STATUS_IGNORED):
@@ -134,21 +137,21 @@ class TestMCPServer:
                 base_url="http://localhost",
             ) as client:
                 # Initialize
-                init_resp = await client.post("/mcp", json=await _mcp_init_body(), headers=MCP_HEADERS)
+                init_resp = await client.post("/", json=await _mcp_init_body(), headers=MCP_HEADERS)
                 session_id = init_resp.headers.get("mcp-session-id", "")
 
                 sess_headers = {**MCP_HEADERS, "mcp-session-id": session_id}
 
                 # Send initialized notification
                 await client.post(
-                    "/mcp",
+                    "/",
                     json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                     headers=sess_headers,
                 )
 
                 # List tools
                 tools_resp = await client.post(
-                    "/mcp",
+                    "/",
                     json={"jsonrpc": "2.0", "method": "tools/list", "id": 2, "params": {}},
                     headers=sess_headers,
                 )
@@ -185,7 +188,7 @@ class TestMCPAuth:
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
             resp = await client.post(
-                "/mcp/mcp",
+                "/mcp/",
                 json=await _mcp_init_body(),
                 headers=MCP_HEADERS,
             )
@@ -209,7 +212,7 @@ class TestMCPAuth:
             base_url="http://localhost",
         ) as client:
             resp = await client.post(
-                "/mcp/mcp",
+                "/mcp/",
                 json=await _mcp_init_body(),
                 headers={**MCP_HEADERS, "X-API-Key": "test-secret-key"},
             )
@@ -230,7 +233,7 @@ class TestMCPAuth:
             base_url="http://localhost",
         ) as client:
             resp = await client.post(
-                "/mcp/mcp",
+                "/mcp/",
                 json=await _mcp_init_body(),
                 headers=MCP_HEADERS,
             )

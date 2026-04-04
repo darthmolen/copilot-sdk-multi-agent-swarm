@@ -24,6 +24,8 @@ mcp = FastMCP(
     # Disable DNS rebinding protection — this is an internal server
     # accessed by agent sessions on the same host.
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    # Override default sub-path so mount at /mcp = endpoint at /mcp (not /mcp/mcp)
+    streamable_http_path="/",
 )
 
 # Eagerly create the streamable HTTP app so the session manager is available
@@ -155,7 +157,10 @@ async def get_recent_events(
 
     since_dt = None
     if since is not None:
-        since_dt = datetime.fromisoformat(since)
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except ValueError as exc:
+            raise ToolError(f"Invalid datetime format: '{since}'. Use ISO 8601 (e.g. 2025-01-01T00:00:00).") from exc
 
     sid: str | UUID = state["swarm_id"]
     with contextlib.suppress(ValueError):
@@ -219,8 +224,8 @@ async def read_artifact(swarm_id: str, path: str) -> dict:
     swarm_dir = Path(deps.work_dir) / state["swarm_id"]
     target = (swarm_dir / path).resolve()
 
-    # Path traversal guard
-    if not str(target).startswith(str(swarm_dir.resolve())):
+    # Path traversal guard (is_relative_to avoids prefix collisions like /swarm-1evil)
+    if not target.is_relative_to(swarm_dir.resolve()):
         raise ToolError("Path traversal not allowed.")
 
     if not target.is_file():
@@ -251,6 +256,6 @@ async def restart_agent(swarm_id: str, agent_name: str) -> dict:
     try:
         await orch.restart_agent(agent_name)
     except KeyError as exc:
-        raise ToolError(str(exc)) from exc
+        raise ToolError(exc.args[0] if exc.args else str(exc)) from exc
 
     return {"ok": True, "agent_name": agent_name}

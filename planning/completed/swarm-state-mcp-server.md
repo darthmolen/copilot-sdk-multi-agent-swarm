@@ -5,7 +5,7 @@
 
 ## What was built
 
-In-process FastMCP server mounted on the FastAPI app at `/mcp`. Agent sessions connect via URL (streamable HTTP transport) — the SDK handles auth at the transport layer so credentials never enter agent context.
+In-process FastMCP server mounted on the FastAPI app at `/mcp` (streamable HTTP, `streamable_http_path="/"`). Agent sessions connect via URL — the SDK handles auth at the transport layer so credentials never enter agent context.
 
 ### 9 Tools
 

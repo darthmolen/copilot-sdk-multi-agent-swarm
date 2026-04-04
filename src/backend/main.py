@@ -280,6 +280,10 @@ class _MCPAuthMiddleware:
         self.app = asgi_app
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        # Pass through non-HTTP scopes (lifespan, websocket)
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
         if not _auth_required():
             return await self.app(scope, receive, send)
 

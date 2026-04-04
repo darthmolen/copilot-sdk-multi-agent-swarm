@@ -73,6 +73,8 @@ async def _make_deps(
         swarm_store={
             swarm_id: {
                 "swarm_id": swarm_id,
+                "goal": "Test goal",
+                "template": None,
                 "phase": phase,
                 "round_number": round_number,
                 "orchestrator": orch,
