@@ -2573,3 +2573,34 @@ class TestAutoRetry:
         tasks = await orch.task_board.get_tasks()
         t = next(t for t in tasks if t.id == "t1")
         assert t.status == TaskStatus.FAILED
+
+    async def test_multiple_retries_before_exhaustion(self, event_bus: EventBus) -> None:
+        """With max_retries=2, agent retries twice before marking FAILED."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 2
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+        # All 3 attempts fail (initial + 2 retries)
+        mock_agent.execute_task = AsyncMock(side_effect=RuntimeError("always fails"))
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        assert mock_agent.retries_used == 2
+        assert mock_agent.resume_session.await_count == 2
+        tasks = await orch.task_board.get_tasks()
+        t = next(t for t in tasks if t.id == "t1")
+        assert t.status == TaskStatus.FAILED
