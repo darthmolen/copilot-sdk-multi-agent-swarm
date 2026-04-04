@@ -78,6 +78,7 @@ class SwarmAgent:
         self.skill_directories = skill_directories
         self.disabled_skills = disabled_skills
         self.session: Any = None  # Set by create_session
+        self.session_id: str | None = None  # Captured after create_session
         self._client: Any = None  # Set by create_session if owns_client
         self._owns_client: bool = False
         self._monitor_tasks: list[asyncio.Task[None]] = []
@@ -134,6 +135,7 @@ class SwarmAgent:
             kwargs["disabled_skills"] = self.disabled_skills
 
         self.session = await client.create_session(**kwargs)
+        self.session_id = getattr(self.session, 'session_id', None)
         if owns_client:
             self._client = client
             self._owns_client = True

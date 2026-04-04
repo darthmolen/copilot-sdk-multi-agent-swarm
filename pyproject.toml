@@ -15,6 +15,9 @@ dependencies = [
     "pyyaml>=6.0",
     "structlog>=24.0",
     "python-multipart>=0.0.6",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +25,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "httpx>=0.24",
+    "psycopg2-binary>=2.9",
 ]
 
 [tool.pytest.ini_options]
@@ -29,6 +33,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: requires live copilot-cli (deselect with '-m not integration')",
+    "db: requires Postgres (deselect with '-m not db')",
 ]
 
 [tool.setuptools.packages.find]

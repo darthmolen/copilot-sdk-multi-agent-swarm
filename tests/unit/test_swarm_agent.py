@@ -635,3 +635,17 @@ async def test_agent_cleanup_safe_without_session(
 ) -> None:
     """Cleanup is safe to call even if agent never had a session."""
     await agent.cleanup()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Session ID capture
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_captures_session_id(
+    agent: SwarmAgent, mock_client: MockClient, mock_session: MockSession,
+) -> None:
+    """After create_session(), agent.session_id is set."""
+    mock_session.session_id = "test-session-123"
+    await agent.create_session(mock_client)
+    assert agent.session_id == "test-session-123"

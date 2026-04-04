@@ -1133,3 +1133,24 @@ def test_deploy_template_zip_rejects_missing_template_yaml() -> None:
         files={"file": ("no-meta.zip", data, "application/zip")},
     )
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Event replay + Swarm list endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_get_events_endpoint_returns_404_without_repo():
+    """Events endpoint returns 404 when no repo configured."""
+    _clear_swarm_store()
+    client = TestClient(app)
+    resp = client.get("/api/swarm/00000000-0000-0000-0000-000000000001/events")
+    assert resp.status_code == 404
+
+
+def test_list_swarms_endpoint_returns_404_without_repo():
+    """Swarms list endpoint returns 404 when no repo configured."""
+    _clear_swarm_store()
+    client = TestClient(app)
+    resp = client.get("/api/swarms")
+    assert resp.status_code == 404

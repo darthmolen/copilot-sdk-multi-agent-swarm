@@ -141,8 +141,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             client_factory = _make_agent_client
             log.info("client_factory_configured", cli_path=cli_path)
 
+    # --- Database persistence (optional) ------------------------------------
+    db_url = os.environ.get("DATABASE_URL", "")
+    repository = None
+    event_logger = None
+    db_engine = None
+    if db_url:
+        from backend.db.engine import create_async_engine
+        from backend.db.repository import SwarmRepository
+        from backend.db.event_logger import EventLogger
+
+        db_engine = create_async_engine(db_url)
+        repository = SwarmRepository(db_engine)
+        event_logger = EventLogger(db_engine)
+        log.info("database_configured", url=db_url[:30] + "...")
+
     # --- Wire dependencies ------------------------------------------------
-    configure(event_bus, copilot_client, template_loader, client_factory=client_factory)
+    configure(
+        event_bus, copilot_client, template_loader,
+        client_factory=client_factory, repository=repository,
+    )
 
     # --- EventBus → WebSocket forwarder -----------------------------------
     def _make_ws_forwarder():  # noqa: ANN202
@@ -195,12 +213,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         return _forward
 
     unsub = event_bus.subscribe(_make_ws_forwarder())
+    if event_logger:
+        event_bus.subscribe(event_logger.on_event)
+        log.info("event_logger_subscribed")
     log.info("backend_started", address="http://0.0.0.0:8000")
 
     yield
 
     # --- Shutdown ---------------------------------------------------------
     unsub()
+    if db_engine:
+        await db_engine.dispose()
+        log.info("db_engine_disposed")
     if copilot_client:
         await copilot_client.stop()
         log.info("copilot_cli_stopped")

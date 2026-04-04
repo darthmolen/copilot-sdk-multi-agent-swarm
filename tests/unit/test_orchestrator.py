@@ -1911,3 +1911,29 @@ class TestPerWorkerSkills:
         worker_sessions = [kw for kw in session_kwargs if any(t.name == "task_update" for t in (kw.get("tools") or []))]
         assert len(worker_sessions) == 1
         assert "disabled_skills" not in worker_sessions[0]
+
+
+# ---------------------------------------------------------------------------
+# SwarmService integration
+# ---------------------------------------------------------------------------
+
+
+class TestSwarmServiceIntegration:
+    async def test_orchestrator_uses_service_task_board(self, event_bus: EventBus) -> None:
+        """When service is provided, orchestrator uses its task_board."""
+        from backend.services.swarm_service import SwarmService
+
+        service = SwarmService()
+        orch = SwarmOrchestrator(
+            client=MockCopilotClient(leader_plan=VALID_PLAN),
+            event_bus=event_bus,
+            service=service,
+        )
+        # The orchestrator's task_board should BE the service's task_board
+        assert orch.task_board is service.task_board
+
+    async def test_orchestrator_without_service_creates_own_stores(self, event_bus: EventBus) -> None:
+        """Without service, orchestrator creates its own stores (existing behavior)."""
+        orch = make_orchestrator(event_bus)
+        assert orch.task_board is not None
+        assert orch.inbox is not None
