@@ -672,8 +672,8 @@ class SwarmOrchestrator:
                 model=self.model,
                 work_dir=self.work_dir,
                 swarm_id=self.swarm_id,
-                mcp_servers=self._get_mcp_servers(),
             )
+            self._configure_agent(agent, name, agent_def)
 
             # Create a fresh session — true session resume requires
             # session_id from DB agents table (future enhancement)
@@ -762,6 +762,54 @@ class SwarmOrchestrator:
     # Phase 2: Spawning workers
     # ------------------------------------------------------------------
 
+    def _configure_agent(self, agent: SwarmAgent, name: str, agent_def: AgentDefinition | None) -> None:
+        """Apply shared template config to a SwarmAgent instance.
+
+        Called from both _spawn() and _rebuild_agents() so that rebuilt agents
+        receive the same configuration as freshly-spawned ones:
+        - Populates ``self._agent_defs``
+        - Sets ``max_retries`` (worker override > template default > hardcoded 2)
+        - Computes ``disabled_skills`` from template skill map
+        - Sets ``skill_directories`` from template
+        - Sets ``mcp_servers`` via ``_get_mcp_servers()``
+        """
+        if agent_def:
+            self._agent_defs[name] = agent_def
+
+        # MCP servers (always wired)
+        agent.mcp_servers = self._get_mcp_servers()
+
+        # Skill directories from template
+        agent.skill_directories = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
+
+        # Resolve max_retries: worker override > template default > hardcoded 2
+        if agent_def and agent_def.max_retries is not None:
+            agent.max_retries = agent_def.max_retries
+        elif self.template:
+            agent.max_retries = self.template.max_retries
+
+        # Compute per-worker disabled_skills from skills allowlist
+        disabled_skills: list[str] | None = None
+        if self.template and agent_def and agent_def.skills is not None:
+            if agent_def.skills == ["*"] or not agent_def.skills:
+                # Wildcard = no filtering; empty = disable all
+                if not agent_def.skills:
+                    disabled_skills = (
+                        sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                    )
+            else:
+                # Map directory names to actual skill names
+                worker_skill_names = {
+                    self.template.skill_name_map[dir_name]
+                    for dir_name in agent_def.skills
+                    if dir_name in self.template.skill_name_map
+                }
+                to_disable = self.template.all_skill_names - worker_skill_names
+                disabled_skills = sorted(to_disable) if to_disable else None
+        agent.disabled_skills = disabled_skills
+
     async def _spawn(self, plan: dict[str, Any]) -> None:
         """Create SwarmAgents for each unique worker in the plan."""
         seen: set[str] = set()
@@ -777,41 +825,14 @@ class SwarmOrchestrator:
             # Use template-specific agent config if available
             agent_available_tools: list[str] | None = None
             agent_prompt_template: str | None = None
-            system_preamble = ""
             agent_def: AgentDefinition | None = None
             if self.template:
                 agent_def = next((a for a in self.template.agents if a.name == name), None)
                 if agent_def:
-                    self._agent_defs[name] = agent_def
                     display_name = agent_def.display_name
                     role = agent_def.description or role
                     agent_available_tools = agent_def.tools  # None = all, list = built-in whitelist
                     agent_prompt_template = agent_def.prompt_template
-
-            system_preamble = self.system_preamble
-
-            # MCP servers and skills from template (if available)
-            mcp_servers = self._get_mcp_servers()
-            skill_dirs = [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
-
-            # Compute per-worker disabled_skills from skills allowlist
-            disabled_skills: list[str] | None = None
-            if self.template and agent_def and agent_def.skills is not None:
-                if agent_def.skills == ["*"] or not agent_def.skills:
-                    # Wildcard = no filtering; empty = disable all
-                    if not agent_def.skills:
-                        disabled_skills = (
-                            sorted(self.template.all_skill_names) if self.template.all_skill_names else None
-                        )
-                else:
-                    # Map directory names to actual skill names
-                    worker_skill_names = {
-                        self.template.skill_name_map[dir_name]
-                        for dir_name in agent_def.skills
-                        if dir_name in self.template.skill_name_map
-                    }
-                    to_disable = self.template.all_skill_names - worker_skill_names
-                    disabled_skills = sorted(to_disable) if to_disable else None
 
             agent = SwarmAgent(
                 name=name,
@@ -823,20 +844,13 @@ class SwarmOrchestrator:
                 event_bus=self.event_bus,
                 available_tools=agent_available_tools,
                 prompt_template=agent_prompt_template,
-                system_preamble=system_preamble,
+                system_preamble=self.system_preamble,
                 system_tools=self.system_tools,
                 model=self.model,
                 work_dir=self.work_dir,
                 swarm_id=self.swarm_id,
-                mcp_servers=mcp_servers,
-                skill_directories=skill_dirs,
-                disabled_skills=disabled_skills,
             )
-            # Resolve max_retries: worker override > template default > hardcoded 2
-            if agent_def and agent_def.max_retries is not None:
-                agent.max_retries = agent_def.max_retries
-            elif self.template:
-                agent.max_retries = self.template.max_retries
+            self._configure_agent(agent, name, agent_def)
 
             if self.client_factory:
                 agent_client = await self.client_factory()
