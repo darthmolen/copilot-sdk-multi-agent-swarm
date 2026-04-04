@@ -2059,3 +2059,46 @@ class TestSwarmServiceIntegration:
         orch = make_orchestrator(event_bus)
         assert orch.task_board is not None
         assert orch.inbox is not None
+
+
+class TestRestartAgent:
+    async def test_restart_replaces_agent(self, event_bus: EventBus) -> None:
+        """restart_agent cleans up old agent and creates a replacement."""
+        orch = make_orchestrator(event_bus)
+
+        # Manually register a fake agent
+        from unittest.mock import AsyncMock, MagicMock
+
+        old_agent = MagicMock()
+        old_agent.name = "analyst"
+        old_agent.role = "Data Analyst"
+        old_agent.display_name = "Analyst"
+        old_agent.task_board = orch.task_board
+        old_agent.inbox = orch.inbox
+        old_agent.registry = orch.registry
+        old_agent.event_bus = orch.event_bus
+        old_agent.available_tools = None
+        old_agent.prompt_template = None
+        old_agent.system_preamble = ""
+        old_agent.system_tools = []
+        old_agent.model = "test-model"
+        old_agent.work_dir = None
+        old_agent.swarm_id = None
+        old_agent.mcp_servers = None
+        old_agent.skill_directories = None
+        old_agent.disabled_skills = None
+        old_agent.cleanup = AsyncMock()
+        orch.agents["analyst"] = old_agent
+
+        await orch.restart_agent("analyst")
+
+        old_agent.cleanup.assert_awaited_once()
+        new_agent = orch.agents["analyst"]
+        assert new_agent is not old_agent
+        assert new_agent.name == "analyst"
+
+    async def test_restart_unknown_agent_raises(self, event_bus: EventBus) -> None:
+        """restart_agent with unknown name raises KeyError."""
+        orch = make_orchestrator(event_bus)
+        with pytest.raises(KeyError, match="ghost"):
+            await orch.restart_agent("ghost")

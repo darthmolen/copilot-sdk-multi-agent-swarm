@@ -75,19 +75,13 @@ This is the highest-risk feature — depends on SDK capabilities. Defer until re
 
 ## Implementation Phases
 
-### Phase 1: Postgres + Event Log (foundation)
-- Add `asyncpg` / `sqlalchemy` to backend
-- Create tables for swarms, tasks, events
-- Write-through from existing in-memory stores
-- EventBus subscriber that appends to events table
-- `/api/swarm/{id}/events` endpoint for event replay
-- Frontend uses event replay on reconnect instead of losing state
+### Phase 1: Postgres + Event Log (foundation) — COMPLETED
+See `planning/completed/persistence-layer.md` (PR #8)
 
-### Phase 2: Swarm State MCP Server (read-only)
-- Build stdio MCP server with `mcp` Python SDK
-- Tools: `get_swarm_status`, `list_tasks`, `get_task_detail`, `get_recent_events`, `list_agents`, `read_artifact`
-- Reads from Postgres (or in-memory as interim)
-- Register on synthesis session so post-completion chat is swarm-aware
+### Phase 2: Swarm State MCP Server — COMPLETED
+
+See `planning/completed/swarm-state-mcp-server.md` (branch `feature/swarm-state-mcp-server`)
+9 tools, in-process streamable HTTP, type-safe, `restart_agent` write tool included.
 
 ### Phase 3: Chat During Execution
 - Remove phase gate on chat endpoint

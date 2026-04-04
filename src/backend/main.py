@@ -165,6 +165,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         repository=repository,
     )
 
+    # --- MCP server dependencies ------------------------------------------
+    from backend.mcp.deps import configure as configure_mcp
+
+    configure_mcp(
+        swarm_store=swarm_store,
+        work_dir=SWARM_WORK_DIR,
+        event_bus=event_bus,
+        repository=repository,
+    )
+
+    # Start MCP session manager (streamable HTTP transport requires run())
+    from backend.mcp.server import get_session_manager
+
+    _mcp_cm = get_session_manager().run()
+    await _mcp_cm.__aenter__()
+
     # --- EventBus → WebSocket forwarder -----------------------------------
     def _make_ws_forwarder():
         async def _forward(event_type: str, data: dict) -> None:
@@ -226,6 +242,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # --- Shutdown ---------------------------------------------------------
     unsub()
+    await _mcp_cm.__aexit__(None, None, None)
     if db_engine:
         await db_engine.dispose()
         log.info("db_engine_disposed")
@@ -249,6 +266,75 @@ app.add_middleware(
 )
 
 app.include_router(router, dependencies=[Depends(verify_api_key)])
+
+
+# ---------------------------------------------------------------------------
+# MCP server mount with auth middleware
+# ---------------------------------------------------------------------------
+
+
+class _MCPAuthMiddleware:
+    """ASGI middleware that enforces API key auth on the MCP endpoint."""
+
+    def __init__(self, asgi_app: Any) -> None:
+        self.app = asgi_app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        # Pass through non-HTTP scopes (lifespan, websocket)
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        if not _auth_required():
+            return await self.app(scope, receive, send)
+
+        # Guard: unconfigured key in non-dev mode is a server error
+        if not SWARM_API_KEY:
+            async def _send_500(send: Any) -> None:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 500,
+                        "headers": [[b"content-type", b"application/json"]],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b'{"error":"SWARM_API_KEY not configured"}',
+                    }
+                )
+
+            await _send_500(send)
+            return
+
+        # Extract X-API-Key from ASGI headers
+        headers = dict(scope.get("headers", []))
+        key = headers.get(b"x-api-key", b"").decode()
+        if key != SWARM_API_KEY:
+            async def _send_401(send: Any) -> None:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [[b"content-type", b"application/json"]],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b'{"error":"Invalid API key"}',
+                    }
+                )
+
+            await _send_401(send)
+            return
+
+        return await self.app(scope, receive, send)
+
+
+from backend.mcp.server import _streamable_app as mcp_asgi_app  # noqa: E402
+
+app.mount("/mcp", _MCPAuthMiddleware(mcp_asgi_app))
 
 # Serve frontend static files in production (when built frontend exists)
 _static_dir = Path(STATIC_DIR)
