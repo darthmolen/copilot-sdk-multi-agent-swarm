@@ -2059,3 +2059,149 @@ class TestSwarmServiceIntegration:
         orch = make_orchestrator(event_bus)
         assert orch.task_board is not None
         assert orch.inbox is not None
+
+
+
+@pytest.mark.asyncio
+class TestSwarmAgentResumeSession:
+    """Tests for SwarmAgent.resume_session() method."""
+
+    async def test_resume_calls_client_resume_session(self, event_bus: EventBus) -> None:
+        """resume_session() calls client.resume_session with stored session_id."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        agent.session_id = "test-session-123"
+
+        mock_session = MagicMock()
+        mock_session.on = MagicMock()
+        client = MagicMock()
+        client.resume_session = AsyncMock(return_value=mock_session)
+
+        await agent.resume_session(client, "try again")
+
+        client.resume_session.assert_awaited_once()
+        call_args = client.resume_session.call_args
+        assert call_args[0][0] == "test-session-123"
+        mock_session.on.assert_called_once()
+
+    async def test_resume_without_session_id_raises(self, event_bus: EventBus) -> None:
+        """resume_session() raises RuntimeError if no session_id stored."""
+        from unittest.mock import MagicMock
+
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+
+        mock_client = MagicMock()
+        with pytest.raises(RuntimeError, match="analyst"):
+            await agent.resume_session(mock_client, "nudge")
+
+    async def test_resume_replaces_session_handle(self, event_bus: EventBus) -> None:
+        """After resume, agent.session is the new resumed session."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        agent.session_id = "test-session-456"
+
+        new_session = MagicMock()
+        new_session.on = MagicMock()
+        client = MagicMock()
+        client.resume_session = AsyncMock(return_value=new_session)
+
+        await agent.resume_session(client, "nudge")
+
+        assert agent.session is new_session
+
+    async def test_max_retries_defaults_to_2(self, event_bus: EventBus) -> None:
+        """SwarmAgent.max_retries defaults to 2."""
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        assert agent.max_retries == 2
+
+    async def test_retries_used_starts_at_0(self, event_bus: EventBus) -> None:
+        """SwarmAgent.retries_used starts at 0."""
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        assert agent.retries_used == 0
