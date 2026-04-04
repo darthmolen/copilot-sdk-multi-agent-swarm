@@ -1,7 +1,16 @@
-import type { SwarmState, SavedReport } from '../types/swarm';
+import type { SavedReport, SwarmState } from '../types/swarm';
 import { truncateTitle } from './savedReportStorage';
 
-export type ReportStatus = 'running' | 'generating' | 'live' | 'saved';
+export interface SuspendedSwarm {
+  id: string;
+  goal: string;
+  template_key: string | null;
+  current_round: number;
+  max_rounds: number;
+  created_at: string;
+}
+
+export type ReportStatus = 'running' | 'generating' | 'live' | 'saved' | 'suspended';
 
 export interface ReportListItem {
   swarmId: string;
@@ -15,6 +24,7 @@ export function buildReportList(
   completedSwarmIds: string[],
   swarms: Record<string, SwarmState>,
   savedReports: SavedReport[],
+  suspendedSwarms: SuspendedSwarm[] = [],
 ): ReportListItem[] {
   const items: ReportListItem[] = [];
   const seenIds = new Set<string>();
@@ -71,8 +81,26 @@ export function buildReportList(
     }
   }
 
-  // Sort: running/generating first, then by timestamp descending
-  const priority = (s: ReportStatus) => (s === 'running' || s === 'generating') ? 0 : 1;
+  // Suspended swarms from DB (not already in the live/saved set)
+  for (const sw of suspendedSwarms) {
+    if (!seenIds.has(sw.id)) {
+      const goalLine = sw.goal.split('\n').find((l) => l.trim() && !l.startsWith('#'))?.trim() ?? '';
+      items.push({
+        swarmId: sw.id,
+        title: truncateTitle(goalLine || `Suspended ${sw.id.slice(0, 8)}...`),
+        timestamp: new Date(sw.created_at).getTime(),
+        status: 'suspended',
+      });
+      seenIds.add(sw.id);
+    }
+  }
+
+  // Sort: running/generating first, suspended next, then saved/live
+  const priority = (s: ReportStatus) => {
+    if (s === 'running' || s === 'generating') return 0;
+    if (s === 'suspended') return 1;
+    return 2;
+  };
   items.sort((a, b) => {
     const pa = priority(a.status);
     const pb = priority(b.status);

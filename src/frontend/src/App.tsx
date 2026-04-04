@@ -18,7 +18,7 @@ import type { SwarmEvent, FileInfo, ActiveTool } from './types/swarm';
 import { ArtifactList } from './components/ArtifactList';
 import { saveReport, getSavedReports, getReportById, truncateTitle } from './utils/savedReportStorage';
 import { parseSessionFromSearch } from './utils/urlSession';
-import { buildReportList } from './utils/buildReportList';
+import { buildReportList, type SuspendedSwarm } from './utils/buildReportList';
 import { ReportList } from './components/ReportList';
 import { InterventionView } from './components/InterventionView';
 import './App.css';
@@ -137,6 +137,23 @@ function SwarmDashboard() {
 
   // Intervention view state
   const [interventionTaskId, setInterventionTaskId] = useState<string | null>(null);
+
+  // Suspended swarms from DB (for resume button in ReportList)
+  const [suspendedSwarms, setSuspendedSwarms] = useState<SuspendedSwarm[]>([]);
+  useEffect(() => {
+    const apiKey = getApiKey();
+    fetch(`${API_BASE}/api/swarms`, {
+      headers: apiKey ? { 'X-API-Key': apiKey } : {},
+    })
+      .then((r) => (r.ok ? r.json() : { swarms: [] }))
+      .then((data) => {
+        const suspended = (data.swarms ?? []).filter(
+          (s: { phase: string }) => s.phase === 'suspended',
+        );
+        setSuspendedSwarms(suspended);
+      })
+      .catch(() => {}); // DB may not be configured
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch report from backend when URL has a session but localStorage is empty
   const fetchedRef = useRef(false);
@@ -390,7 +407,7 @@ function SwarmDashboard() {
   // Unified report list from live swarms + localStorage
   const savedReports = getSavedReports();
   const reportListItems = buildReportList(
-    store.activeSwarmIds, store.completedSwarmIds, store.swarms, savedReports,
+    store.activeSwarmIds, store.completedSwarmIds, store.swarms, savedReports, suspendedSwarms,
   );
   const currentReport = reportSwarmId
     ? (store.swarms[reportSwarmId]?.leaderReport || getReportById(reportSwarmId)?.report || null)
@@ -407,6 +424,29 @@ function SwarmDashboard() {
 
   // Handler to enter intervention view when a failed task pill is clicked
   const handleInterventionClick = (taskId: string) => setInterventionTaskId(taskId);
+
+  // Resume a suspended swarm from DB
+  const handleResumeSwarm = async (swarmId: string) => {
+    const apiKey = getApiKey();
+    try {
+      const resp = await fetch(`${API_BASE}/api/swarm/${swarmId}/resume`, {
+        method: 'POST',
+        headers: apiKey ? { 'X-API-Key': apiKey } : {},
+      });
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({}));
+        toast.error(`Resume failed: ${detail.detail ?? resp.statusText}`);
+        return;
+      }
+      toast.success('Swarm resuming...');
+      // Add to active swarms so we start tracking it
+      swarmDispatch({ type: 'swarm.add', swarmId });
+      // Remove from suspended list
+      setSuspendedSwarms((prev) => prev.filter((s) => s.id !== swarmId));
+    } catch {
+      toast.error('Failed to resume swarm');
+    }
+  };
 
   // Determine template key for the intervention swarm (use first active swarm's id as fallback)
   const interventionSwarmId = latestActiveSwarmId ?? reportSwarmId ?? '';
@@ -547,6 +587,7 @@ function SwarmDashboard() {
           items={reportListItems}
           activeId={reportSwarmId}
           onSelect={setReportSwarmId}
+          onResume={handleResumeSwarm}
         />
         <div className="controls-stack">
           {latestActiveSwarm && latestActiveSwarmId && (
