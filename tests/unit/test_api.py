@@ -1665,7 +1665,6 @@ class TestResumeCallback:
     @pytest.mark.asyncio
     async def test_resume_updates_store_on_success(self) -> None:
         """Background resume task updates swarm_store phase to 'complete'."""
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         import backend.api.rest as rest_mod
@@ -1700,9 +1699,7 @@ class TestResumeCallback:
 
             # Monkey-patch the resume endpoint to use our mock orchestrator
             # We do this by pre-creating the swarm state then calling the endpoint
-            from fastapi.testclient import TestClient
 
-            from backend.main import app
 
             # Patch SwarmOrchestrator creation to return our mock
             import backend.swarm.orchestrator as orch_mod

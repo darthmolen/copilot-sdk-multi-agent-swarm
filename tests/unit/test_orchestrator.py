@@ -3113,45 +3113,6 @@ class TestPhasePersistence:
         service.update_phase = AsyncMock()
         service.update_round = AsyncMock()
 
-
-    """Rebuilt agents must receive the same config that _spawn() applies."""
-
-    @staticmethod
-    def _make_template(
-        *,
-        max_retries: int = 2,
-        agents: list[AgentDefinition] | None = None,
-        skills_dir: Path | None = None,
-        all_skill_names: set[str] | None = None,
-        skill_name_map: dict[str, str] | None = None,
-    ) -> LoadedTemplate:
-        if agents is None:
-            agents = [
-                AgentDefinition(
-                    name="analyst",
-                    display_name="Analyst",
-                    description="Analyze things",
-                ),
-            ]
-        return LoadedTemplate(
-            key="test",
-            name="Test Template",
-            description="A test template",
-            goal_template="Do {goal}",
-            leader_prompt="You are the leader",
-            agents=agents,
-            max_retries=max_retries,
-            skills_dir=skills_dir,
-            all_skill_names=all_skill_names or set(),
-            skill_name_map=skill_name_map or {},
-        )
-
-    @staticmethod
-    async def _make_orchestrator_for_rebuild(
-        event_bus: EventBus,
-        template: LoadedTemplate,
-    ) -> SwarmOrchestrator:
-        """Build an orchestrator, register agents in registry, ready for _rebuild_agents()."""
         client = MockCopilotClient()
         orch = SwarmOrchestrator(
             client=client,

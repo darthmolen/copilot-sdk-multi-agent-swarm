@@ -690,6 +690,43 @@ class SwarmOrchestrator:
             await self.service.update_phase("spawning")
         await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
 
+    def _configure_agent(self, agent: SwarmAgent, name: str, agent_def: AgentDefinition | None) -> None:
+        """Apply shared template config to a SwarmAgent instance.
+
+        Called from both _spawn() and _rebuild_agents() so rebuilt agents
+        receive the same configuration as freshly-spawned ones.
+        """
+        if agent_def:
+            self._agent_defs[name] = agent_def
+
+        agent.mcp_servers = self._get_mcp_servers()
+
+        agent.skill_directories = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
+
+        if agent_def and agent_def.max_retries is not None:
+            agent.max_retries = agent_def.max_retries
+        elif self.template:
+            agent.max_retries = self.template.max_retries
+
+        disabled_skills: list[str] | None = None
+        if self.template and agent_def and agent_def.skills is not None:
+            if agent_def.skills == ["*"] or not agent_def.skills:
+                if not agent_def.skills:
+                    disabled_skills = (
+                        sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                    )
+            else:
+                worker_skill_names = {
+                    self.template.skill_name_map[dir_name]
+                    for dir_name in agent_def.skills
+                    if dir_name in self.template.skill_name_map
+                }
+                to_disable = self.template.all_skill_names - worker_skill_names
+                disabled_skills = sorted(to_disable) if to_disable else None
+        agent.disabled_skills = disabled_skills
+
     # ------------------------------------------------------------------
     # Phase 1: Planning (tool-based structured output)
     # ------------------------------------------------------------------
