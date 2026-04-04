@@ -405,6 +405,9 @@ function SwarmDashboard() {
     (t) => t.status === 'failed' || t.status === 'timeout',
   );
 
+  // Handler to enter intervention view when a failed task pill is clicked
+  const handleInterventionClick = (taskId: string) => setInterventionTaskId(taskId);
+
   // Determine template key for the intervention swarm (use first active swarm's id as fallback)
   const interventionSwarmId = latestActiveSwarmId ?? reportSwarmId ?? '';
 
@@ -445,7 +448,7 @@ function SwarmDashboard() {
           <button className="back-button" onClick={() => setReportSwarmId(null)}>
             ← Dashboard
           </button>
-          <h1>Report — {reportSwarmId.slice(0, 8)}</h1>
+          <h1>Report — {reportSwarmId!.slice(0, 8)}</h1>
           <div className="modal-actions">
             <button
               className="copy-button"
@@ -485,7 +488,7 @@ function SwarmDashboard() {
                 files={swarmFiles}
                 activeFile={activeFilePath}
                 onSelect={handleSelectArtifact}
-                swarmId={reportSwarmId}
+                swarmId={reportSwarmId ?? undefined}
               />
               {activeFilePath && (
                 <div className="active-file-indicator">
@@ -497,7 +500,7 @@ function SwarmDashboard() {
                 streamingMessage={currentChatState?.streamingMessage ?? null}
                 sessionStarting={currentChatState?.sessionStarting ?? false}
                 activeTools={currentChatState?.activeTools ?? []}
-                onSend={(msg) => handleSendChat(reportSwarmId, msg, activeFilePath)}
+                onSend={(msg) => handleSendChat(reportSwarmId!, msg, activeFilePath)}
                 chatEnabled={chatEnabled}
               />
             </div>
@@ -552,6 +555,23 @@ function SwarmDashboard() {
           <SwarmControls onStart={handleStartSwarm} />
         </div>
       </div>
+
+      {/* Failed task pills — click to enter intervention view */}
+      {failedTasks.length > 0 && (
+        <div className="failed-tasks-bar">
+          <span className="failed-tasks-label">Failed tasks:</span>
+          {failedTasks.map((t) => (
+            <button
+              key={t.id}
+              className="failed-task-pill"
+              onClick={() => handleInterventionClick(t.id)}
+              title={`${t.subject} (${t.status})`}
+            >
+              {t.worker_name} — {t.status}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* WS connections — one per active swarm */}
       {store.activeSwarmIds.map((id) => (

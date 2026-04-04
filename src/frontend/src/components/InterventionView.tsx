@@ -1,71 +1,8 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef } from 'react';
 import { TemplateEditorPanel } from './TemplateEditorPanel';
 import { ChatPanel } from './ChatPanel';
+import { ResizableLayout } from './ResizableLayout';
 import type { Task } from '../types/swarm';
-
-/**
- * Simple vertical split layout used as a fallback when ResizableLayout
- * does not yet support direction="vertical". Once the vertical mode is
- * merged, this can be replaced with ResizableLayout direction="vertical".
- */
-function VerticalSplitLayout({
-  top,
-  bottom,
-  defaultTopPercent = 50,
-}: {
-  top: React.ReactNode;
-  bottom: React.ReactNode;
-  defaultTopPercent?: number;
-}) {
-  const [topPercent, setTopPercent] = useState(defaultTopPercent);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-
-  const handleMouseDown = useCallback(() => {
-    dragging.current = true;
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!dragging.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((e.clientY - rect.top) / rect.height) * 100;
-      setTopPercent(Math.min(80, Math.max(20, pct)));
-    };
-
-    const handleMouseUp = () => {
-      dragging.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, []);
-
-  return (
-    <div ref={containerRef} className="vertical-split-layout">
-      <div
-        className="vertical-split-layout__top"
-        style={{ flexBasis: `${topPercent}%` }}
-      >
-        {top}
-      </div>
-      <div
-        className="vertical-split-layout__divider"
-        onMouseDown={handleMouseDown}
-      />
-      <div
-        className="vertical-split-layout__bottom"
-        style={{ flexBasis: `${100 - topPercent}%` }}
-      >
-        {bottom}
-      </div>
-    </div>
-  );
-}
 
 function statusColor(status: string): string {
   switch (status) {
@@ -177,8 +114,10 @@ export function InterventionView({
 
         {/* Right column: Logs + Chat (55%) */}
         <div className="intervention-right">
-          <VerticalSplitLayout
-            top={
+          <ResizableLayout
+            direction="vertical"
+            defaultLeftPercent={55}
+            left={
               <div className="intervention-logs" ref={logsRef}>
                 <div className="intervention-logs__header">
                   <h3>
@@ -213,7 +152,7 @@ export function InterventionView({
                 </div>
               </div>
             }
-            bottom={
+            right={
               <ChatPanel
                 messages={[]}
                 streamingMessage={null}
@@ -225,7 +164,6 @@ export function InterventionView({
                 chatEnabled={false}
               />
             }
-            defaultTopPercent={55}
           />
         </div>
       </div>

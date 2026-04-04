@@ -592,16 +592,13 @@ class SwarmOrchestrator:
         await self._rebuild_agents()
 
         # Execute
-        await self._emit("swarm.phase_changed", {"phase": "executing"})
         await self._execute()
 
         # Same pause/continue loop as run()
         while True:
             all_tasks = await self.task_board.get_tasks()
             actionable = [
-                t
-                for t in all_tasks
-                if t.status in (TaskStatus.BLOCKED, TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+                t for t in all_tasks if t.status in (TaskStatus.BLOCKED, TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
             ]
             if not actionable:
                 break
@@ -644,6 +641,7 @@ class SwarmOrchestrator:
 
     async def _rebuild_agents(self) -> None:
         """Recreate SwarmAgent instances from persisted registry and resume sessions."""
+        self.agents.clear()
         agent_entries = await self.registry.get_all()
         for info in agent_entries:
             name = info.name

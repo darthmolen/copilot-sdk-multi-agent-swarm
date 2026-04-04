@@ -1448,9 +1448,11 @@ class TestResumeEndpoint:
         import backend.api.rest as rest_mod
 
         old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
         mock_repo = MagicMock()
         mock_repo.get_swarm = AsyncMock(return_value=None)
         rest_mod._repository = mock_repo
+        rest_mod._copilot_client = MagicMock()
 
         try:
             client = TestClient(app)
@@ -1461,6 +1463,7 @@ class TestResumeEndpoint:
             assert "not found" in resp.json()["detail"].lower()
         finally:
             rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
 
     def test_resume_409_not_suspended(self) -> None:
         """POST /resume returns 409 if swarm is not suspended."""
@@ -1472,6 +1475,7 @@ class TestResumeEndpoint:
         import backend.api.rest as rest_mod
 
         old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
         mock_repo = MagicMock()
         swarm_id = "00000000-0000-0000-0000-000000000002"
         mock_repo.get_swarm = AsyncMock(
@@ -1483,6 +1487,7 @@ class TestResumeEndpoint:
             }
         )
         rest_mod._repository = mock_repo
+        rest_mod._copilot_client = MagicMock()
 
         try:
             client = TestClient(app)
@@ -1491,6 +1496,7 @@ class TestResumeEndpoint:
             assert "executing" in resp.json()["detail"]
         finally:
             rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
 
     def test_resume_500_no_database(self) -> None:
         """POST /resume returns 500 when no database configured."""

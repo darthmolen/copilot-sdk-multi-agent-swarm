@@ -9,7 +9,6 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 import structlog
 import yaml
@@ -290,7 +289,15 @@ async def resume_swarm(swarm_id: str) -> dict[str, object]:
     if not _repository:
         raise HTTPException(status_code=500, detail="Database not configured")
 
-    swarm_data = await _repository.get_swarm(UUID(swarm_id))
+    try:
+        swarm_uuid = uuid.UUID(swarm_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid swarm_id format") from exc
+
+    if _copilot_client is None:
+        raise HTTPException(status_code=503, detail="Copilot client not connected")
+
+    swarm_data = await _repository.get_swarm(swarm_uuid)
     if not swarm_data:
         raise HTTPException(status_code=404, detail="Swarm not found")
     if swarm_data["phase"] != "suspended":
@@ -735,11 +742,16 @@ async def deploy_template_zip(file: UploadFile) -> dict:
 
 @router.get("/api/swarm/{swarm_id}/task/{task_id}/logs")
 async def get_task_logs(swarm_id: str, task_id: str) -> dict[str, object]:
-    """Get events and agent output for a specific task."""
+    """Get events for a specific task."""
     if not _repository:
         raise HTTPException(status_code=500, detail="Database not configured")
 
-    task_events = await _repository.get_task_events(uuid.UUID(swarm_id), task_id)
+    try:
+        swarm_uuid = uuid.UUID(swarm_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid swarm_id format") from exc
+
+    task_events = await _repository.get_task_events(swarm_uuid, task_id)
     if not task_events:
         raise HTTPException(status_code=404, detail="No logs found for task")
 

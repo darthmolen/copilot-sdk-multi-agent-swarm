@@ -78,9 +78,9 @@ class SwarmRepository:
 
     async def list_swarms_by_phase(self, *phases: str) -> list[dict[str, Any]]:
         """Find swarms in specific phases (for orphan detection)."""
-        stmt = swarms.select().where(
-            swarms.c.phase.in_(phases)
-        ).order_by(swarms.c.created_at.desc())
+        if not phases:
+            return []
+        stmt = swarms.select().where(swarms.c.phase.in_(phases)).order_by(swarms.c.created_at.desc())
         async with self._engine.connect() as conn:
             rows = (await conn.execute(stmt)).mappings().all()
         return [dict(r) for r in rows]
