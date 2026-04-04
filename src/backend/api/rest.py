@@ -636,8 +636,10 @@ async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
             since_dt = datetime.fromisoformat(since)
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="Invalid 'since' datetime format")
+    from fastapi.encoders import jsonable_encoder
+
     events = await _repository.get_events(swarm_id, since=since_dt)
-    return {"events": events}
+    return {"events": jsonable_encoder(events)}
 
 
 @router.get("/api/swarms")
@@ -645,19 +647,7 @@ async def list_swarms():
     """Return all swarms from DB. Requires DATABASE_URL configured."""
     if _repository is None:
         return JSONResponse({"error": "Persistence not configured"}, status_code=404)
-    from datetime import datetime
+    from fastapi.encoders import jsonable_encoder
 
     swarms = await _repository.list_swarms()
-    # Convert UUIDs and datetimes to strings for JSON
-    result = []
-    for s in swarms:
-        entry = {}
-        for k, v in s.items():
-            if hasattr(v, 'hex'):       # UUID
-                entry[k] = str(v)
-            elif isinstance(v, datetime):
-                entry[k] = v.isoformat()
-            else:
-                entry[k] = v
-        result.append(entry)
-    return {"swarms": result}
+    return {"swarms": jsonable_encoder(swarms)}
