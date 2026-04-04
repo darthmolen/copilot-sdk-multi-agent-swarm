@@ -39,8 +39,9 @@ See [documentation/Architecture.md](documentation/Architecture.md) for component
 |----------|-------------------------------------|
 | Backend  | Python 3.10+, FastAPI, Pydantic v2, asyncio, uvicorn, structlog |
 | Frontend | React 19, TypeScript 5.9, Vite      |
-| SDK      | GitHub Copilot SDK (headless CLI), Gemini 3 Pro Preview |
-| Testing  | pytest + pytest-asyncio (223+), Vitest (28+) |
+| SDK      | GitHub Copilot SDK (headless CLI), Claude Sonnet 4.6 |
+| Database | PostgreSQL 17 (optional), SQLAlchemy 2.0, Alembic |
+| Testing  | pytest + pytest-asyncio (309+), Vitest (97+), 24+ integration |
 
 ## Project Structure
 
@@ -153,13 +154,14 @@ cp .env.template .env
 | `SWARM_API_KEY` | — | API key for REST and WebSocket auth. Empty + development = open access |
 | `SWARM_TASK_TIMEOUT` | `1800` | Max seconds per agent task before timeout (30 min) |
 | `SWARM_MAX_ROUNDS` | `3` | Max execution rounds per swarm |
-| `SWARM_MODEL` | `gemini-3-pro-preview` | LLM model identifier for agent sessions |
+| `SWARM_MODEL` | `claude-sonnet-4.6` | LLM model identifier (run `scripts/list-models.py` for options) |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Comma-separated allowed CORS origins |
 | `SWARM_WORK_DIR` | `workdir` | Agent work directory (use absolute path for Docker) |
 | `TEMPLATES_DIR` | `src/templates` | Template directory (use absolute path for Docker) |
 | `LOGS_DIR` | `logs` | Log output directory |
 | `STATIC_DIR` | `static` | Built frontend static files directory |
 | `SWARM_MAX_TEMPLATE_ZIP_SIZE` | `3145728` | Max zip size for template deploy (3MB) |
+| `DATABASE_URL` | — | Postgres connection string for persistence (optional) |
 
 ### Run the backend
 
@@ -245,20 +247,58 @@ ENVIRONMENT=production
 SWARM_API_KEY=your-secret-key-here
 ```
 
-## Running Tests
+## Persistence (Optional)
 
-### Backend (223+ tests)
+Swarm state can be persisted to PostgreSQL for event replay, session recovery, and historical swarm listing. Without it, everything works in-memory (state lost on restart).
+
+### Enable persistence
 
 ```bash
-pytest
+# 1. Start Postgres
+docker compose up -d postgres
+
+# 2. Run migrations
+PYTHONPATH=src alembic upgrade head
+
+# 3. Add to .env
+DATABASE_URL=postgresql+asyncpg://swarm:swarm@localhost:5432/swarm
 ```
 
-### Frontend (28+ tests)
+When `DATABASE_URL` is set, the backend automatically:
+- Persists swarm lifecycle, tasks, agents, messages, and files to Postgres
+- Logs all events to an append-only event table
+- Exposes `GET /api/swarms` (historical swarm list) and `GET /api/swarm/{id}/events` (event replay)
+- Captures agent session IDs for future recovery features
+
+When `DATABASE_URL` is empty or unset, the backend runs exactly as before — fully in-memory, no database required.
+
+### Schema
+
+Six tables managed by Alembic migrations: `swarms`, `tasks`, `agents`, `messages`, `events`, `files`. See `src/backend/db/tables.py` for definitions.
+
+## Running Tests
+
+### Backend unit tests (309+)
+
+```bash
+python -m pytest tests/unit/ -x -q
+```
+
+### Frontend tests (97+)
 
 ```bash
 cd src/frontend
 npx vitest run
 ```
+
+### Integration tests (24+ — requires Postgres)
+
+```bash
+docker compose up -d postgres
+PYTHONPATH=src python -m pytest tests/integration/ -m db -x -q
+```
+
+Each integration test gets its own isolated database with real migrations applied. See [tests/README.md](tests/README.md) for details.
 
 ## Templates
 
