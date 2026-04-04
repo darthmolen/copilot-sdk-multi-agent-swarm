@@ -237,25 +237,3 @@ async def read_artifact(swarm_id: str, path: str) -> dict:
         raise ToolError(f"File '{path}' is not a text file and cannot be read as text") from exc
 
     return {"path": path, "content": content}
-
-
-# ---------------------------------------------------------------------------
-# Write tools
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def restart_agent(swarm_id: str, agent_name: str) -> dict:
-    """Restart a stuck or failed agent by recreating its session."""
-    state = _resolve_swarm(swarm_id)
-
-    orch = state.get("orchestrator")
-    if orch is None:
-        raise ToolError("Swarm has no orchestrator.")
-
-    try:
-        await orch.restart_agent(agent_name)
-    except KeyError as exc:
-        raise ToolError(exc.args[0] if exc.args else str(exc)) from exc
-
-    return {"ok": True, "agent_name": agent_name}

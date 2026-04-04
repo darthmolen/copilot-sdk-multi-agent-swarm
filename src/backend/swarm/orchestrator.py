@@ -721,46 +721,6 @@ class SwarmOrchestrator:
                 )
 
     # ------------------------------------------------------------------
-    # Agent restart (for stuck/failed agents)
-    # ------------------------------------------------------------------
-
-    async def restart_agent(self, agent_name: str) -> None:
-        """Restart a stuck/failed agent by recreating its session."""
-        if agent_name not in self.agents:
-            raise KeyError(f"Agent '{agent_name}' not found")
-
-        old_agent = self.agents[agent_name]
-        await old_agent.cleanup()
-
-        new_agent = SwarmAgent(
-            name=old_agent.name,
-            role=old_agent.role,
-            display_name=old_agent.display_name,
-            task_board=old_agent.task_board,
-            inbox=old_agent.inbox,
-            registry=old_agent.registry,
-            event_bus=old_agent.event_bus,
-            available_tools=old_agent.available_tools,
-            prompt_template=old_agent.prompt_template,
-            system_preamble=old_agent.system_preamble,
-            system_tools=old_agent.system_tools,
-            model=old_agent.model,
-            work_dir=old_agent.work_dir,
-            swarm_id=old_agent.swarm_id,
-            mcp_servers=old_agent.mcp_servers,
-            skill_directories=old_agent.skill_directories,
-            disabled_skills=old_agent.disabled_skills,
-        )
-        if self.client_factory:
-            agent_client = await self.client_factory()
-            await new_agent.create_session(agent_client, owns_client=True)
-        else:
-            await new_agent.create_session(self.client)
-        self.agents[agent_name] = new_agent
-
-        await self._emit("agent.restarted", {"agent_name": agent_name})
-
-    # ------------------------------------------------------------------
     # Ephemeral agent creation (for scalable workers)
     # ------------------------------------------------------------------
 

@@ -81,7 +81,7 @@ See `planning/completed/persistence-layer.md` (PR #8)
 ### Phase 2: Swarm State MCP Server — COMPLETED
 
 See `planning/completed/swarm-state-mcp-server.md` (branch `feature/swarm-state-mcp-server`)
-9 tools, in-process streamable HTTP, type-safe, `restart_agent` write tool included.
+8 tools, in-process streamable HTTP, type-safe (`restart_agent` removed, replaced by `resume_agent`).
 
 ### Phase 3: Chat During Execution
 - Remove phase gate on chat endpoint

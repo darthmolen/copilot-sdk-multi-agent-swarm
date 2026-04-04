@@ -384,38 +384,6 @@ class TestArtifacts:
 
 
 # ---------------------------------------------------------------------------
-# restart_agent
-# ---------------------------------------------------------------------------
-
-
-class TestRestartAgent:
-    async def test_success(self, tmp_path: Path):
-        mock_orch = _make_orchestrator(TaskBoard(), TeamRegistry())
-        mock_orch.restart_agent = AsyncMock(return_value=None)
-        deps = await _make_deps(tmp_path, orch_agents={"analyst": MagicMock()})
-        deps.swarm_store["swarm-1"]["orchestrator"] = mock_orch
-
-        with patch("backend.mcp.server.get_deps", return_value=deps):
-            from backend.mcp.server import restart_agent
-
-            result = await restart_agent(swarm_id="swarm-1", agent_name="analyst")
-        assert result["ok"] is True
-        mock_orch.restart_agent.assert_awaited_once_with("analyst")
-
-    async def test_unknown_agent_raises(self, tmp_path: Path):
-        mock_orch = _make_orchestrator(TaskBoard(), TeamRegistry())
-        mock_orch.restart_agent = AsyncMock(side_effect=KeyError("Agent 'ghost' not found"))
-        deps = await _make_deps(tmp_path)
-        deps.swarm_store["swarm-1"]["orchestrator"] = mock_orch
-
-        with patch("backend.mcp.server.get_deps", return_value=deps):
-            from backend.mcp.server import restart_agent
-
-            with pytest.raises(ToolError, match="ghost"):
-                await restart_agent(swarm_id="swarm-1", agent_name="ghost")
-
-
-# ---------------------------------------------------------------------------
 # _resolve_swarm_id
 # ---------------------------------------------------------------------------
 
