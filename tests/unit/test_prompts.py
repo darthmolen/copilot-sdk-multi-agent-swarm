@@ -42,6 +42,7 @@ def test_assemble_worker_prompt_fallback_without_template() -> None:
 def test_assemble_worker_prompt_includes_work_dir() -> None:
     """When work_dir is provided, prompt includes the absolute path."""
     from pathlib import Path
+
     from backend.swarm.prompts import assemble_worker_prompt
 
     result = assemble_worker_prompt(
@@ -57,6 +58,7 @@ def test_assemble_worker_prompt_includes_work_dir() -> None:
 def test_work_dir_in_prompt_is_absolute() -> None:
     """When a relative work_dir is passed, prompt must contain the absolute resolved path."""
     from pathlib import Path
+
     from backend.swarm.prompts import assemble_worker_prompt
 
     relative_dir = Path("workdir/swarm-test-abc")
@@ -75,6 +77,7 @@ def test_work_dir_in_prompt_is_absolute() -> None:
 def test_work_dir_in_prompt_resolves_correctly() -> None:
     """Relative path must be resolved to absolute — bare relative string must not appear alone."""
     from pathlib import Path
+
     from backend.swarm.prompts import assemble_worker_prompt
 
     relative_dir = Path("workdir/swarm-xyz")
@@ -89,7 +92,8 @@ def test_work_dir_in_prompt_resolves_correctly() -> None:
     assert resolved in result
     # The path in the prompt must start with /
     import re
-    match = re.search(r'`([^`]+)`', result)
+
+    match = re.search(r"`([^`]+)`", result)
     assert match is not None
     assert Path(match.group(1)).is_absolute(), f"Path in prompt is not absolute: {match.group(1)}"
 
@@ -117,4 +121,4 @@ def test_assemble_worker_prompt_empty_preamble() -> None:
         template_prompt="Domain expertise here.",
     )
     assert "Domain expertise here." in result
-    assert "Agent" not in result or True  # template may not use {display_name}
+    assert True  # template may not use {display_name}

@@ -5,7 +5,6 @@ Test 2 exercises all event types synthetically but in a real async context.
 """
 
 import pytest
-
 from copilot import CopilotClient
 from copilot.session import PermissionHandler
 
@@ -22,6 +21,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _sdk_event_to_bridge_event(sdk_event) -> SessionEvent | None:
     """Convert a real SDK SessionEvent to our bridge's SessionEvent format.
@@ -103,8 +103,7 @@ async def test_real_session_events_map_through_bridge(copilot_client: CopilotCli
             assert "data" in ws_event
 
     assert mapped_count > 0, (
-        f"No SDK events mapped through bridge. "
-        f"Raw event types: {[e.type.value for e in raw_sdk_events]}"
+        f"No SDK events mapped through bridge. Raw event types: {[e.type.value for e in raw_sdk_events]}"
     )
 
 
@@ -133,6 +132,5 @@ async def test_bridge_handles_all_event_types_gracefully():
         # Should return a dict or None -- never raise.
         result = bridge_sdk_event("test-agent", event)
         assert result is None or isinstance(result, dict), (
-            f"bridge_sdk_event returned unexpected type {type(result)} "
-            f"for event type {event_type.value}"
+            f"bridge_sdk_event returned unexpected type {type(result)} for event type {event_type.value}"
         )

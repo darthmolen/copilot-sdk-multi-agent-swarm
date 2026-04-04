@@ -13,7 +13,6 @@ from backend.events import EventBus
 from backend.main import app
 from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
 from backend.swarm.orchestrator import SwarmOrchestrator
-from backend.swarm.tools import Tool, ToolInvocation
 
 # Re-use mock infrastructure from test_orchestrator
 from tests.unit.test_orchestrator import (
@@ -24,7 +23,6 @@ from tests.unit.test_orchestrator import (
     make_orchestrator,
 )
 
-
 # ---------------------------------------------------------------------------
 # Plan with 3 rounds of tasks (sequential chain via blocked_by)
 # ---------------------------------------------------------------------------
@@ -32,9 +30,27 @@ from tests.unit.test_orchestrator import (
 THREE_ROUND_PLAN = {
     "team_description": "Three-round team",
     "tasks": [
-        {"subject": "Task A", "description": "Do A", "worker_role": "Worker", "worker_name": "worker_a", "blocked_by_indices": []},
-        {"subject": "Task B", "description": "Do B", "worker_role": "Worker", "worker_name": "worker_b", "blocked_by_indices": [0]},
-        {"subject": "Task C", "description": "Do C", "worker_role": "Worker", "worker_name": "worker_c", "blocked_by_indices": [1]},
+        {
+            "subject": "Task A",
+            "description": "Do A",
+            "worker_role": "Worker",
+            "worker_name": "worker_a",
+            "blocked_by_indices": [],
+        },
+        {
+            "subject": "Task B",
+            "description": "Do B",
+            "worker_role": "Worker",
+            "worker_name": "worker_b",
+            "blocked_by_indices": [0],
+        },
+        {
+            "subject": "Task C",
+            "description": "Do C",
+            "worker_role": "Worker",
+            "worker_name": "worker_c",
+            "blocked_by_indices": [1],
+        },
     ],
 }
 
@@ -54,10 +70,12 @@ class SlowMockWorkerSession(MockWorkerSession):
     async def send(self, prompt: str, **kwargs: Any) -> str:
         await asyncio.sleep(self._delay)
         for h in list(self._handlers):
-            h(SessionEvent(
-                type=SessionEventType.SESSION_IDLE,
-                data=SessionEventData(turn_id="turn-1"),
-            ))
+            h(
+                SessionEvent(
+                    type=SessionEventType.SESSION_IDLE,
+                    data=SessionEventData(turn_id="turn-1"),
+                )
+            )
         return "msg-1"
 
 
@@ -161,9 +179,7 @@ class TestExecuteStopsOnCancel:
 
         all_tasks = await orch.task_board.get_tasks()
         completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
-        assert len(completed) < len(all_tasks), (
-            "Not all tasks should have completed after mid-execution cancel"
-        )
+        assert len(completed) < len(all_tasks), "Not all tasks should have completed after mid-execution cancel"
 
 
 # ---------------------------------------------------------------------------

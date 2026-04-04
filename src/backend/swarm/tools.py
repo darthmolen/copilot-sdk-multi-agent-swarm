@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import structlog
-
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.swarm.inbox_system import InboxSystem
@@ -62,6 +62,7 @@ class Tool:
 
 class TaskUpdateParams(BaseModel):
     """Parameters for the task_update tool."""
+
     task_id: str = Field(description="ID of the task to update")
     status: str = Field(description="New status: in_progress, completed, or failed")
     result: str = Field(default="", description="Task result or output text")
@@ -69,12 +70,14 @@ class TaskUpdateParams(BaseModel):
 
 class InboxSendParams(BaseModel):
     """Parameters for the inbox_send tool."""
+
     to: str = Field(description="Name of the recipient agent or 'leader'")
     message: str = Field(description="Message content to send")
 
 
 class TaskListParams(BaseModel):
     """Parameters for the task_list tool."""
+
     owner: str | None = Field(default=None, description="Filter tasks by owner name (optional)")
 
 
@@ -103,9 +106,11 @@ def create_swarm_tools(
             if "task_id" not in args or "status" not in args:
                 log.warning("task_update_missing_fields", agent=agent_name, args=args)
                 return ToolResult(
-                    text_result_for_llm=json.dumps({
-                        "error": "Missing required fields. Call with: {task_id: string, status: string, result?: string}",
-                    }),
+                    text_result_for_llm=json.dumps(
+                        {
+                            "error": "Missing required fields. Call with: {task_id: string, status: string, result?: string}",
+                        }
+                    ),
                     result_type="error",
                 )
 
@@ -130,7 +135,9 @@ def create_swarm_tools(
                 text_result_for_llm=json.dumps({"ok": True, "task_id": task_id}),
             )
         except Exception as exc:
-            log.warning("task_update_error", agent=agent_name, error=str(exc), args=getattr(invocation, "arguments", None))
+            log.warning(
+                "task_update_error", agent=agent_name, error=str(exc), args=getattr(invocation, "arguments", None)
+            )
             return ToolResult(
                 text_result_for_llm=json.dumps({"error": str(exc)}),
                 result_type="error",
@@ -144,9 +151,11 @@ def create_swarm_tools(
             if "to" not in args or "message" not in args:
                 log.warning("inbox_send_missing_fields", agent=agent_name, args=args)
                 return ToolResult(
-                    text_result_for_llm=json.dumps({
-                        "error": "Missing required fields. Call with: {to: string, message: string}",
-                    }),
+                    text_result_for_llm=json.dumps(
+                        {
+                            "error": "Missing required fields. Call with: {to: string, message: string}",
+                        }
+                    ),
                     result_type="error",
                 )
 
@@ -156,13 +165,15 @@ def create_swarm_tools(
             await inbox.send(agent_name, to, message)
 
             if event_callback is not None:
-                cb_result = event_callback({
-                    "event": "inbox.message",
-                    "sender": agent_name,
-                    "recipient": to,
-                    "content": message,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                cb_result = event_callback(
+                    {
+                        "event": "inbox.message",
+                        "sender": agent_name,
+                        "recipient": to,
+                        "content": message,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 if asyncio.iscoroutine(cb_result):
                     await cb_result
 
@@ -170,7 +181,9 @@ def create_swarm_tools(
                 text_result_for_llm=json.dumps({"ok": True, "sent_to": to}),
             )
         except Exception as exc:
-            log.warning("inbox_send_error", agent=agent_name, error=str(exc), args=getattr(invocation, "arguments", None))
+            log.warning(
+                "inbox_send_error", agent=agent_name, error=str(exc), args=getattr(invocation, "arguments", None)
+            )
             return ToolResult(
                 text_result_for_llm=json.dumps({"error": str(exc)}),
                 result_type="error",
@@ -371,15 +384,11 @@ def create_begin_swarm_tool(
             parsed = BeginSwarmArgs.model_validate(args)
             goal_holder.append(parsed.refined_goal)
             done_event.set()
-            return ToolResult(
-                text_result_for_llm="Swarm started. The team is now working on the refined goal."
-            )
+            return ToolResult(text_result_for_llm="Swarm started. The team is now working on the refined goal.")
         except (ValidationError, Exception) as exc:
             log.warning("begin_swarm_invalid_args", error=str(exc))
             return ToolResult(
-                text_result_for_llm=(
-                    "Invalid arguments. Call with {'refined_goal': 'your summary of requirements'}."
-                ),
+                text_result_for_llm=("Invalid arguments. Call with {'refined_goal': 'your summary of requirements'}."),
                 result_type="failure",
             )
 

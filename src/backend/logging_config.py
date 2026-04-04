@@ -47,18 +47,22 @@ def configure_logging(
 
     # Console handler: dev-friendly
     console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(structlog.stdlib.ProcessorFormatter(
-        processor=structlog.dev.ConsoleRenderer(colors=True),
-        foreign_pre_chain=shared_processors,
-    ))
+    console.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            processor=structlog.dev.ConsoleRenderer(colors=True),
+            foreign_pre_chain=shared_processors,
+        )
+    )
     root.addHandler(console)
 
     # File handler: JSON lines
     if json_file:
         json_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(json_file, mode="a")
-        file_handler.setFormatter(structlog.stdlib.ProcessorFormatter(
-            processor=structlog.processors.JSONRenderer(),
-            foreign_pre_chain=shared_processors,
-        ))
+        file_handler.setFormatter(
+            structlog.stdlib.ProcessorFormatter(
+                processor=structlog.processors.JSONRenderer(),
+                foreign_pre_chain=shared_processors,
+            )
+        )
         root.addHandler(file_handler)

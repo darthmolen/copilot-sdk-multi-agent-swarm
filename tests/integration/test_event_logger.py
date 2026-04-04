@@ -6,10 +6,9 @@ from uuid import uuid4
 
 import pytest
 
-from backend.db.repository import SwarmRepository
 from backend.db.event_logger import EventLogger
+from backend.db.repository import SwarmRepository
 from backend.events import EventBus
-
 
 pytestmark = pytest.mark.db
 
@@ -47,9 +46,10 @@ async def test_event_logger_skips_sdk_events(db_engine):
     logger = EventLogger(db_engine)
     await logger.log_event("sdk_event", {"agent": "test"})
 
-    repo = SwarmRepository(db_engine)
+    SwarmRepository(db_engine)
     # No swarm_id to query, but we can check the events table is empty
     from sqlalchemy import text
+
     async with db_engine.connect() as conn:
         result = await conn.execute(text("SELECT COUNT(*) FROM events"))
         assert result.scalar() == 0

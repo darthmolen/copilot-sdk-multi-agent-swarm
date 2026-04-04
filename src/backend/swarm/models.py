@@ -65,17 +65,22 @@ class InboxMessage(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class SwarmState(TypedDict, total=False):
-    """In-memory swarm state stored in swarm_store.
-
-    Uses TypedDict (not Pydantic) because it holds a live SwarmOrchestrator
-    reference that isn't serializable.
-    """
+class _SwarmStateRequired(TypedDict):
+    """Required keys for swarm state."""
 
     swarm_id: str
     goal: str
     template: str | None
     phase: str
     round_number: int
+
+
+class SwarmState(_SwarmStateRequired, total=False):
+    """In-memory swarm state stored in swarm_store.
+
+    Uses TypedDict (not Pydantic) because it holds a live SwarmOrchestrator
+    reference that isn't serializable.
+    """
+
     orchestrator: Any  # SwarmOrchestrator — can't import here (circular)
     report: str | None

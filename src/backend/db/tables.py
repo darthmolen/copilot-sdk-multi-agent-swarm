@@ -16,7 +16,9 @@ swarms = sa.Table(
     sa.Column("synthesis_session_id", sa.String(200)),
     sa.Column("report", sa.Text),
     sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()
+    ),
     sa.Column("completed_at", sa.DateTime(timezone=True)),
 )
 
@@ -33,7 +35,9 @@ tasks = sa.Table(
     sa.Column("blocked_by", JSONB, nullable=False, server_default="[]"),
     sa.Column("result", sa.Text, nullable=False, server_default=""),
     sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now(), onupdate=sa.func.now()
+    ),
     sa.PrimaryKeyConstraint("swarm_id", "id"),
 )
 

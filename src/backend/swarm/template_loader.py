@@ -78,9 +78,7 @@ class TemplateLoader:
             agents.append(self.parse_agent_file(agent_file))
 
         if not agents:
-            raise ValueError(
-                f"Template '{template_key}' has no worker agent files (worker-*.md)"
-            )
+            raise ValueError(f"Template '{template_key}' has no worker agent files (worker-*.md)")
 
         # Read synthesis.md
         synthesis_path = template_dir / "synthesis.md"
@@ -180,9 +178,7 @@ class TemplateLoader:
         metadata, body = TemplateLoader.parse_frontmatter(content)
         return AgentDefinition(
             name=metadata.get("name", path.stem),
-            display_name=metadata.get(
-                "displayName", metadata.get("name", path.stem)
-            ),
+            display_name=metadata.get("displayName", metadata.get("name", path.stem)),
             description=metadata.get("description", ""),
             tools=metadata.get("tools"),
             infer=metadata.get("infer", False),

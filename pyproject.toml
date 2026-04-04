@@ -59,10 +59,14 @@ select = [
 ]
 ignore = [
     "S101",  # assert used (fine in tests)
+    "E501",  # line-too-long — enforced by formatter, not linter
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S106"]
+"tests/**" = ["S101", "S106", "S108", "S110", "RUF006"]
+"src/hello_world/**" = ["T201"]
+"src/prefill/**" = ["T201"]
+"tests/integration/test_orchestrator_live.py" = ["T201"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

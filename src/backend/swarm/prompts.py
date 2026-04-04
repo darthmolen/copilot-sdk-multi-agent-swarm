@@ -78,7 +78,7 @@ def assemble_worker_prompt(
     display_name: str,
     role: str,
     template_prompt: str | None = None,
-    work_dir: "Path | None" = None,
+    work_dir: Path | None = None,
 ) -> str:
     """Assemble a worker's full prompt from system preamble + template + context.
 

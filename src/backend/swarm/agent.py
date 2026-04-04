@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 
 from backend.events import EventBus
-from backend.swarm.event_bridge import SessionEvent, SessionEventType
 from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.models import Task, TaskStatus
 from backend.swarm.task_board import TaskBoard
@@ -27,6 +27,7 @@ def _approve_all(*_args: Any, **_kwargs: Any) -> Any:
     """Auto-approve every permission request from the SDK."""
     try:
         from copilot.session import PermissionRequestResult  # type: ignore[import-not-found]
+
         return PermissionRequestResult(kind="approved")
     except ImportError:
         return True  # Mock fallback
@@ -135,7 +136,7 @@ class SwarmAgent:
             kwargs["disabled_skills"] = self.disabled_skills
 
         self.session = await client.create_session(**kwargs)
-        self.session_id = getattr(self.session, 'session_id', None)
+        self.session_id = getattr(self.session, "session_id", None)
         if owns_client:
             self._client = client
             self._owns_client = True
@@ -155,9 +156,7 @@ class SwarmAgent:
 
     MAX_TOOL_FAILURES = 5
 
-    async def execute_task(
-        self, task: Task, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
-    ) -> None:
+    async def execute_task(self, task: Task, *, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
         """Execute a task using event-driven session interaction."""
         await self.task_board.update_status(task.id, "in_progress")
 
@@ -179,9 +178,7 @@ class SwarmAgent:
                 done.set()
             elif "session" in et and "error" in et:
                 data = getattr(event, "data", None)
-                error_holder.append(
-                    getattr(data, "error", None) or getattr(data, "message", "unknown error")
-                )
+                error_holder.append(getattr(data, "error", None) or getattr(data, "message", "unknown error"))
                 done.set()
             # Circuit breaker: track consecutive tool failures
             if "tool.execution_complete" in et or "tool_execution_complete" in et:
@@ -195,9 +192,12 @@ class SwarmAgent:
                             f"Circuit breaker: {consecutive_tool_failures} consecutive "
                             f"tool failures. Last error: {error_msg}"
                         )
-                        log.warning("circuit_breaker_tripped",
-                                    agent=self.name, task_id=task.id,
-                                    failures=consecutive_tool_failures)
+                        log.warning(
+                            "circuit_breaker_tripped",
+                            agent=self.name,
+                            task_id=task.id,
+                            failures=consecutive_tool_failures,
+                        )
                         done.set()
                 elif success is True:
                     consecutive_tool_failures = 0
@@ -208,13 +208,9 @@ class SwarmAgent:
                 if delta:
                     delta_parts.append(str(delta))
             # Capture ALL assistant text (even mid-thought with tool_requests)
-            elif "assistant.message" in et and "delta" not in et:
-                data = getattr(event, "data", None)
-                content = getattr(data, "content", None)
-                if content and str(content).strip():
-                    text_content.append(str(content))
-            # Also capture reasoning as context
-            elif "assistant.reasoning" in et and "delta" not in et:
+            elif ("assistant.message" in et and "delta" not in et) or (
+                "assistant.reasoning" in et and "delta" not in et
+            ):
                 data = getattr(event, "data", None)
                 content = getattr(data, "content", None)
                 if content and str(content).strip():
@@ -224,11 +220,7 @@ class SwarmAgent:
 
         monitoring = False
         try:
-            task_prompt = (
-                f"Your task ID is: {task.id}\n"
-                f"Subject: {task.subject}\n\n"
-                f"{task.description}"
-            )
+            task_prompt = f"Your task ID is: {task.id}\nSubject: {task.subject}\n\n{task.description}"
             await self.session.send(task_prompt)
 
             try:
@@ -236,11 +228,20 @@ class SwarmAgent:
             except asyncio.TimeoutError:
                 await self.task_board.update_status(task.id, "timeout")
                 monitoring = True
-                t = asyncio.create_task(self._monitor_late_completion(
-                    task, done, text_content, delta_parts, error_holder, unsubscribe,
-                ))
+                t = asyncio.create_task(
+                    self._monitor_late_completion(
+                        task,
+                        done,
+                        text_content,
+                        delta_parts,
+                        error_holder,
+                        unsubscribe,
+                    )
+                )
                 self._monitor_tasks.append(t)
-                t.add_done_callback(lambda task_ref: self._monitor_tasks.remove(task_ref) if task_ref in self._monitor_tasks else None)
+                t.add_done_callback(
+                    lambda task_ref: self._monitor_tasks.remove(task_ref) if task_ref in self._monitor_tasks else None
+                )
                 return
 
             if error_holder:
@@ -253,11 +254,7 @@ class SwarmAgent:
             if current and current.status == TaskStatus.IN_PROGRESS:
                 # Agent didn't call task_update — use captured text as result
                 # Prefer full messages; fall back to accumulated deltas
-                result = (
-                    "\n".join(text_content) if text_content
-                    else "".join(delta_parts) if delta_parts
-                    else ""
-                )
+                result = "\n".join(text_content) if text_content else "".join(delta_parts) if delta_parts else ""
                 await self.task_board.update_status(task.id, "completed", result)
         finally:
             if not monitoring:
@@ -285,19 +282,17 @@ class SwarmAgent:
                     updated = await self.task_board.update_status(task.id, "failed", error_holder[0])
                     log.info("task_late_failed", task_id=task.id, agent=self.name)
                 else:
-                    result = (
-                        "\n".join(text_content) if text_content
-                        else "".join(delta_parts) if delta_parts
-                        else ""
-                    )
+                    result = "\n".join(text_content) if text_content else "".join(delta_parts) if delta_parts else ""
                     updated = await self.task_board.update_status(task.id, "completed", result)
-                    log.info("task_late_completed", task_id=task.id, agent=self.name,
-                             result_len=len(result))
+                    log.info("task_late_completed", task_id=task.id, agent=self.name, result_len=len(result))
                 if self.swarm_id:
-                    await self.event_bus.emit("task.updated", {
-                        "task": updated.to_dict(),
-                        "swarm_id": self.swarm_id,
-                    })
+                    await self.event_bus.emit(
+                        "task.updated",
+                        {
+                            "task": updated.to_dict(),
+                            "swarm_id": self.swarm_id,
+                        },
+                    )
         except asyncio.CancelledError:
             log.info("monitor_cancelled", task_id=task.id, agent=self.name)
         except asyncio.TimeoutError:

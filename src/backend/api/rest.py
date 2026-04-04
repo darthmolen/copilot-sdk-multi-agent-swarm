@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
+import shutil
 import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
 
-import shutil
-
 import structlog
 import yaml
-
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from backend.api.schemas import (
     AgentSummary,
@@ -29,8 +26,8 @@ from backend.api.schemas import (
     UpdateTemplateFileRequest,
 )
 from backend.swarm.models import SwarmState
-from backend.swarm.template_validator import validate_template_file
 from backend.swarm.template_loader import TemplateLoader
+from backend.swarm.template_validator import validate_template_file
 from backend.swarm.templates import format_goal
 from backend.swarm.templates import list_templates as _list_templates
 
@@ -53,6 +50,7 @@ _template_loader: TemplateLoader | None = None
 def _get_work_dir() -> str:
     """Lazy import to avoid circular dependency with main.py."""
     from backend.main import SWARM_WORK_DIR
+
     return SWARM_WORK_DIR
 
 
@@ -89,8 +87,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
     """Background task: create orchestrator and run the swarm."""
     from backend.swarm.orchestrator import SwarmOrchestrator
 
-    log.info("swarm_task_started", swarm_id=swarm_id, template=template_key,
-             goal_len=len(goal))
+    log.info("swarm_task_started", swarm_id=swarm_id, template=template_key, goal_len=len(goal))
 
     if _event_bus is None:
         log.error("eventbus_not_configured", swarm_id=swarm_id)
@@ -103,47 +100,62 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         )
         log.error("swarm_no_client", swarm_id=swarm_id, error=error_msg)
         swarm_store[swarm_id]["phase"] = "failed"
-        await _event_bus.emit("swarm.error", {
-            "message": error_msg, "swarm_id": swarm_id,
-        })
-        await _event_bus.emit("swarm.phase_changed", {
-            "phase": "failed", "swarm_id": swarm_id,
-        })
+        await _event_bus.emit(
+            "swarm.error",
+            {
+                "message": error_msg,
+                "swarm_id": swarm_id,
+            },
+        )
+        await _event_bus.emit(
+            "swarm.phase_changed",
+            {
+                "phase": "failed",
+                "swarm_id": swarm_id,
+            },
+        )
         return
 
     loaded_template = None
     if template_key and _template_loader:
         try:
             loaded_template = _template_loader.load(template_key)
-            log.info("swarm_template_loaded", swarm_id=swarm_id,
-                     template=template_key,
-                     workers=len(loaded_template.agents),
-                     skills=len(loaded_template.all_skill_names),
-                     has_mcp=loaded_template.mcp_servers is not None)
+            log.info(
+                "swarm_template_loaded",
+                swarm_id=swarm_id,
+                template=template_key,
+                workers=len(loaded_template.agents),
+                skills=len(loaded_template.all_skill_names),
+                has_mcp=loaded_template.mcp_servers is not None,
+            )
         except (FileNotFoundError, ValueError) as e:
-            log.warning("template_load_failed", swarm_id=swarm_id,
-                        template=template_key, error=str(e))
+            log.warning("template_load_failed", swarm_id=swarm_id, template=template_key, error=str(e))
 
     system_preamble = _template_loader.system_preamble if _template_loader else ""
     system_tools = _template_loader.system_tools if _template_loader else []
-    from backend.main import SWARM_TASK_TIMEOUT, SWARM_MAX_ROUNDS, SWARM_MODEL, SWARM_WORK_DIR
+    from backend.main import SWARM_MAX_ROUNDS, SWARM_MODEL, SWARM_TASK_TIMEOUT, SWARM_WORK_DIR
 
     work_base = Path(SWARM_WORK_DIR)
     config = {"max_rounds": SWARM_MAX_ROUNDS, "timeout": SWARM_TASK_TIMEOUT}
-    log.info("swarm_config", swarm_id=swarm_id, model=SWARM_MODEL,
-             max_rounds=SWARM_MAX_ROUNDS, timeout=SWARM_TASK_TIMEOUT)
+    log.info(
+        "swarm_config", swarm_id=swarm_id, model=SWARM_MODEL, max_rounds=SWARM_MAX_ROUNDS, timeout=SWARM_TASK_TIMEOUT
+    )
 
     # Create SwarmService with optional repo for persistence
     from backend.services.swarm_service import SwarmService
+
     service = SwarmService(repo=_repository) if _repository else SwarmService()
     await service.create_swarm(swarm_id, goal=goal, template_key=template_key)
 
     orch = SwarmOrchestrator(
-        client=_copilot_client, event_bus=_event_bus,
+        client=_copilot_client,
+        event_bus=_event_bus,
         config=config,
-        template=loaded_template, system_preamble=system_preamble,
+        template=loaded_template,
+        system_preamble=system_preamble,
         system_tools=system_tools,
-        swarm_id=swarm_id, work_base=work_base,
+        swarm_id=swarm_id,
+        work_base=work_base,
         model=SWARM_MODEL,
         client_factory=_client_factory,
         service=service,
@@ -158,34 +170,31 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
             log.info("swarm_qa_starting", swarm_id=swarm_id)
             swarm_store[swarm_id]["phase"] = "qa"
             effective_goal = await orch.start_qa(goal)
-            log.info("swarm_qa_complete", swarm_id=swarm_id,
-                     refined_goal_len=len(effective_goal))
+            log.info("swarm_qa_complete", swarm_id=swarm_id, refined_goal_len=len(effective_goal))
 
         swarm_store[swarm_id]["phase"] = "planning"
         log.info("swarm_run_starting", swarm_id=swarm_id)
         report = await orch.run(effective_goal)
         swarm_store[swarm_id]["phase"] = "complete"
         swarm_store[swarm_id]["report"] = report
-        log.info("swarm_run_complete", swarm_id=swarm_id,
-                 report_len=len(report) if report else 0)
+        log.info("swarm_run_complete", swarm_id=swarm_id, report_len=len(report) if report else 0)
     except Exception as e:
-        log.error("swarm_failed", swarm_id=swarm_id, error=str(e),
-                  exc_info=True)
+        log.error("swarm_failed", swarm_id=swarm_id, error=str(e), exc_info=True)
         swarm_store[swarm_id]["phase"] = "failed"
-        await _event_bus.emit("swarm.phase_changed", {
-            "phase": "failed", "swarm_id": swarm_id,
-        })
+        await _event_bus.emit(
+            "swarm.phase_changed",
+            {
+                "phase": "failed",
+                "swarm_id": swarm_id,
+            },
+        )
 
 
 @router.post("/api/swarm/start")
 async def start_swarm(request: SwarmStartRequest, background_tasks: BackgroundTasks) -> SwarmStartResponse:
     """Start a new swarm with the given goal."""
     swarm_id = str(uuid.uuid4())
-    goal = (
-        format_goal(request.template, request.goal)
-        if request.template
-        else request.goal
-    )
+    goal = format_goal(request.template, request.goal) if request.template else request.goal
     _create_swarm_state(swarm_id, goal, request.template)
 
     if _copilot_client is not None:
@@ -212,8 +221,11 @@ async def get_swarm_status(swarm_id: str) -> SwarmStatusResponse:
         live_agents = await orch.service.registry.get_all()
         agents = [
             AgentSummary(
-                name=a.name, role=a.role, display_name=a.display_name,
-                status=a.status.value, tasks_completed=a.tasks_completed,
+                name=a.name,
+                role=a.role,
+                display_name=a.display_name,
+                status=a.status.value,
+                tasks_completed=a.tasks_completed,
             )
             for a in live_agents
         ]
@@ -243,7 +255,9 @@ async def cancel_swarm(swarm_id: str) -> dict:
 
 @router.post("/api/swarm/{swarm_id}/chat")
 async def chat_with_swarm(
-    swarm_id: str, request: ChatRequest, background_tasks: BackgroundTasks,
+    swarm_id: str,
+    request: ChatRequest,
+    background_tasks: BackgroundTasks,
 ) -> dict:
     """Send a chat message to a swarm's synthesis agent.
 
@@ -275,11 +289,13 @@ async def chat_with_swarm(
     if not orch or not getattr(orch, "synthesis_session_id", None):
         if _copilot_client is None or _event_bus is None:
             raise HTTPException(status_code=400, detail="No synthesis session available")
-        log.info("chat_creating_on_the_fly", swarm_id=swarm_id,
-                 session_id=f"synth-{swarm_id}")
+        log.info("chat_creating_on_the_fly", swarm_id=swarm_id, session_id=f"synth-{swarm_id}")
         from backend.swarm.orchestrator import SwarmOrchestrator
+
         orch = SwarmOrchestrator(
-            client=_copilot_client, event_bus=_event_bus, swarm_id=swarm_id,
+            client=_copilot_client,
+            event_bus=_event_bus,
+            swarm_id=swarm_id,
         )
         orch.synthesis_session_id = f"synth-{swarm_id}"
         # Cache it so subsequent messages reuse the same orchestrator
@@ -301,11 +317,13 @@ async def list_swarm_files(swarm_id: str) -> dict:
     files = []
     for f in sorted(work_dir.rglob("*")):
         if f.is_file():
-            files.append({
-                "name": f.name,
-                "path": str(f.relative_to(work_dir)),
-                "size": f.stat().st_size,
-            })
+            files.append(
+                {
+                    "name": f.name,
+                    "path": str(f.relative_to(work_dir)),
+                    "size": f.stat().st_size,
+                }
+            )
     return {"files": files}
 
 
@@ -402,10 +420,12 @@ async def get_template_details(key: str) -> dict:
     files = []
     for f in sorted(templates_dir.iterdir()):
         if f.is_file():
-            files.append({
-                "filename": f.name,
-                "content": f.read_text(encoding="utf-8"),
-            })
+            files.append(
+                {
+                    "filename": f.name,
+                    "content": f.read_text(encoding="utf-8"),
+                }
+            )
 
     # Read metadata from _template.yaml
     meta_file = templates_dir / "_template.yaml"
@@ -432,9 +452,11 @@ async def get_template_details(key: str) -> dict:
 
 @router.put("/api/templates/{key}/files/{filename}")
 async def update_template_file(
-    key: str, filename: str, request: UpdateTemplateFileRequest,
+    key: str,
+    filename: str,
+    request: UpdateTemplateFileRequest,
 ) -> dict:
-    """Update a template file. Validates before saving. Returns 422 if invalid."""
+    """Update a template file. Validates before saving. Raises 422 if invalid."""
     templates_dir = _safe_template_path(key)
     if not templates_dir.is_dir():
         raise HTTPException(status_code=404, detail="Template not found")
@@ -443,13 +465,9 @@ async def update_template_file(
     result = validate_template_file(filename, content)
 
     if not result.valid:
-        return JSONResponse(
+        raise HTTPException(
             status_code=422,
-            content={
-                "errors": [
-                    {"message": e.message, "line": e.line} for e in result.errors
-                ],
-            },
+            detail={"errors": [{"message": e.message, "line": e.line} for e in result.errors]},
         )
 
     file_path = _safe_template_file_path(key, filename)
@@ -479,8 +497,7 @@ async def create_template(request: CreateTemplateRequest) -> dict:
 
     # Scaffold files
     (templates_dir / "_template.yaml").write_text(
-        f"---\nkey: {key}\nname: {name}\ndescription: {description}\n"
-        f'goal_template: "{{user_input}}"\n---\n',
+        f'---\nkey: {key}\nname: {name}\ndescription: {description}\ngoal_template: "{{user_input}}"\n---\n',
         encoding="utf-8",
     )
     (templates_dir / "leader.md").write_text(
@@ -529,8 +546,8 @@ async def deploy_template_zip(file: UploadFile) -> dict:
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(contents))
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="Invalid zip file")
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Invalid zip file") from exc
 
     # Uncompressed size + file count limits
     max_uncompressed = SWARM_MAX_TEMPLATE_ZIP_SIZE * 10  # 30MB default
@@ -617,7 +634,7 @@ async def deploy_template_zip(file: UploadFile) -> dict:
         if name.endswith("/"):
             continue  # skip directories
         # Strip the root directory prefix
-        relative = name[len(zip_root) + 1:]
+        relative = name[len(zip_root) + 1 :]
         if not relative:
             continue
         # Final safety: ensure relative path stays within target
@@ -643,15 +660,15 @@ async def deploy_template_zip(file: UploadFile) -> dict:
 async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
     """Return event log for replay. Requires DATABASE_URL configured."""
     if _repository is None:
-        return JSONResponse({"error": "Persistence not configured"}, status_code=404)
+        raise HTTPException(status_code=404, detail="Persistence not configured")
     from datetime import datetime
 
     since_dt = None
     if since:
         try:
             since_dt = datetime.fromisoformat(since)
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=400, detail="Invalid 'since' datetime format")
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid 'since' datetime format") from exc
     from fastapi.encoders import jsonable_encoder
 
     events = await _repository.get_events(swarm_id, since=since_dt)
@@ -662,7 +679,7 @@ async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
 async def list_swarms():
     """Return all swarms from DB. Requires DATABASE_URL configured."""
     if _repository is None:
-        return JSONResponse({"error": "Persistence not configured"}, status_code=404)
+        raise HTTPException(status_code=404, detail="Persistence not configured")
     from fastapi.encoders import jsonable_encoder
 
     swarms = await _repository.list_swarms()

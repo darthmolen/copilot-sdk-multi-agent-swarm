@@ -126,9 +126,10 @@ def bridge_sdk_event(agent_name: str, event: SessionEvent) -> dict[str, Any] | N
         return {"type": "agent.error", "data": {"name": agent_name, "error": d.error}}
 
     if t is SessionEventType.ASSISTANT_USAGE:
-        return {"type": "agent.usage", "data": {"agent_name": agent_name, "usage": {
-            k: v for k, v in vars(d).items() if v is not None
-        }}}
+        return {
+            "type": "agent.usage",
+            "data": {"agent_name": agent_name, "usage": {k: v for k, v in vars(d).items() if v is not None}},
+        }
 
     if t is SessionEventType.SESSION_ERROR:
         return {"type": "agent.error", "data": {"name": agent_name, "error": d.error}}
