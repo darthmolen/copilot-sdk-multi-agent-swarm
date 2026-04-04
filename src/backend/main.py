@@ -283,11 +283,30 @@ class _MCPAuthMiddleware:
         if not _auth_required():
             return await self.app(scope, receive, send)
 
+        # Guard: unconfigured key in non-dev mode is a server error
+        if not SWARM_API_KEY:
+            async def _send_500(send: Any) -> None:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 500,
+                        "headers": [[b"content-type", b"application/json"]],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b'{"error":"SWARM_API_KEY not configured"}',
+                    }
+                )
+
+            await _send_500(send)
+            return
+
         # Extract X-API-Key from ASGI headers
         headers = dict(scope.get("headers", []))
         key = headers.get(b"x-api-key", b"").decode()
         if key != SWARM_API_KEY:
-            # Return 401
             async def _send_401(send: Any) -> None:
                 await send(
                     {

@@ -72,7 +72,7 @@ async def get_active_swarms() -> list[dict[str, str | None]]:
             "goal": state["goal"],
             "template": state["template"],
         }
-        for state in deps.swarm_store.values()
+        for state in list(deps.swarm_store.values())
     ]
 
 
@@ -226,7 +226,12 @@ async def read_artifact(swarm_id: str, path: str) -> dict:
     if not target.is_file():
         raise ToolError(f"File not found: {path}")
 
-    return {"path": path, "content": target.read_text()}
+    try:
+        content = target.read_text()
+    except UnicodeDecodeError as exc:
+        raise ToolError(f"File '{path}' is not a text file and cannot be read as text") from exc
+
+    return {"path": path, "content": content}
 
 
 # ---------------------------------------------------------------------------
