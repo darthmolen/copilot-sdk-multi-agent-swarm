@@ -26,6 +26,6 @@ goal_template: |
 
   ## Important Notes
 
-  - SWARM_MAX_ROUNDS must be at least 5 for this template (4 phases + buffer)
+  - SWARM_MAX_ROUNDS must be at least 8 for this template (4 phases + buffer)
   - Every worker should use microsoft_docs_search and microsoft_docs_fetch for current Azure details
   - IaC code must be written to the work directory as .bicep or .tf files

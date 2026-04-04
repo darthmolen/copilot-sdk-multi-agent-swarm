@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from collections.abc import AsyncGenerator
@@ -50,9 +51,9 @@ except ValueError:
 
 _raw_max_rounds = os.environ.get("SWARM_MAX_ROUNDS", "")
 try:
-    SWARM_MAX_ROUNDS: int = int(_raw_max_rounds) if _raw_max_rounds else 5
+    SWARM_MAX_ROUNDS: int = int(_raw_max_rounds) if _raw_max_rounds else 8
 except ValueError:
-    SWARM_MAX_ROUNDS = 5
+    SWARM_MAX_ROUNDS = 8
 
 SWARM_MODEL: str = os.environ.get("SWARM_MODEL", "claude-sonnet-4.6")
 CORS_ORIGINS: list[str] = [
@@ -101,6 +102,9 @@ async def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifecycle (startup/shutdown)."""
+
+    # Silence sse_starlette ping debug spam
+    logging.getLogger("sse_starlette.sse").setLevel(logging.INFO)
 
     # --- Copilot client (optional) ----------------------------------------
     copilot_client = None
@@ -289,6 +293,7 @@ class _MCPAuthMiddleware:
 
         # Guard: unconfigured key in non-dev mode is a server error
         if not SWARM_API_KEY:
+
             async def _send_500(send: Any) -> None:
                 await send(
                     {
@@ -311,6 +316,7 @@ class _MCPAuthMiddleware:
         headers = dict(scope.get("headers", []))
         key = headers.get(b"x-api-key", b"").decode()
         if key != SWARM_API_KEY:
+
             async def _send_401(send: Any) -> None:
                 await send(
                     {
