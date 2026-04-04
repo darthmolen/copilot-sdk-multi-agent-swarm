@@ -42,3 +42,48 @@ In-process FastMCP server mounted on the FastAPI app at `/mcp`. Agent sessions c
 - **MCP server lifecycle**: Mounted on FastAPI app, starts/stops with lifespan. One server, `swarm_id` required per call.
 - **Auth**: API key in headers (transport layer). Agent never sees credentials.
 - **Transport**: Streamable HTTP (not stdio). In-process, same event loop, direct access to live state.
+
+## Code Review
+
+### 🔴 Critical: MCP auth middleware allows access when `SWARM_API_KEY` is empty
+
+**File:** `src/backend/main.py` — `_MCPAuthMiddleware`
+
+The middleware compares `key != SWARM_API_KEY` without first checking if `SWARM_API_KEY` itself is empty. In a misconfigured production environment (`ENVIRONMENT != "development"` but `SWARM_API_KEY=""`), a request with no key passes the check because `"" == ""`. The REST API's `verify_api_key()` correctly handles this case by returning HTTP 500 when the key is unconfigured.
+
+**Fix:** Add the same empty-key guard used in `verify_api_key()` before the comparison:
+```python
+if not SWARM_API_KEY:
+    return PlainTextResponse("SWARM_API_KEY not configured", status_code=500)
+if key != SWARM_API_KEY:
+    return PlainTextResponse("Unauthorized", status_code=401)
+```
+
+---
+
+### 🟡 Medium: `read_artifact()` crashes on binary files with `UnicodeDecodeError`
+
+**File:** `src/backend/mcp/server.py` — `read_artifact()`
+
+`Path.read_text()` assumes UTF-8. If an agent writes binary files (images, compiled artifacts, etc.), this tool raises an unhandled `UnicodeDecodeError` rather than a clean `ToolError`.
+
+**Fix:** Wrap the read in a try/except:
+```python
+try:
+    return target.read_text()
+except UnicodeDecodeError:
+    raise ToolError(f"File '{filename}' is not a text file and cannot be read as text")
+```
+
+---
+
+### 🟡 Medium: `get_active_swarms()` is unsafe under concurrent swarm creation
+
+**File:** `src/backend/mcp/server.py` — `get_active_swarms()`
+
+Iterating over `deps.swarm_store.values()` is not safe if the REST API adds or removes a swarm concurrently — Python raises `RuntimeError: dictionary changed size during iteration`.
+
+**Fix:** Snapshot the values before iterating:
+```python
+for state in list(deps.swarm_store.values()):
+```
