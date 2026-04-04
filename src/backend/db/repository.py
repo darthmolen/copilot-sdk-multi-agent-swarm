@@ -76,6 +76,15 @@ class SwarmRepository:
             rows = (await conn.execute(swarms.select().order_by(swarms.c.created_at.desc()))).mappings().all()
         return [dict(r) for r in rows]
 
+    async def list_swarms_by_phase(self, *phases: str) -> list[dict[str, Any]]:
+        """Find swarms in specific phases (for orphan detection)."""
+        if not phases:
+            return []
+        stmt = swarms.select().where(swarms.c.phase.in_(phases)).order_by(swarms.c.created_at.desc())
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
+
     # ------------------------------------------------------------------
     # Tasks
     # ------------------------------------------------------------------
@@ -254,6 +263,26 @@ class SwarmRepository:
                     data_json=data,
                 )
             )
+
+    async def get_task_events(
+        self,
+        swarm_id: UUID,
+        task_id: str,
+    ) -> list[dict[str, Any]]:
+        """Get events related to a specific task."""
+        stmt = (
+            events.select()
+            .where(
+                sa.and_(
+                    events.c.swarm_id == swarm_id,
+                    events.c.data_json["task_id"].as_string() == task_id,
+                )
+            )
+            .order_by(events.c.created_at)
+        )
+        async with self._engine.connect() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
+        return [dict(r) for r in rows]
 
     async def get_events(
         self,

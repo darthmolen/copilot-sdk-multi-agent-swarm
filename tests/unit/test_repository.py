@@ -182,3 +182,115 @@ class TestSwarmTableSchema:
         col = swarms.c.max_rounds
         assert col.server_default is not None
         assert col.server_default.arg == "8"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# TestListSwarmsByPhase
+# ---------------------------------------------------------------------------
+
+
+class TestListSwarmsByPhase:
+    async def test_filters_by_single_phase(self) -> None:
+        """list_swarms_by_phase('executing') returns only executing swarms."""
+        engine, _mock_conn, read_conn = _make_engine()
+
+        # Simulate rows returned from DB
+        fake_rows = [
+            {"id": uuid4(), "goal": "A", "phase": "executing"},
+        ]
+        read_conn.execute = AsyncMock(
+            return_value=MagicMock(mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=fake_rows))))
+        )
+
+        repo = SwarmRepository(engine)
+        result = await repo.list_swarms_by_phase("executing")
+
+        assert len(result) == 1
+        assert result[0]["phase"] == "executing"
+
+        # Verify the SQL statement contains WHERE ... IN clause
+        stmt = read_conn.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        sql_text = str(compiled)
+        assert "IN" in sql_text.upper()
+        assert "phase" in sql_text
+
+    async def test_filters_by_multiple_phases(self) -> None:
+        """list_swarms_by_phase('executing', 'planning') returns both."""
+        engine, _mock_conn, read_conn = _make_engine()
+
+        fake_rows = [
+            {"id": uuid4(), "goal": "A", "phase": "executing"},
+            {"id": uuid4(), "goal": "B", "phase": "planning"},
+        ]
+        read_conn.execute = AsyncMock(
+            return_value=MagicMock(mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=fake_rows))))
+        )
+
+        repo = SwarmRepository(engine)
+        result = await repo.list_swarms_by_phase("executing", "planning")
+
+        assert len(result) == 2
+
+        # Verify the SQL statement includes both phases in IN clause
+        stmt = read_conn.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        sql_text = str(compiled)
+        assert "IN" in sql_text.upper()
+
+    async def test_returns_empty_for_no_matches(self) -> None:
+        """Returns empty list when no swarms match."""
+        engine, _mock_conn, read_conn = _make_engine()
+
+        read_conn.execute = AsyncMock(
+            return_value=MagicMock(mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+        )
+
+        repo = SwarmRepository(engine)
+        result = await repo.list_swarms_by_phase("nonexistent_phase")
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# TestGetTaskEvents
+# ---------------------------------------------------------------------------
+
+
+class TestGetTaskEvents:
+    async def test_returns_events_for_task(self) -> None:
+        """get_task_events returns events matching task_id in data_json."""
+        engine, _mock_conn, read_conn = _make_engine()
+        repo = SwarmRepository(engine)
+        swarm_id = uuid4()
+
+        # Simulate DB returning two rows
+        fake_rows = [
+            {"id": 1, "swarm_id": swarm_id, "event_type": "task.updated", "data_json": {"task_id": "t1"}, "created_at": datetime.now(timezone.utc)},
+            {"id": 2, "swarm_id": swarm_id, "event_type": "agent.tool_call", "data_json": {"task_id": "t1"}, "created_at": datetime.now(timezone.utc)},
+        ]
+        read_conn.execute.return_value = MagicMock(
+            mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=fake_rows)))
+        )
+
+        result = await repo.get_task_events(swarm_id, "t1")
+
+        assert len(result) == 2
+        assert result[0]["event_type"] == "task.updated"
+        assert result[1]["event_type"] == "agent.tool_call"
+        read_conn.execute.assert_awaited_once()
+
+    async def test_returns_empty_for_unknown_task(self) -> None:
+        """get_task_events returns empty list for non-existent task."""
+        engine, _mock_conn, read_conn = _make_engine()
+        repo = SwarmRepository(engine)
+        swarm_id = uuid4()
+
+        read_conn.execute.return_value = MagicMock(
+            mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+
+        result = await repo.get_task_events(swarm_id, "nonexistent-task")
+
+        assert result == []
+        read_conn.execute.assert_awaited_once()

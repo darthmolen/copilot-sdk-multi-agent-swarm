@@ -226,6 +226,11 @@ class SwarmService:
         for a in state["agents"]:
             await self.registry.register(a["name"], a["role"], a.get("display_name", ""))
 
+        # Restore phase and round from DB
+        swarm_data = state["swarm"]
+        self._phase = swarm_data.get("phase", "suspended")
+        self._current_round = swarm_data.get("current_round", 0)
+
         # Hydrate inbox (messages are historical — add back for context)
         for agent in state["agents"]:
             self.inbox.register_agent(agent["name"])

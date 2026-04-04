@@ -576,6 +576,85 @@ def test_chat_endpoint_logs_request_received(caplog: pytest.fixture) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task logs endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestTaskLogsEndpoint:
+    def test_get_task_logs_returns_events(self) -> None:
+        """GET /task/{id}/logs returns structured events."""
+        from unittest.mock import AsyncMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+        swarm_id = swarm_resp.json()["swarm_id"]
+
+        fake_events = [
+            {"id": 1, "event_type": "task.updated", "data_json": {"task_id": "t1"}},
+            {"id": 2, "event_type": "agent.tool_call", "data_json": {"task_id": "t1"}},
+        ]
+        mock_repo = AsyncMock()
+        mock_repo.get_task_events = AsyncMock(return_value=fake_events)
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            response = client.get(f"/api/swarm/{swarm_id}/task/t1/logs")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["swarm_id"] == swarm_id
+            assert body["task_id"] == "t1"
+            assert len(body["events"]) == 2
+            assert body["events"][0]["event_type"] == "task.updated"
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_task_logs_404_no_events(self) -> None:
+        """GET /task/{id}/logs returns 404 when no events found."""
+        from unittest.mock import AsyncMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+        swarm_id = swarm_resp.json()["swarm_id"]
+
+        mock_repo = AsyncMock()
+        mock_repo.get_task_events = AsyncMock(return_value=[])
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            response = client.get(f"/api/swarm/{swarm_id}/task/nonexistent/logs")
+            assert response.status_code == 404
+            assert "No logs found" in response.json()["detail"]
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_task_logs_500_no_db(self) -> None:
+        """GET /task/{id}/logs returns 500 without database."""
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = None
+        try:
+            response = client.get("/api/swarm/some-id/task/t1/logs")
+            assert response.status_code == 500
+            assert "Database not configured" in response.json()["detail"]
+        finally:
+            rest_mod._repository = old_repo
+
+
+# ---------------------------------------------------------------------------
 # File endpoint tests
 # ---------------------------------------------------------------------------
 
@@ -1350,3 +1429,228 @@ class TestSkipToSynthesisEndpoint:
         resp = client.post(f"/api/swarm/{swarm_id}/skip-to-synthesis")
         assert resp.status_code == 404
         assert "not paused" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Resume endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestResumeEndpoint:
+    """Tests for POST /api/swarm/{swarm_id}/resume."""
+
+    def test_resume_404_unknown_swarm(self) -> None:
+        """POST /resume returns 404 for unknown swarm_id."""
+        _clear_swarm_store()
+
+        from unittest.mock import AsyncMock, MagicMock
+
+        import backend.api.rest as rest_mod
+
+        old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
+        mock_repo = MagicMock()
+        mock_repo.get_swarm = AsyncMock(return_value=None)
+        rest_mod._repository = mock_repo
+        rest_mod._copilot_client = MagicMock()
+
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/api/swarm/00000000-0000-0000-0000-000000000001/resume",
+            )
+            assert resp.status_code == 404
+            assert "not found" in resp.json()["detail"].lower()
+        finally:
+            rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
+
+    def test_resume_409_not_suspended(self) -> None:
+        """POST /resume returns 409 if swarm is not suspended."""
+        _clear_swarm_store()
+
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        import backend.api.rest as rest_mod
+
+        old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
+        mock_repo = MagicMock()
+        swarm_id = "00000000-0000-0000-0000-000000000002"
+        mock_repo.get_swarm = AsyncMock(
+            return_value={
+                "id": UUID(swarm_id),
+                "goal": "test goal",
+                "phase": "executing",
+                "template_key": None,
+            }
+        )
+        rest_mod._repository = mock_repo
+        rest_mod._copilot_client = MagicMock()
+
+        try:
+            client = TestClient(app)
+            resp = client.post(f"/api/swarm/{swarm_id}/resume")
+            assert resp.status_code == 409
+            assert "executing" in resp.json()["detail"]
+        finally:
+            rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
+
+    def test_resume_500_no_database(self) -> None:
+        """POST /resume returns 500 when no database configured."""
+        _clear_swarm_store()
+
+        import backend.api.rest as rest_mod
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = None
+
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/api/swarm/00000000-0000-0000-0000-000000000001/resume",
+            )
+            assert resp.status_code == 500
+            assert "database" in resp.json()["detail"].lower()
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_resume_creates_orchestrator_and_populates_store(self) -> None:
+        """POST /resume builds orchestrator and starts background task."""
+        _clear_swarm_store()
+
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from uuid import UUID
+
+        import backend.api.rest as rest_mod
+
+        swarm_id = "00000000-0000-0000-0000-000000000003"
+
+        old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
+        old_bus = rest_mod._event_bus
+        old_factory = rest_mod._client_factory
+
+        mock_repo = MagicMock()
+        mock_repo.get_swarm = AsyncMock(
+            return_value={
+                "id": UUID(swarm_id),
+                "goal": "build something",
+                "qa_refined_goal": "build something refined",
+                "phase": "suspended",
+                "template_key": None,
+                "max_rounds": 5,
+            }
+        )
+        rest_mod._repository = mock_repo
+        rest_mod._copilot_client = MagicMock()
+        rest_mod._event_bus = MagicMock()
+        rest_mod._client_factory = None
+
+        try:
+            with (
+                patch("backend.swarm.orchestrator.SwarmOrchestrator") as mock_orch_cls,
+                patch("backend.services.swarm_service.SwarmService") as mock_svc_cls,
+                patch("backend.api.rest.asyncio.create_task") as mock_create_task,
+            ):
+                mock_orch = MagicMock()
+                mock_orch.resume = AsyncMock()
+                mock_orch_cls.return_value = mock_orch
+
+                mock_svc = MagicMock()
+                mock_svc_cls.return_value = mock_svc
+
+                client = TestClient(app)
+                resp = client.post(f"/api/swarm/{swarm_id}/resume")
+
+                assert resp.status_code == 200
+                body = resp.json()
+                assert body["ok"] is True
+                assert body["swarm_id"] == swarm_id
+                assert body["phase"] == "resuming"
+
+                # Verify swarm_store was populated
+                assert swarm_id in swarm_store
+                assert swarm_store[swarm_id]["phase"] == "resuming"
+                assert swarm_store[swarm_id]["orchestrator"] is mock_orch
+
+                # Verify orchestrator.resume was dispatched
+                mock_create_task.assert_called_once()
+        finally:
+            rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
+            rest_mod._event_bus = old_bus
+            rest_mod._client_factory = old_factory
+
+
+# ---------------------------------------------------------------------------
+# Orphan recovery tests
+# ---------------------------------------------------------------------------
+
+
+class TestOrphanRecovery:
+    """Tests for recover_orphaned_swarms()."""
+
+    @pytest.mark.asyncio
+    async def test_orphaned_executing_swarms_suspended(self) -> None:
+        """Swarms stuck in 'executing' are suspended on startup."""
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        from backend.main import recover_orphaned_swarms
+
+        mock_repo = MagicMock()
+        orphan_id = UUID("00000000-0000-0000-0000-000000000010")
+        mock_repo.list_swarms_by_phase = AsyncMock(
+            return_value=[
+                {"id": orphan_id, "phase": "executing"},
+            ]
+        )
+        mock_repo.suspend_swarm = AsyncMock()
+
+        await recover_orphaned_swarms(mock_repo)
+
+        mock_repo.list_swarms_by_phase.assert_called_once_with(
+            "executing",
+            "planning",
+            "spawning",
+        )
+        mock_repo.suspend_swarm.assert_called_once_with(orphan_id)
+
+    @pytest.mark.asyncio
+    async def test_multiple_orphans_all_suspended(self) -> None:
+        """All orphaned swarms across phases are suspended."""
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        from backend.main import recover_orphaned_swarms
+
+        mock_repo = MagicMock()
+        orphans = [
+            {"id": UUID("00000000-0000-0000-0000-000000000011"), "phase": "executing"},
+            {"id": UUID("00000000-0000-0000-0000-000000000012"), "phase": "planning"},
+            {"id": UUID("00000000-0000-0000-0000-000000000013"), "phase": "spawning"},
+        ]
+        mock_repo.list_swarms_by_phase = AsyncMock(return_value=orphans)
+        mock_repo.suspend_swarm = AsyncMock()
+
+        await recover_orphaned_swarms(mock_repo)
+
+        assert mock_repo.suspend_swarm.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_no_orphans_no_suspensions(self) -> None:
+        """When no orphans exist, suspend_swarm is never called."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from backend.main import recover_orphaned_swarms
+
+        mock_repo = MagicMock()
+        mock_repo.list_swarms_by_phase = AsyncMock(return_value=[])
+        mock_repo.suspend_swarm = AsyncMock()
+
+        await recover_orphaned_swarms(mock_repo)
+
+        mock_repo.suspend_swarm.assert_not_called()
