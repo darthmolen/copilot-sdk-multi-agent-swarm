@@ -124,6 +124,8 @@ class SwarmOrchestrator:
         self.synthesis_session_id: str | None = None
         self._chat_lock = asyncio.Lock()
         self._cancelled = False
+        self._continue_event: asyncio.Event | None = None
+        self._continue_action: str = ""
         self.qa_session: Any = None
         self.qa_complete = asyncio.Event()
         self.qa_refined_goal: str | None = None
@@ -520,6 +522,41 @@ class SwarmOrchestrator:
 
             log.info("swarm_phase_executing", swarm_id=self.swarm_id)
             await self._execute()
+
+            # Check for unfinished tasks — pause for user decision
+            all_tasks_post = await self.task_board.get_tasks()
+            unfinished = [t for t in all_tasks_post if t.status not in (TaskStatus.COMPLETED,)]
+            if unfinished:
+                self._continue_event = asyncio.Event()
+                self._continue_action = ""
+                await self._emit(
+                    "swarm.suspended",
+                    {
+                        "remaining_tasks": len(unfinished),
+                        "max_rounds": self.config.get("max_rounds", 8),
+                        "reason": "rounds_exhausted",
+                    },
+                )
+                if self.service and hasattr(self.service, "suspend"):
+                    await self.service.suspend("rounds_exhausted")
+
+                suspend_timeout: float = self.config.get("suspend_timeout", 1800)
+                try:
+                    await asyncio.wait_for(
+                        self._continue_event.wait(),
+                        timeout=suspend_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    self._continue_action = "suspend"
+
+                if self._continue_action == "continue":
+                    await self._execute()
+                elif self._continue_action == "suspend":
+                    await self._cleanup_agents()
+                    await self._emit("swarm.phase_changed", {"phase": "suspended"})
+                    return ""
+                # else "skip" — fall through to synthesis
+
             await self._cleanup_agents()
 
             log.info("swarm_phase_synthesizing", swarm_id=self.swarm_id)
@@ -809,6 +846,9 @@ class SwarmOrchestrator:
         for round_num in range(1, max_rounds + 1):
             if self._cancelled:
                 break
+
+            if self.service and hasattr(self.service, "update_round"):
+                await self.service.update_round(round_num)
 
             runnable = await self.task_board.get_runnable_tasks()
             if not runnable:

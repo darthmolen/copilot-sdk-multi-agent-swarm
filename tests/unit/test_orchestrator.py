@@ -10,8 +10,11 @@ import pytest
 
 from backend.events import EventBus
 from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
+from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.models import TaskStatus
 from backend.swarm.orchestrator import SwarmOrchestrator
+from backend.swarm.task_board import TaskBoard
+from backend.swarm.team_registry import TeamRegistry
 from backend.swarm.template_loader import AgentDefinition, LoadedTemplate
 from backend.swarm.tools import Tool, ToolInvocation
 
@@ -2647,3 +2650,199 @@ class TestAutoRetry:
         tasks = await orch.task_board.get_tasks()
         t = next(t for t in tasks if t.id == "t1")
         assert t.status == TaskStatus.FAILED
+
+
+# ---------------------------------------------------------------------------
+# Suspend / Continue tests
+# ---------------------------------------------------------------------------
+
+
+class _MockService:
+    """Minimal mock for SwarmService with suspend() and update_round()."""
+
+    def __init__(self) -> None:
+        self.suspend_calls: list[str] = []
+        self.update_round_calls: list[int] = []
+        self.task_board = TaskBoard()
+        self.inbox = InboxSystem()
+        self.registry = TeamRegistry()
+
+    async def suspend(self, reason: str) -> None:
+        self.suspend_calls.append(reason)
+
+    async def update_round(self, round_num: int) -> None:
+        self.update_round_calls.append(round_num)
+
+
+@pytest.mark.asyncio
+class TestSwarmSuspend:
+    """Tests for orchestrator pause/continue on rounds exhaustion."""
+
+    async def test_run_pauses_on_unfinished_tasks(self, event_bus: EventBus) -> None:
+        """After _execute() with unfinished tasks, orchestrator emits swarm.suspended."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        # max_rounds=1 so task-1 (blocked by task-0) stays PENDING
+        orch = make_orchestrator(
+            event_bus,
+            config={"max_rounds": 1, "timeout": 300, "suspend_timeout": 0.1},
+        )
+
+        await orch.run("Build something")
+
+        suspended = [(t, d) for t, d in events if t == "swarm.suspended"]
+        assert len(suspended) == 1, f"Expected swarm.suspended event, got: {[t for t, _ in events]}"
+        assert suspended[0][1]["remaining_tasks"] > 0
+        assert suspended[0][1]["reason"] == "rounds_exhausted"
+
+    async def test_continue_resumes_execution(self, event_bus: EventBus) -> None:
+        """Setting continue_action='continue' runs more rounds."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(
+            event_bus,
+            config={"max_rounds": 1, "timeout": 300, "suspend_timeout": 5},
+        )
+
+        async def _signal_continue() -> None:
+            # Wait until the continue_event is created
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                if orch._continue_event is not None:
+                    break
+            orch._continue_action = "continue"
+            orch._continue_event.set()  # type: ignore[union-attr]
+
+        asyncio.create_task(_signal_continue())
+        await orch.run("Build something")
+
+        # _execute should have been called at least twice (initial + continue)
+        execute_phase_events = [
+            (t, d) for t, d in events if t == "swarm.phase_changed" and d.get("phase") == "executing"
+        ]
+        assert len(execute_phase_events) >= 2, f"Expected at least 2 executing phases, got {len(execute_phase_events)}"
+
+    async def test_skip_proceeds_to_synthesis(self, event_bus: EventBus) -> None:
+        """Setting continue_action='skip' goes straight to synthesis."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(
+            event_bus,
+            config={"max_rounds": 1, "timeout": 300, "suspend_timeout": 5},
+            synthesis_report="Skip report",
+        )
+
+        async def _signal_skip() -> None:
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                if orch._continue_event is not None:
+                    break
+            orch._continue_action = "skip"
+            orch._continue_event.set()  # type: ignore[union-attr]
+
+        asyncio.create_task(_signal_skip())
+        report = await orch.run("Build something")
+
+        assert report == "Skip report"
+
+        # _execute called only once (only 1 executing phase)
+        execute_phase_events = [
+            (t, d) for t, d in events if t == "swarm.phase_changed" and d.get("phase") == "executing"
+        ]
+        assert len(execute_phase_events) == 1, (
+            f"Expected exactly 1 executing phase for skip, got {len(execute_phase_events)}"
+        )
+
+    async def test_timeout_auto_suspends(self, event_bus: EventBus) -> None:
+        """After timeout, orchestrator suspends and returns empty string."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(
+            event_bus,
+            config={"max_rounds": 1, "timeout": 300, "suspend_timeout": 0.1},
+        )
+
+        # Don't signal anything — let it timeout
+        report = await orch.run("Build something")
+
+        assert report == ""
+
+        # Verify swarm.phase_changed with phase='suspended' was emitted
+        suspended_phases = [(t, d) for t, d in events if t == "swarm.phase_changed" and d.get("phase") == "suspended"]
+        assert len(suspended_phases) == 1, (
+            f"Expected phase 'suspended', got phases: "
+            f"{[d.get('phase') for t, d in events if t == 'swarm.phase_changed']}"
+        )
+
+    async def test_suspend_does_not_cleanup_agents_until_decision(self, event_bus: EventBus) -> None:
+        """Agents stay alive during the pause window."""
+        cleanup_calls: list[str] = []
+        original_cleanup = SwarmOrchestrator._cleanup_agents
+
+        async def _tracking_cleanup(self_orch: SwarmOrchestrator) -> None:
+            cleanup_calls.append("cleanup")
+            await original_cleanup(self_orch)
+
+        orch = make_orchestrator(
+            event_bus,
+            config={"max_rounds": 1, "timeout": 300, "suspend_timeout": 5},
+        )
+
+        async def _signal_skip() -> None:
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                if orch._continue_event is not None:
+                    break
+            # At this point, cleanup should NOT have been called yet
+            assert len(cleanup_calls) == 0, "cleanup called before decision"
+            orch._continue_action = "skip"
+            orch._continue_event.set()  # type: ignore[union-attr]
+
+        asyncio.create_task(_signal_skip())
+        orch._cleanup_agents = lambda: _tracking_cleanup(orch)  # type: ignore[assignment]
+        await orch.run("Build something")
+
+        # Cleanup should have been called exactly once (after decision)
+        assert len(cleanup_calls) == 1, f"Expected 1 cleanup call, got {len(cleanup_calls)}"
+
+    async def test_round_number_persisted_each_iteration(self, event_bus: EventBus) -> None:
+        """service.update_round() called each round in _execute()."""
+        service = _MockService()
+        client = MockCopilotClient(leader_plan=VALID_PLAN)
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+        )
+
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+
+        # With VALID_PLAN (2 tasks, task-1 blocked by task-0), round 1 runs
+        # task-0, round 2 runs task-1 (now unblocked), round 3 finds nothing
+        # and breaks. update_round is called at loop entry for each round.
+        assert service.update_round_calls == [1, 2, 3]
+
+    async def test_no_suspend_when_all_tasks_complete(self, event_bus: EventBus) -> None:
+        """When all tasks complete, run() proceeds directly to synthesis (no suspend)."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        # max_rounds=3 with VALID_PLAN (2 tasks) — all complete
+        orch = make_orchestrator(
+            event_bus,
+            config={"max_rounds": 3, "timeout": 300, "suspend_timeout": 0.1},
+            synthesis_report="All done",
+        )
+
+        report = await orch.run("Build something")
+
+        assert report == "All done"
+        suspended = [(t, d) for t, d in events if t == "swarm.suspended"]
+        assert len(suspended) == 0, "Should not suspend when all tasks complete"
