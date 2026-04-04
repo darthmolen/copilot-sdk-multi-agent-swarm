@@ -22,6 +22,7 @@ import { ReportList } from './components/ReportList';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const DEBUG = import.meta.env.VITE_DEBUG === 'true';
 
 export function getApiKey(): string {
   return sessionStorage.getItem('swarm_api_key') ?? '';
@@ -165,7 +166,7 @@ function SwarmDashboard() {
 
   const handleSwarmEvent = useCallback(
     (swarmId: string, event: SwarmEvent) => {
-      console.log(`[Event] ${event.type}`, { swarmId, ...event.data });
+      if (DEBUG) console.log(`[Event] ${event.type}`, { swarmId, ...event.data });
       // Route chat events to chatReducer
       if (event.type === 'leader.chat_delta') {
         chatDispatch({

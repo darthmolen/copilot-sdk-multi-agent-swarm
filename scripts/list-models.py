@@ -14,7 +14,7 @@ async def main() -> None:
     try:
         from copilot import CopilotClient, SubprocessConfig
     except ImportError:
-        print("ERROR: copilot SDK not installed. Run: pip install copilot-sdk", file=sys.stderr)
+        print("ERROR: copilot SDK not installed. Run: pip install github-copilot-sdk", file=sys.stderr)
         sys.exit(1)
 
     cli_path = shutil.which("copilot")

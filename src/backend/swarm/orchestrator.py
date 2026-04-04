@@ -651,10 +651,13 @@ class SwarmOrchestrator:
         if not self.work_dir or not self.work_dir.is_dir():
             return
         for f in sorted(self.work_dir.rglob("*")):
-            if f.is_file() and f.name not in self._known_files:
-                self._known_files.add(f.name)
+            if not f.is_file():
+                continue
+            rel_path = str(f.relative_to(self.work_dir))
+            if rel_path not in self._known_files:
+                self._known_files.add(rel_path)
                 await self._emit("file.created", {
-                    "filename": f.name,
+                    "filename": rel_path,
                     "size_bytes": f.stat().st_size,
                 })
 
@@ -770,7 +773,9 @@ class SwarmOrchestrator:
 
             results = await asyncio.gather(*coros, return_exceptions=True)
 
-            # Cleanup ephemeral agents
+            # Cleanup ephemeral agents (stop owned clients to avoid CLI subprocess leaks)
+            for eph in ephemeral_agents:
+                await eph.cleanup()
             ephemeral_agents.clear()
 
             for (worker_name, task), result in zip(task_agent_pairs, results):
@@ -810,14 +815,15 @@ class SwarmOrchestrator:
             await self._scan_work_dir()
 
         # Warn if tasks remain after all rounds exhausted
-        remaining = await self.task_board.get_runnable_tasks()
-        if remaining:
+        all_tasks = await self.task_board.get_tasks()
+        unfinished = [t for t in all_tasks if t.status not in (TaskStatus.COMPLETED,)]
+        if unfinished:
             log.warning("swarm_rounds_exhausted",
                         swarm_id=self.swarm_id,
-                        remaining_tasks=len(remaining),
+                        remaining_tasks=len(unfinished),
                         max_rounds=max_rounds)
             await self._emit("swarm.rounds_exhausted", {
-                "remaining_tasks": len(remaining),
+                "remaining_tasks": len(unfinished),
                 "max_rounds": max_rounds,
             })
 

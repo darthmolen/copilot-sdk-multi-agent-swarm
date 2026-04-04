@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { SwarmEvent } from '../types/swarm';
 
 const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${typeof window !== 'undefined' ? window.location.host : 'localhost:5173'}`;
+const DEBUG = import.meta.env.VITE_DEBUG === 'true';
 const MAX_RECONNECT_DELAY = 30_000;
 const INITIAL_RECONNECT_DELAY = 1_000;
 
@@ -55,7 +56,7 @@ export function useWebSocket(
 
       ws.onopen = () => {
         if (!active) { ws.close(); return; }
-        console.log(`[WS] Connected to ${swarmId}`);
+        if (DEBUG) console.log(`[WS] Connected to ${swarmId}`);
         setConnected(true);
         reconnectDelay.current = INITIAL_RECONNECT_DELAY;
       };
@@ -64,7 +65,7 @@ export function useWebSocket(
         if (!active) return;
         try {
           const event: SwarmEvent = JSON.parse(evt.data);
-          console.log(`[WS ←] ${event.type}`, event.data);
+          if (DEBUG) console.log(`[WS ←] ${event.type}`, event.data);
           onEventRef.current(event);
         } catch {
           // Ignore malformed messages

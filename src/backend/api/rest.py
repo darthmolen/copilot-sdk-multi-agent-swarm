@@ -97,7 +97,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
     if _copilot_client is None:
         error_msg = (
             "Copilot SDK client is not available. "
-            "Install the copilot package and ensure the CLI binary is on PATH."
+            "Install the github-copilot-sdk package and ensure the CLI binary is on PATH."
         )
         log.error("swarm_no_client", swarm_id=swarm_id, error=error_msg)
         swarm_store[swarm_id]["phase"] = "failed"
