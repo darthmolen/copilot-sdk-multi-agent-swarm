@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -49,6 +50,26 @@ class SwarmRepository:
             kwargs.setdefault("completed_at", _now())
         async with self._engine.begin() as conn:
             await conn.execute(swarms.update().where(swarms.c.id == swarm_id).values(**kwargs))
+
+    async def update_round(self, swarm_id: UUID, round_number: int) -> None:
+        """Update the current round number for a swarm."""
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                swarms.update().where(swarms.c.id == swarm_id).values(current_round=round_number, updated_at=_now())
+            )
+
+    async def suspend_swarm(self, swarm_id: UUID) -> None:
+        """Mark a swarm as suspended."""
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                swarms.update()
+                .where(swarms.c.id == swarm_id)
+                .values(
+                    phase="suspended",
+                    suspended_at=sa.func.now(),
+                    updated_at=_now(),
+                )
+            )
 
     async def list_swarms(self) -> list[dict[str, Any]]:
         async with self._engine.connect() as conn:
