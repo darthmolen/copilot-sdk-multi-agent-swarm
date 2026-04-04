@@ -21,7 +21,7 @@ async def test_service_writes_through_to_repo(db_engine):
 
     await service.create_swarm(swarm_id, goal="Test", template_key="azure")
     await service.add_task(
-        swarm_id, task_id="task-0", subject="Work",
+        task_id="task-0", subject="Work",
         description="Do it", worker_role="dev", worker_name="dev",
     )
 
@@ -70,7 +70,7 @@ async def test_service_cache_matches_repo_after_mutations(db_engine):
 
     await service.create_swarm(swarm_id, goal="Sync test")
     await service.add_task(
-        swarm_id, task_id="task-0", subject="Sync",
+        task_id="task-0", subject="Sync",
         description="Check", worker_role="dev", worker_name="dev",
     )
     await service.update_task_status("task-0", "completed", "Synced!")

@@ -57,11 +57,11 @@ class SwarmService:
     # ------------------------------------------------------------------
 
     async def add_task(
-        self, swarm_id: str, task_id: str, subject: str, description: str,
+        self, task_id: str, subject: str, description: str,
         worker_role: str, worker_name: str, blocked_by: list[str] | None = None,
     ) -> Task:
         if not self._swarm_id:
-            self._swarm_id = swarm_id
+            raise RuntimeError("create_swarm() must be called before add_task()")
         task = await self.task_board.add_task(
             id=task_id, subject=subject, description=description,
             worker_role=worker_role, worker_name=worker_name,
@@ -69,7 +69,7 @@ class SwarmService:
         )
         if self._repo:
             await self._repo.create_task(
-                UUID(swarm_id), task_id=task_id, subject=subject,
+                UUID(self._swarm_id), task_id=task_id, subject=subject,
                 description=description, worker_role=worker_role,
                 worker_name=worker_name, blocked_by=blocked_by or [],
                 status=task.status.value,
