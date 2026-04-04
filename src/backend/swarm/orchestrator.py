@@ -578,6 +578,113 @@ class SwarmOrchestrator:
             raise
 
     # ------------------------------------------------------------------
+    # Resume: parallel entry point (skips plan/spawn)
+    # ------------------------------------------------------------------
+
+    async def resume(self, goal: str) -> str:
+        """Resume swarm from persisted state. Skips plan/spawn, rebuilds from DB."""
+        if not self.service:
+            raise RuntimeError("Cannot resume without a service")
+
+        await self.service.load(self.swarm_id)
+
+        # Rebuild agents from DB state
+        await self._rebuild_agents()
+
+        # Execute
+        await self._emit("swarm.phase_changed", {"phase": "executing"})
+        await self._execute()
+
+        # Same pause/continue loop as run()
+        while True:
+            all_tasks = await self.task_board.get_tasks()
+            actionable = [
+                t
+                for t in all_tasks
+                if t.status in (TaskStatus.BLOCKED, TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+            ]
+            if not actionable:
+                break
+
+            self._continue_event = asyncio.Event()
+            self._continue_action = ""
+            await self._emit(
+                "swarm.suspended",
+                {
+                    "remaining_tasks": len(actionable),
+                    "max_rounds": self.config.get("max_rounds", 8),
+                    "reason": "rounds_exhausted",
+                },
+            )
+
+            suspend_timeout: float = self.config.get("suspend_timeout", 1800)
+            try:
+                await asyncio.wait_for(
+                    self._continue_event.wait(),
+                    timeout=suspend_timeout,
+                )
+            except asyncio.TimeoutError:
+                self._continue_action = "suspend"
+
+            if self._continue_action == "continue":
+                await self._execute()
+                continue  # re-check for remaining actionable tasks
+            elif self._continue_action == "suspend":
+                if self.service and hasattr(self.service, "suspend"):
+                    await self.service.suspend("rounds_exhausted")
+                await self._cleanup_agents()
+                await self._emit("swarm.phase_changed", {"phase": "suspended"})
+                return ""
+            else:
+                break  # "skip" — fall through to synthesis
+
+        await self._cleanup_agents()
+        report = await self._synthesize(goal)
+        return report
+
+    async def _rebuild_agents(self) -> None:
+        """Recreate SwarmAgent instances from persisted registry and resume sessions."""
+        agent_entries = await self.registry.get_all()
+        for info in agent_entries:
+            name = info.name
+
+            # Look up template agent def if available
+            agent_def: AgentDefinition | None = None
+            if self.template:
+                agent_def = next((a for a in self.template.agents if a.name == name), None)
+
+            agent = SwarmAgent(
+                name=name,
+                role=info.role,
+                display_name=info.display_name,
+                task_board=self.task_board,
+                inbox=self.inbox,
+                registry=self.registry,
+                event_bus=self.event_bus,
+                available_tools=agent_def.tools if agent_def else None,
+                prompt_template=agent_def.prompt_template if agent_def else None,
+                system_preamble=self.system_preamble,
+                system_tools=self.system_tools,
+                model=self.model,
+                work_dir=self.work_dir,
+                swarm_id=self.swarm_id,
+                mcp_servers=self._get_mcp_servers(),
+            )
+
+            # Create a fresh session — true session resume requires
+            # session_id from DB agents table (future enhancement)
+            if self.client_factory:
+                client = await self.client_factory()
+                await agent.create_session(client, owns_client=True)
+            else:
+                await agent.create_session(self.client)
+
+            self.agents[name] = agent
+
+        await self._emit("swarm.phase_changed", {"phase": "spawning"})
+        await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
+
+    # ------------------------------------------------------------------
     # Phase 1: Planning (tool-based structured output)
     # ------------------------------------------------------------------
 

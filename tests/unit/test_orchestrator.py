@@ -2846,3 +2846,247 @@ class TestSwarmSuspend:
         assert report == "All done"
         suspended = [(t, d) for t, d in events if t == "swarm.suspended"]
         assert len(suspended) == 0, "Should not suspend when all tasks complete"
+
+
+# ---------------------------------------------------------------------------
+# Resume + _rebuild_agents tests
+# ---------------------------------------------------------------------------
+
+
+class _MockResumeService(_MockService):
+    """Extends _MockService with load() for resume tests."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.load_calls: list[str] = []
+
+    async def load(self, swarm_id: str) -> None:
+        self.load_calls.append(swarm_id)
+
+
+@pytest.mark.asyncio
+class TestOrchestratorResume:
+    """Tests for orchestrator resume() and _rebuild_agents()."""
+
+    async def test_resume_requires_service(self, event_bus: EventBus) -> None:
+        """resume() raises RuntimeError without service."""
+        orch = make_orchestrator(event_bus)  # no service
+        with pytest.raises(RuntimeError, match="service"):
+            await orch.resume("test goal")
+
+    async def test_resume_loads_state_from_service(self, event_bus: EventBus) -> None:
+        """resume() calls service.load() with swarm_id."""
+        service = _MockResumeService()
+        client = MockCopilotClient(synthesis_report="resumed report")
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-resume-1",
+        )
+
+        # Stub out _rebuild_agents, _execute, _synthesize so resume() doesn't fail
+        from unittest.mock import AsyncMock
+
+        orch._rebuild_agents = AsyncMock()  # type: ignore[assignment]
+        orch._execute = AsyncMock()  # type: ignore[assignment]
+        orch._synthesize = AsyncMock(return_value="report")  # type: ignore[assignment]
+        orch._cleanup_agents = AsyncMock()  # type: ignore[assignment]
+
+        await orch.resume("test goal")
+
+        assert service.load_calls == ["swarm-resume-1"]
+
+    async def test_resume_rebuilds_agents(self, event_bus: EventBus) -> None:
+        """resume() calls _rebuild_agents()."""
+        service = _MockResumeService()
+        client = MockCopilotClient(synthesis_report="report")
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-rebuild",
+        )
+
+        from unittest.mock import AsyncMock
+
+        rebuild_mock = AsyncMock()
+        orch._rebuild_agents = rebuild_mock  # type: ignore[assignment]
+        orch._execute = AsyncMock()  # type: ignore[assignment]
+        orch._synthesize = AsyncMock(return_value="report")  # type: ignore[assignment]
+        orch._cleanup_agents = AsyncMock()  # type: ignore[assignment]
+
+        await orch.resume("goal")
+
+        rebuild_mock.assert_called_once()
+
+    async def test_resume_executes_after_rebuild(self, event_bus: EventBus) -> None:
+        """resume() calls _execute() after rebuilding agents."""
+        service = _MockResumeService()
+        client = MockCopilotClient(synthesis_report="report")
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-exec",
+        )
+
+        from unittest.mock import AsyncMock
+
+        execute_mock = AsyncMock()
+        orch._rebuild_agents = AsyncMock()  # type: ignore[assignment]
+        orch._execute = execute_mock  # type: ignore[assignment]
+        orch._synthesize = AsyncMock(return_value="report")  # type: ignore[assignment]
+        orch._cleanup_agents = AsyncMock()  # type: ignore[assignment]
+
+        await orch.resume("goal")
+
+        execute_mock.assert_called_once()
+
+    async def test_resume_synthesizes_report(self, event_bus: EventBus) -> None:
+        """resume() calls _synthesize() and returns report."""
+        service = _MockResumeService()
+        client = MockCopilotClient(synthesis_report="resumed report")
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-synth",
+        )
+
+        from unittest.mock import AsyncMock
+
+        orch._rebuild_agents = AsyncMock()  # type: ignore[assignment]
+        orch._execute = AsyncMock()  # type: ignore[assignment]
+        orch._synthesize = AsyncMock(return_value="resumed report")  # type: ignore[assignment]
+        orch._cleanup_agents = AsyncMock()  # type: ignore[assignment]
+
+        result = await orch.resume("goal")
+
+        assert result == "resumed report"
+        orch._synthesize.assert_called_once_with("goal")
+
+    async def test_resume_uses_pause_loop(self, event_bus: EventBus) -> None:
+        """resume() has same pause/continue logic as run()."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        service = _MockResumeService()
+        client = MockCopilotClient(synthesis_report="report")
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 1, "timeout": 300, "suspend_timeout": 0.1},
+            service=service,
+            swarm_id="swarm-pause",
+        )
+
+        # Add a task that stays PENDING after _execute
+        await service.task_board.add_task(
+            id="task-0",
+            subject="Pending task",
+            description="Will stay pending",
+            worker_role="Analyst",
+            worker_name="analyst",
+        )
+
+        from unittest.mock import AsyncMock
+
+        orch._rebuild_agents = AsyncMock()  # type: ignore[assignment]
+        orch._execute = AsyncMock()  # type: ignore[assignment]
+        orch._cleanup_agents = AsyncMock()  # type: ignore[assignment]
+
+        # suspend_timeout=0.1 means it will timeout quickly and suspend
+        result = await orch.resume("goal")
+
+        suspended = [(t, d) for t, d in events if t == "swarm.suspended"]
+        assert len(suspended) == 1, f"Expected swarm.suspended event, got {len(suspended)}"
+        assert suspended[0][1]["remaining_tasks"] > 0
+
+        # Should suspend (return "") because suspend_timeout expires
+        assert result == ""
+
+
+@pytest.mark.asyncio
+class TestRebuildAgents:
+    """Tests for _rebuild_agents() method."""
+
+    async def test_rebuild_agents_creates_from_registry(self, event_bus: EventBus) -> None:
+        """_rebuild_agents() creates SwarmAgent instances from registered agents."""
+        service = _MockResumeService()
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-rebuild",
+        )
+
+        # Pre-register agents in the registry (simulates service.load())
+        await service.registry.register("analyst", "Analyst", "Analyst")
+        await service.registry.register("writer", "Writer", "Writer")
+
+        await orch._rebuild_agents()
+
+        assert len(orch.agents) == 2
+        assert "analyst" in orch.agents
+        assert "writer" in orch.agents
+
+    async def test_rebuild_agents_emits_spawn_events(self, event_bus: EventBus) -> None:
+        """_rebuild_agents() emits spawning phase and spawn_complete events."""
+        events: list[tuple[str, dict[str, Any]]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        service = _MockResumeService()
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-events",
+        )
+
+        await service.registry.register("analyst", "Analyst", "Analyst")
+
+        await orch._rebuild_agents()
+
+        phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
+        phases = [d["phase"] for _, d in phase_events]
+        assert "spawning" in phases
+
+        spawn_events = [(t, d) for t, d in events if t == "swarm.spawn_complete"]
+        assert len(spawn_events) == 1
+        assert spawn_events[0][1]["agent_count"] == 1
+
+    async def test_rebuild_uses_client_factory_when_available(self, event_bus: EventBus) -> None:
+        """_rebuild_agents() uses client_factory for per-agent clients."""
+        service = _MockResumeService()
+        main_client = MockCopilotClient()
+        factory_clients: list[MockCopilotClient] = []
+
+        async def _factory() -> MockCopilotClient:
+            c = MockCopilotClient()
+            factory_clients.append(c)
+            return c
+
+        orch = SwarmOrchestrator(
+            client=main_client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            service=service,
+            swarm_id="swarm-factory",
+            client_factory=_factory,
+        )
+
+        await service.registry.register("analyst", "Analyst", "Analyst")
+
+        await orch._rebuild_agents()
+
+        assert len(factory_clients) == 1, "client_factory should be called once per agent"
+        assert orch.agents["analyst"]._owns_client is True
