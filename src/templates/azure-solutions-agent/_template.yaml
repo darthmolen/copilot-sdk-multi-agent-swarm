@@ -1,0 +1,31 @@
+key: azure-solutions-agent
+name: Azure Solutions Agent
+description: Deep-research Azure solutions architect with cost optimization gating and IaC code output (Bicep/Terraform)
+goal_template: |
+  Assemble an Azure solutions team to: {user_input}
+
+  The user may specify Bicep or Terraform for infrastructure code. If not specified, default to Bicep.
+
+  ## Team Phases
+
+  Phase 1 — DESIGN (parallel): Architect designs cloud architecture, Security designs identity and compliance posture, AI/ML specialist designs AI services if the solution involves AI/ML workloads. If the solution has NO AI/ML component, skip the ai-ml worker entirely.
+
+  Phase 2 — COST GATE: Cost expert reviews ALL designs for cost optimization. Must approve before proceeding. Can request revisions with specific cost-saving alternatives.
+
+  Phase 3 — IAC PLANNING: IaC Architect takes approved designs and cost feedback, breaks them into standardized IaC modules with naming conventions, shared variables, and a module dependency map.
+
+  Phase 4 — IAC IMPLEMENTATION (parallel): Multiple IaC Developers write Bicep or Terraform modules concurrently, one per infrastructure component identified by the IaC Architect.
+
+  ## Dependency Rules
+
+  - Design tasks (architect, security, ai-ml) run in parallel with NO dependencies between them
+  - Cost expert is BLOCKED BY all design tasks
+  - IaC Architect is BLOCKED BY cost-expert
+  - All IaC Developer tasks are BLOCKED BY iac-architect
+  - Create ONE task per IaC module for maximum parallelism in Phase 4
+
+  ## Important Notes
+
+  - SWARM_MAX_ROUNDS must be at least 5 for this template (4 phases + buffer)
+  - Every worker should use microsoft_docs_search and microsoft_docs_fetch for current Azure details
+  - IaC code must be written to the work directory as .bicep or .tf files

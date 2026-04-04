@@ -286,6 +286,14 @@ class SwarmReport(BaseModel):
     report: str
 
 
+class BeginSwarmArgs(BaseModel):
+    """Schema the leader submits via begin_swarm to transition from Q&A to planning."""
+
+    refined_goal: str = Field(
+        description="The refined goal incorporating all context gathered during the Q&A interview."
+    )
+
+
 def create_plan_tool(plan_holder: list[dict[str, Any]]) -> Tool:
     """Return a tool the leader calls to submit its decomposed plan.
 
@@ -343,5 +351,46 @@ def create_report_tool(report_holder: list[str]) -> Tool:
         description="Submit the final synthesis report. Call with {'report': 'your report text'}.",
         handler=_handler,
         parameters=SwarmReport.model_json_schema(),
+        skip_permission=True,
+    )
+
+
+def create_begin_swarm_tool(
+    goal_holder: list[str],
+    done_event: asyncio.Event,
+) -> Tool:
+    """Return a tool the leader calls to end Q&A and start the swarm.
+
+    The refined goal is captured in *goal_holder* and *done_event* is set
+    so the orchestrator knows Q&A is complete.
+    """
+
+    async def _handler(invocation: ToolInvocation) -> ToolResult:
+        args = invocation.arguments or {}
+        try:
+            parsed = BeginSwarmArgs.model_validate(args)
+            goal_holder.append(parsed.refined_goal)
+            done_event.set()
+            return ToolResult(
+                text_result_for_llm="Swarm started. The team is now working on the refined goal."
+            )
+        except (ValidationError, Exception) as exc:
+            log.warning("begin_swarm_invalid_args", error=str(exc))
+            return ToolResult(
+                text_result_for_llm=(
+                    "Invalid arguments. Call with {'refined_goal': 'your summary of requirements'}."
+                ),
+                result_type="failure",
+            )
+
+    return Tool(
+        name="begin_swarm",
+        description=(
+            "End the Q&A interview and start the swarm. Call this when you have "
+            "gathered enough context. Pass a 'refined_goal' string that summarizes "
+            "all requirements and context gathered during the interview."
+        ),
+        handler=_handler,
+        parameters=BeginSwarmArgs.model_json_schema(),
         skip_permission=True,
     )

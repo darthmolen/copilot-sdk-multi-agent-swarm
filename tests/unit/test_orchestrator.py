@@ -13,6 +13,7 @@ from backend.events import EventBus
 from backend.swarm.event_bridge import SessionEvent, SessionEventData, SessionEventType
 from backend.swarm.models import TaskStatus
 from backend.swarm.orchestrator import SwarmOrchestrator
+from backend.swarm.template_loader import AgentDefinition, LoadedTemplate
 from backend.swarm.tools import Tool, ToolInvocation
 
 
@@ -461,12 +462,13 @@ class TestGranularEvents:
         assert task_created[1][1]["task"]["id"] == "task-1"
         assert task_created[1][1]["task"]["worker_name"] == "writer"
 
-    async def test_plan_emits_phase_changed_planning(self, event_bus: EventBus) -> None:
+    async def test_run_emits_phase_changed_planning_before_plan(self, event_bus: EventBus) -> None:
+        """Planning phase event is emitted from run() before _plan() starts."""
         events: list[tuple[str, dict]] = []
         event_bus.subscribe(lambda t, d: events.append((t, d)))
 
         orch = make_orchestrator(event_bus)
-        await orch._plan("Build something")
+        await orch.run("Build something")
 
         phase_events = [(t, d) for t, d in events if t == "swarm.phase_changed"]
         phases = [d["phase"] for _, d in phase_events]
@@ -522,6 +524,21 @@ class TestGranularEvents:
             assert "task" in d
             assert "id" in d["task"]
             assert "status" in d["task"]
+
+    async def test_execute_emits_rounds_exhausted_when_tasks_remain(self, event_bus: EventBus) -> None:
+        """When max_rounds is reached with pending tasks, swarm.rounds_exhausted is emitted."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, config={"max_rounds": 1, "timeout": 300})
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+
+        exhausted = [(t, d) for t, d in events if t == "swarm.rounds_exhausted"]
+        assert len(exhausted) == 1, "Expected swarm.rounds_exhausted event"
+        assert exhausted[0][1]["remaining_tasks"] > 0
+        assert exhausted[0][1]["max_rounds"] == 1
 
     async def test_execute_emits_phase_changed_executing(self, event_bus: EventBus) -> None:
         events: list[tuple[str, dict]] = []
@@ -873,6 +890,66 @@ class TestGranularEvents:
         assert len(response) >= 0  # Just verify it doesn't crash
 
 
+class TestFileWatcher:
+    async def test_scan_emits_file_created_for_new_files(
+        self, event_bus: EventBus, tmp_path: Path,
+    ) -> None:
+        """_scan_work_dir emits file.created for new files in work directory."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-files", work_base=tmp_path)
+        orch.work_dir = tmp_path / "swarm-files"
+        orch.work_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a file in the work directory
+        (orch.work_dir / "design.md").write_text("# Architecture Design\nAKS cluster...")
+        (orch.work_dir / "security.md").write_text("# Security\nRBAC matrix...")
+
+        await orch._scan_work_dir()
+
+        file_events = [(t, d) for t, d in events if t == "file.created"]
+        assert len(file_events) == 2
+        filenames = {d["filename"] for _, d in file_events}
+        assert filenames == {"design.md", "security.md"}
+
+    async def test_scan_does_not_re_emit_known_files(
+        self, event_bus: EventBus, tmp_path: Path,
+    ) -> None:
+        """_scan_work_dir only emits for NEW files, not previously seen ones."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-dedup", work_base=tmp_path)
+        orch.work_dir = tmp_path / "swarm-dedup"
+        orch.work_dir.mkdir(parents=True, exist_ok=True)
+
+        (orch.work_dir / "first.md").write_text("First file")
+        await orch._scan_work_dir()
+
+        events.clear()
+        # Add a second file, re-scan
+        (orch.work_dir / "second.md").write_text("Second file")
+        await orch._scan_work_dir()
+
+        file_events = [(t, d) for t, d in events if t == "file.created"]
+        assert len(file_events) == 1
+        assert file_events[0][1]["filename"] == "second.md"
+
+    async def test_scan_no_workdir_does_nothing(
+        self, event_bus: EventBus,
+    ) -> None:
+        """_scan_work_dir is a no-op when work_dir is None."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        orch = make_orchestrator(event_bus)
+        await orch._scan_work_dir()
+
+        file_events = [(t, d) for t, d in events if t == "file.created"]
+        assert len(file_events) == 0
+
+
 class TestFullLifecycle:
     async def test_full_run_lifecycle(self, event_bus: EventBus) -> None:
         events_received: list[tuple[str, dict]] = []
@@ -945,6 +1022,16 @@ class TestWorkDirectory:
 
         work_dir = tmp_path / "swarm-abc"
         assert work_dir.is_dir(), f"Expected work directory at {work_dir}"
+
+    async def test_run_writes_goal_md_to_workdir(self, event_bus: EventBus, tmp_path: Path) -> None:
+        """Orchestrator writes goal.md to the work directory with the user's goal."""
+        orch = make_orchestrator(event_bus, swarm_id="swarm-goal", work_base=tmp_path)
+        await orch.run("Design a multi-tenant SaaS platform")
+
+        goal_file = tmp_path / "swarm-goal" / "goal.md"
+        assert goal_file.exists(), f"Expected goal.md at {goal_file}"
+        content = goal_file.read_text()
+        assert "multi-tenant SaaS platform" in content
 
     async def test_work_dir_path_passed_to_agent_prompt(self, event_bus: EventBus, tmp_path: Path) -> None:
         """Agent system prompts include the work directory path."""
@@ -1255,3 +1342,572 @@ class TestLogging:
         assert len(complete_records) == 1, f"Expected 1 chat_complete, got: {[r.message for r in caplog.records]}"
         assert "tool_calls" in complete_records[0].message
         assert "duration_ms" in complete_records[0].message
+
+
+# ---------------------------------------------------------------------------
+# maxInstances tests
+# ---------------------------------------------------------------------------
+
+
+SCALABLE_PLAN = {
+    "team_description": "Scalable team",
+    "tasks": [
+        {
+            "subject": "Module A",
+            "description": "Write module A",
+            "worker_role": "Developer",
+            "worker_name": "developer",
+            "blocked_by_indices": [],
+        },
+        {
+            "subject": "Module B",
+            "description": "Write module B",
+            "worker_role": "Developer",
+            "worker_name": "developer",
+            "blocked_by_indices": [],
+        },
+        {
+            "subject": "Module C",
+            "description": "Write module C",
+            "worker_role": "Developer",
+            "worker_name": "developer",
+            "blocked_by_indices": [],
+        },
+    ],
+}
+
+
+def _make_scalable_template(max_instances: int = 3) -> LoadedTemplate:
+    """Create a template with a single scalable worker."""
+    return LoadedTemplate(
+        key="scalable-test",
+        name="Scalable Test",
+        description="Test template with scalable worker",
+        goal_template="Do: {user_input}",
+        leader_prompt="You are the leader.",
+        agents=[
+            AgentDefinition(
+                name="developer",
+                display_name="Developer",
+                description="Writes code modules",
+                max_instances=max_instances,
+            ),
+        ],
+        synthesis_prompt="Synthesize: {goal}\n{task_results}",
+    )
+
+
+def make_scalable_orchestrator(
+    event_bus: EventBus,
+    max_instances: int = 3,
+    leader_plan: dict[str, Any] | None = None,
+    synthesis_report: str = "Final report",
+    config: dict[str, Any] | None = None,
+) -> SwarmOrchestrator:
+    """Create an orchestrator with a scalable worker template."""
+    template = _make_scalable_template(max_instances)
+    client = MockCopilotClient(
+        leader_plan=leader_plan or SCALABLE_PLAN,
+        synthesis_report=synthesis_report,
+    )
+    return SwarmOrchestrator(
+        client=client,
+        event_bus=event_bus,
+        config=config or {"max_rounds": 3, "timeout": 300},
+        template=template,
+    )
+
+
+class TestMaxInstances:
+    async def test_execute_assigns_multiple_tasks_to_scalable_worker(
+        self, event_bus: EventBus
+    ) -> None:
+        """With max_instances=3 and 3 tasks, all complete in a single round."""
+        orch = make_scalable_orchestrator(event_bus, max_instances=3)
+        plan = await orch._plan("Build modules")
+        await orch._spawn(plan)
+
+        # Track rounds
+        rounds: list[int] = []
+        event_bus.subscribe(
+            lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None
+        )
+
+        await orch._execute()
+
+        all_tasks = await orch.task_board.get_tasks()
+        completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+        assert len(completed) == 3, f"Expected 3 completed, got {len(completed)}"
+
+        # All 3 should complete in round 1 (not spread across rounds)
+        assert len(rounds) == 1, f"Expected 1 round, got {len(rounds)}"
+
+    async def test_execute_respects_max_instances_cap(
+        self, event_bus: EventBus
+    ) -> None:
+        """With max_instances=2 and 3 tasks, only 2 run per round."""
+        orch = make_scalable_orchestrator(event_bus, max_instances=2)
+        plan = await orch._plan("Build modules")
+        await orch._spawn(plan)
+
+        rounds: list[int] = []
+        event_bus.subscribe(
+            lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None
+        )
+
+        await orch._execute()
+
+        all_tasks = await orch.task_board.get_tasks()
+        completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+        assert len(completed) == 3, f"Expected 3 completed, got {len(completed)}"
+
+        # Should take 2 rounds (2 in round 1, 1 in round 2)
+        assert len(rounds) == 2, f"Expected 2 rounds, got {len(rounds)}"
+
+    async def test_execute_max_instances_1_preserves_current_behavior(
+        self, event_bus: EventBus
+    ) -> None:
+        """With max_instances=1 (default), only 1 task per worker per round."""
+        orch = make_scalable_orchestrator(event_bus, max_instances=1)
+        plan = await orch._plan("Build modules")
+        await orch._spawn(plan)
+
+        rounds: list[int] = []
+        event_bus.subscribe(
+            lambda t, d: rounds.append(d["round"]) if t == "swarm.round_start" else None
+        )
+
+        await orch._execute()
+
+        all_tasks = await orch.task_board.get_tasks()
+        completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+        assert len(completed) == 3, f"Expected 3 completed, got {len(completed)}"
+
+        # Should take 3 rounds (1 per round)
+        assert len(rounds) == 3, f"Expected 3 rounds, got {len(rounds)}"
+
+    async def test_ephemeral_agents_get_independent_sessions(
+        self, event_bus: EventBus
+    ) -> None:
+        """Each concurrent task gets its own session (create_session called N times)."""
+        template = _make_scalable_template(max_instances=3)
+        session_count = [0]
+
+        class CountingClient:
+            def __init__(self, base: MockCopilotClient) -> None:
+                self._base = base
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                session_count[0] += 1
+                return await self._base.create_session(**kwargs)
+
+        base_client = MockCopilotClient(leader_plan=SCALABLE_PLAN)
+        client = CountingClient(base_client)
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            template=template,
+        )
+
+        plan = await orch._plan("Build modules")
+        session_count[0] = 0  # Reset after leader session
+
+        await orch._spawn(plan)
+        spawn_sessions = session_count[0]  # 1 base agent
+
+        await orch._execute()
+        total_sessions = session_count[0]
+
+        # spawn creates 1 session for the base agent
+        assert spawn_sessions == 1, f"Expected 1 spawn session, got {spawn_sessions}"
+        # execute should create 2 more ephemeral sessions (3 tasks - 1 base = 2 ephemeral)
+        assert total_sessions == 3, f"Expected 3 total sessions (1 base + 2 ephemeral), got {total_sessions}"
+
+    async def test_ephemeral_sessions_created_in_parallel(
+        self, event_bus: EventBus
+    ) -> None:
+        """Ephemeral agent sessions are created concurrently, not sequentially."""
+        template = _make_scalable_template(max_instances=3)
+        creation_log: list[tuple[str, float]] = []
+
+        class TimingClient:
+            def __init__(self, base: MockCopilotClient) -> None:
+                self._base = base
+
+            async def create_session(self, **kwargs: Any) -> Any:
+                creation_log.append(("start", asyncio.get_event_loop().time()))
+                await asyncio.sleep(0.05)  # Simulate network I/O
+                creation_log.append(("end", asyncio.get_event_loop().time()))
+                return await self._base.create_session(**kwargs)
+
+        base_client = MockCopilotClient(leader_plan=SCALABLE_PLAN)
+        client = TimingClient(base_client)
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            config={"max_rounds": 3, "timeout": 300},
+            template=template,
+        )
+
+        plan = await orch._plan("Build modules")
+        await orch._spawn(plan)
+        creation_log.clear()  # Reset after spawn
+
+        await orch._execute()
+
+        # 2 ephemeral sessions should be created (3 tasks - 1 base)
+        starts = [t for label, t in creation_log if label == "start"]
+        assert len(starts) >= 2, f"Expected at least 2 ephemeral sessions, got {len(starts)}"
+
+        # If parallel: both starts should happen before either ends
+        # If sequential: start[1] happens after end[0]
+        # Check: time between first and second start should be < the sleep duration
+        if len(starts) >= 2:
+            gap = starts[1] - starts[0]
+            assert gap < 0.04, (
+                f"Ephemeral sessions created sequentially (gap={gap:.3f}s). "
+                f"Expected parallel creation (gap < 0.04s)."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Per-agent CopilotClient (client_factory) tests
+# ---------------------------------------------------------------------------
+
+
+class TestClientFactory:
+    async def test_spawn_uses_factory_for_each_worker(self, event_bus: EventBus) -> None:
+        """When client_factory is provided, each worker gets a separate client."""
+        clients_created: list[Any] = []
+
+        async def mock_factory() -> Any:
+            client = MockCopilotClient(leader_plan=VALID_PLAN)
+            clients_created.append(client)
+            return client
+
+        orch = SwarmOrchestrator(
+            client=MockCopilotClient(leader_plan=VALID_PLAN),
+            event_bus=event_bus,
+            client_factory=mock_factory,
+        )
+        await orch._spawn(VALID_PLAN)
+
+        # 2 unique workers in VALID_PLAN → 2 factory calls
+        assert len(clients_created) == 2
+
+    async def test_cleanup_stops_all_agent_clients(self, event_bus: EventBus) -> None:
+        """After execution, cleanup stops all per-agent clients."""
+        stopped: list[str] = []
+
+        async def mock_factory() -> Any:
+            client = MockCopilotClient(leader_plan=VALID_PLAN)
+            agent_name = f"client-{len(stopped)}"
+
+            async def mock_stop() -> None:
+                stopped.append(agent_name)
+
+            client.stop = mock_stop
+            return client
+
+        orch = SwarmOrchestrator(
+            client=MockCopilotClient(leader_plan=VALID_PLAN),
+            event_bus=event_bus,
+            client_factory=mock_factory,
+        )
+        plan = await orch._plan("Build something")
+        await orch._spawn(plan)
+        await orch._execute()
+        await orch._cleanup_agents()
+
+        assert len(stopped) == 2, f"Expected 2 agent clients stopped, got {len(stopped)}"
+
+    async def test_spawn_falls_back_to_shared_client_when_no_factory(self, event_bus: EventBus) -> None:
+        """Without client_factory, agents use the shared self.client (existing behavior)."""
+        shared_client = MockCopilotClient(leader_plan=VALID_PLAN)
+        orch = SwarmOrchestrator(
+            client=shared_client,
+            event_bus=event_bus,
+        )
+        await orch._spawn(VALID_PLAN)
+
+        # All agents should have sessions (created via shared client)
+        assert len(orch.agents) == 2
+        for agent in orch.agents.values():
+            assert agent.session is not None
+
+
+# ---------------------------------------------------------------------------
+# Per-worker skills (disabled_skills) tests
+# ---------------------------------------------------------------------------
+
+
+SKILLS_PLAN = {
+    "team_description": "Skilled team",
+    "tasks": [
+        {
+            "subject": "Design architecture",
+            "description": "Create the design",
+            "worker_role": "Architect",
+            "worker_name": "architect",
+            "blocked_by_indices": [],
+        },
+        {
+            "subject": "Review security",
+            "description": "Security review",
+            "worker_role": "Security",
+            "worker_name": "security",
+            "blocked_by_indices": [],
+        },
+    ],
+}
+
+
+def _make_skills_template() -> LoadedTemplate:
+    """Create a template with per-worker skills and a skills directory."""
+    return LoadedTemplate(
+        key="skills-test",
+        name="Skills Test",
+        description="Test template with per-worker skills",
+        goal_template="Do: {user_input}",
+        leader_prompt="You are the leader.",
+        agents=[
+            AgentDefinition(
+                name="architect",
+                display_name="Architect",
+                description="Designs architecture",
+                skills=["azure-architect", "azure-network"],
+            ),
+            AgentDefinition(
+                name="security",
+                display_name="Security",
+                description="Reviews security",
+                skills=["azure-security"],
+            ),
+        ],
+        synthesis_prompt="Synthesize: {goal}\n{task_results}",
+        all_skill_names={"azure-architect", "azure-network", "azure-security", "azure-developer"},
+        skill_name_map={
+            "azure-architect": "azure-architect",
+            "azure-network": "azure-network",
+            "azure-security": "azure-security",
+            "azure-developer": "azure-developer",
+        },
+    )
+
+
+class TestQAPhase:
+    async def test_orchestrator_has_qa_attributes(self, event_bus: EventBus) -> None:
+        """Orchestrator exposes qa_session, qa_complete, qa_refined_goal."""
+        orch = make_orchestrator(event_bus)
+        assert orch.qa_session is None
+        assert isinstance(orch.qa_complete, asyncio.Event)
+        assert not orch.qa_complete.is_set()
+        assert orch.qa_refined_goal is None
+
+    async def test_qa_chat_routes_to_qa_session(self, event_bus: EventBus) -> None:
+        """qa_chat() sends user message to the Q&A session and returns response."""
+        orch = make_orchestrator(event_bus, swarm_id="swarm-qa")
+
+        # Simulate a Q&A session that responds to messages
+        qa_session = MockToolCallingSession(send_and_wait_response="What is your team size?")
+        orch.qa_session = qa_session
+
+        response = await orch.qa_chat("We want to containerize 12 apps")
+        assert len(response) > 0
+
+    async def test_qa_chat_raises_without_session(self, event_bus: EventBus) -> None:
+        """qa_chat() raises ValueError when no Q&A session exists."""
+        orch = make_orchestrator(event_bus)
+        with pytest.raises(ValueError, match="No Q&A session"):
+            await orch.qa_chat("hello")
+
+    async def test_start_qa_creates_session_and_waits(self, event_bus: EventBus) -> None:
+        """start_qa() creates leader session, sends goal, waits for begin_swarm."""
+        template = LoadedTemplate(
+            key="qa-test",
+            name="QA Test",
+            description="Test Q&A",
+            goal_template="Do: {user_input}",
+            leader_prompt="You are the leader. Ask about team size.",
+            agents=[AgentDefinition(name="worker", display_name="W", description="D")],
+            synthesis_prompt="Synth: {goal}\n{task_results}",
+            qa_enabled=True,
+        )
+        client = MockCopilotClient(leader_plan=VALID_PLAN)
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, template=template,
+            config={"max_rounds": 3, "timeout": 5},
+        )
+
+        # Simulate the leader calling begin_swarm after Q&A
+        async def _simulate_begin_swarm() -> None:
+            await asyncio.sleep(0.1)
+            orch.qa_refined_goal = "Build AKS for 12 apps, pragmatic security"
+            orch.qa_complete.set()
+
+        asyncio.ensure_future(_simulate_begin_swarm())
+
+        refined = await orch.start_qa("Containerize our legacy apps")
+
+        assert refined == "Build AKS for 12 apps, pragmatic security"
+        assert orch.qa_session is not None
+
+    async def test_start_qa_streams_initial_response(self, event_bus: EventBus) -> None:
+        """start_qa() streams the leader's initial response via leader.chat_delta."""
+        template = LoadedTemplate(
+            key="qa-test",
+            name="QA Test",
+            description="Test Q&A",
+            goal_template="Do: {user_input}",
+            leader_prompt="You are the leader. Ask about team size.",
+            agents=[AgentDefinition(name="worker", display_name="W", description="D")],
+            synthesis_prompt="Synth: {goal}\n{task_results}",
+            qa_enabled=True,
+        )
+
+        # MockCopilotClient falls through to synthesis mock for begin_swarm tool,
+        # which fires ASSISTANT_MESSAGE with send_and_wait_response content
+        initial_response = "How many applications do you have?"
+        client = MockCopilotClient(leader_plan=VALID_PLAN, synthesis_report=initial_response)
+        orch = SwarmOrchestrator(
+            client=client, event_bus=event_bus, template=template,
+            config={"max_rounds": 3, "timeout": 5},
+        )
+
+        # Capture leader.chat_delta events
+        deltas: list[dict[str, Any]] = []
+        event_bus.subscribe(
+            lambda et, data: deltas.append(data) if et == "leader.chat_delta" else None
+        )
+
+        # Simulate begin_swarm after a short delay
+        async def _simulate_begin_swarm() -> None:
+            await asyncio.sleep(0.1)
+            orch.qa_refined_goal = "Refined goal"
+            orch.qa_complete.set()
+
+        asyncio.ensure_future(_simulate_begin_swarm())
+
+        await orch.start_qa("Containerize our legacy apps")
+
+        # The leader's initial response should have been streamed
+        assert len(deltas) > 0, "start_qa must stream the leader's initial response as leader.chat_delta events"
+        streamed_content = "".join(d["delta"] for d in deltas)
+        assert initial_response in streamed_content
+
+
+class TestPerWorkerSkills:
+    async def test_spawn_computes_disabled_skills_from_allowlist(
+        self, event_bus: EventBus
+    ) -> None:
+        """Worker with skills=[a, b] gets disabled_skills for everything NOT in [a, b]."""
+        template = _make_skills_template()
+        # Track create_session kwargs per worker
+        session_kwargs: list[dict[str, Any]] = []
+
+        class TrackingClient:
+            async def create_session(self, **kwargs: Any) -> Any:
+                session_kwargs.append(kwargs)
+                return MockWorkerSession()
+
+        orch = SwarmOrchestrator(
+            client=TrackingClient(),
+            event_bus=event_bus,
+            template=template,
+        )
+        await orch._spawn(SKILLS_PLAN)
+
+        # Find the architect session (first worker created after leader)
+        # Leader has create_plan tool, workers have task_update
+        worker_sessions = [
+            kw for kw in session_kwargs
+            if any(t.name == "task_update" for t in (kw.get("tools") or []))
+        ]
+        assert len(worker_sessions) == 2
+
+        # Architect: skills=[azure-architect, azure-network]
+        # Should disable: azure-security, azure-developer
+        architect_kw = worker_sessions[0]
+        disabled = set(architect_kw.get("disabled_skills", []))
+        assert disabled == {"azure-security", "azure-developer"}
+
+        # Security: skills=[azure-security]
+        # Should disable: azure-architect, azure-network, azure-developer
+        security_kw = worker_sessions[1]
+        disabled = set(security_kw.get("disabled_skills", []))
+        assert disabled == {"azure-architect", "azure-network", "azure-developer"}
+
+    async def test_spawn_wildcard_skills_no_disabled(
+        self, event_bus: EventBus
+    ) -> None:
+        """Worker with skills=['*'] gets no disabled_skills."""
+        template = LoadedTemplate(
+            key="wild-test",
+            name="Wild Test",
+            description="Wildcard skills",
+            goal_template="Do: {user_input}",
+            leader_prompt="Leader.",
+            agents=[AgentDefinition(
+                name="analyst",
+                display_name="Analyst",
+                description="Analyzes",
+                skills=["*"],
+            )],
+            synthesis_prompt="Synth: {goal}\n{task_results}",
+            all_skill_names={"skill-a", "skill-b"},
+            skill_name_map={"skill-a": "skill-a", "skill-b": "skill-b"},
+        )
+        plan = {
+            "team_description": "Test",
+            "tasks": [{"subject": "T", "description": "D", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []}],
+        }
+        session_kwargs: list[dict[str, Any]] = []
+
+        class TrackingClient:
+            async def create_session(self, **kwargs: Any) -> Any:
+                session_kwargs.append(kwargs)
+                return MockWorkerSession()
+
+        orch = SwarmOrchestrator(client=TrackingClient(), event_bus=event_bus, template=template)
+        await orch._spawn(plan)
+
+        worker_sessions = [kw for kw in session_kwargs if any(t.name == "task_update" for t in (kw.get("tools") or []))]
+        assert len(worker_sessions) == 1
+        assert "disabled_skills" not in worker_sessions[0]
+
+    async def test_spawn_no_skills_field_backward_compat(
+        self, event_bus: EventBus
+    ) -> None:
+        """Worker with skills=None gets no disabled_skills (backward compat)."""
+        template = LoadedTemplate(
+            key="compat-test",
+            name="Compat Test",
+            description="No per-worker skills",
+            goal_template="Do: {user_input}",
+            leader_prompt="Leader.",
+            agents=[AgentDefinition(
+                name="analyst",
+                display_name="Analyst",
+                description="Analyzes",
+                # skills=None (default)
+            )],
+            synthesis_prompt="Synth: {goal}\n{task_results}",
+        )
+        plan = {
+            "team_description": "Test",
+            "tasks": [{"subject": "T", "description": "D", "worker_role": "Analyst", "worker_name": "analyst", "blocked_by_indices": []}],
+        }
+        session_kwargs: list[dict[str, Any]] = []
+
+        class TrackingClient:
+            async def create_session(self, **kwargs: Any) -> Any:
+                session_kwargs.append(kwargs)
+                return MockWorkerSession()
+
+        orch = SwarmOrchestrator(client=TrackingClient(), event_bus=event_bus, template=template)
+        await orch._spawn(plan)
+
+        worker_sessions = [kw for kw in session_kwargs if any(t.name == "task_update" for t in (kw.get("tools") or []))]
+        assert len(worker_sessions) == 1
+        assert "disabled_skills" not in worker_sessions[0]

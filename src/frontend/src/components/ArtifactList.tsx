@@ -11,8 +11,6 @@ interface ArtifactListProps {
 }
 
 export function ArtifactList({ files, activeFile, onSelect, swarmId }: ArtifactListProps) {
-  if (files.length === 0) return null;
-
   function handleDownloadZip() {
     if (!swarmId) return;
     const apiKey = getApiKey();
@@ -33,6 +31,9 @@ export function ArtifactList({ files, activeFile, onSelect, swarmId }: ArtifactL
 
   return (
     <div className="artifact-list">
+      {files.length === 0 && (
+        <div className="artifact-empty">No files yet</div>
+      )}
       {files.map((f) => (
         <button
           key={f.path}

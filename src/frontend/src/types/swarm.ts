@@ -1,6 +1,6 @@
 export type TaskStatus = 'blocked' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'timeout';
 export type AgentStatus = 'idle' | 'thinking' | 'working' | 'ready' | 'failed';
-export type SwarmPhase = 'starting' | 'planning' | 'spawning' | 'executing' | 'synthesizing' | 'complete' | 'cancelled' | 'failed';
+export type SwarmPhase = 'starting' | 'planning' | 'spawning' | 'executing' | 'synthesizing' | 'qa' | 'complete' | 'cancelled' | 'failed';
 
 export interface Task {
   id: string;

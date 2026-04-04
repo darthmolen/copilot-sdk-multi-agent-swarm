@@ -42,6 +42,7 @@ swarm_store: dict[str, dict] = {}
 # Injected dependencies (set by main.py lifespan)
 _event_bus: Any = None
 _copilot_client: Any = None
+_client_factory: Any = None
 _template_loader: TemplateLoader | None = None
 
 
@@ -51,12 +52,18 @@ def _get_work_dir() -> str:
     return SWARM_WORK_DIR
 
 
-def configure(event_bus: Any, copilot_client: Any = None, template_loader: TemplateLoader | None = None) -> None:
+def configure(
+    event_bus: Any,
+    copilot_client: Any = None,
+    template_loader: TemplateLoader | None = None,
+    client_factory: Any = None,
+) -> None:
     """Inject dependencies. Called during app startup."""
-    global _event_bus, _copilot_client, _template_loader
+    global _event_bus, _copilot_client, _template_loader, _client_factory
     _event_bus = event_bus
     _copilot_client = copilot_client
     _template_loader = template_loader
+    _client_factory = client_factory
 
 
 def _create_swarm_state(swarm_id: str, goal: str, template: str | None) -> dict:
@@ -80,16 +87,40 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
     """Background task: create orchestrator and run the swarm."""
     from backend.swarm.orchestrator import SwarmOrchestrator
 
+    log.info("swarm_task_started", swarm_id=swarm_id, template=template_key,
+             goal_len=len(goal))
+
     if _event_bus is None:
-        log.error("eventbus_not_configured")
+        log.error("eventbus_not_configured", swarm_id=swarm_id)
+        return
+
+    if _copilot_client is None:
+        error_msg = (
+            "Copilot SDK client is not available. "
+            "Install the github-copilot-sdk package and ensure the CLI binary is on PATH."
+        )
+        log.error("swarm_no_client", swarm_id=swarm_id, error=error_msg)
+        swarm_store[swarm_id]["phase"] = "failed"
+        await _event_bus.emit("swarm.error", {
+            "message": error_msg, "swarm_id": swarm_id,
+        })
+        await _event_bus.emit("swarm.phase_changed", {
+            "phase": "failed", "swarm_id": swarm_id,
+        })
         return
 
     loaded_template = None
     if template_key and _template_loader:
         try:
             loaded_template = _template_loader.load(template_key)
+            log.info("swarm_template_loaded", swarm_id=swarm_id,
+                     template=template_key,
+                     workers=len(loaded_template.agents),
+                     skills=len(loaded_template.all_skill_names),
+                     has_mcp=loaded_template.mcp_servers is not None)
         except (FileNotFoundError, ValueError) as e:
-            log.warning("template_load_failed", template=template_key, error=str(e))
+            log.warning("template_load_failed", swarm_id=swarm_id,
+                        template=template_key, error=str(e))
 
     system_preamble = _template_loader.system_preamble if _template_loader else ""
     system_tools = _template_loader.system_tools if _template_loader else []
@@ -97,6 +128,9 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
 
     work_base = Path(SWARM_WORK_DIR)
     config = {"max_rounds": SWARM_MAX_ROUNDS, "timeout": SWARM_TASK_TIMEOUT}
+    log.info("swarm_config", swarm_id=swarm_id, model=SWARM_MODEL,
+             max_rounds=SWARM_MAX_ROUNDS, timeout=SWARM_TASK_TIMEOUT)
+
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
         config=config,
@@ -104,17 +138,35 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         system_tools=system_tools,
         swarm_id=swarm_id, work_base=work_base,
         model=SWARM_MODEL,
+        client_factory=_client_factory,
     )
     swarm_store[swarm_id]["orchestrator"] = orch
 
     try:
+        effective_goal = goal
+
+        # Q&A phase: leader interviews user before planning
+        if loaded_template and loaded_template.qa_enabled:
+            log.info("swarm_qa_starting", swarm_id=swarm_id)
+            swarm_store[swarm_id]["phase"] = "qa"
+            effective_goal = await orch.start_qa(goal)
+            log.info("swarm_qa_complete", swarm_id=swarm_id,
+                     refined_goal_len=len(effective_goal))
+
         swarm_store[swarm_id]["phase"] = "planning"
-        report = await orch.run(goal)
+        log.info("swarm_run_starting", swarm_id=swarm_id)
+        report = await orch.run(effective_goal)
         swarm_store[swarm_id]["phase"] = "complete"
         swarm_store[swarm_id]["report"] = report
+        log.info("swarm_run_complete", swarm_id=swarm_id,
+                 report_len=len(report) if report else 0)
     except Exception as e:
-        log.error("swarm_failed", swarm_id=swarm_id, error=str(e))
+        log.error("swarm_failed", swarm_id=swarm_id, error=str(e),
+                  exc_info=True)
         swarm_store[swarm_id]["phase"] = "failed"
+        await _event_bus.emit("swarm.phase_changed", {
+            "phase": "failed", "swarm_id": swarm_id,
+        })
 
 
 @router.post("/api/swarm/start")
@@ -177,11 +229,22 @@ async def chat_with_swarm(
     log.info("chat_request_received", swarm_id=swarm_id, message_length=len(request.message))
     orch = None
 
+    is_qa = False
     if swarm_id in swarm_store:
         state = swarm_store[swarm_id]
-        if state["phase"] != "complete":
+        phase = state["phase"]
+        if phase == "qa":
+            is_qa = True
+            orch = state.get("orchestrator")
+        elif phase == "complete":
+            orch = state.get("orchestrator")
+        else:
             raise HTTPException(status_code=409, detail="Swarm not yet complete")
-        orch = state.get("orchestrator")
+
+    # Q&A phase: route to qa_chat
+    if is_qa and orch and getattr(orch, "qa_session", None):
+        background_tasks.add_task(orch.qa_chat, request.message)
+        return {"status": "streaming"}
 
     # Create a lightweight orchestrator on-the-fly for past sessions
     if not orch or not getattr(orch, "synthesis_session_id", None):

@@ -58,6 +58,7 @@ class SwarmAgent:
         swarm_id: str | None = None,
         mcp_servers: dict | None = None,
         skill_directories: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
     ) -> None:
         self.name = name
         self.role = role
@@ -75,10 +76,13 @@ class SwarmAgent:
         self.swarm_id = swarm_id
         self.mcp_servers = mcp_servers
         self.skill_directories = skill_directories
+        self.disabled_skills = disabled_skills
         self.session: Any = None  # Set by create_session
+        self._client: Any = None  # Set by create_session if owns_client
+        self._owns_client: bool = False
         self._monitor_tasks: list[asyncio.Task[None]] = []
 
-    async def create_session(self, client: Any) -> None:
+    async def create_session(self, client: Any, *, owns_client: bool = False) -> None:
         """Create a CopilotSession with system_message mode:replace.
 
         No customAgents — uses direct system_message override for better
@@ -126,12 +130,28 @@ class SwarmAgent:
             kwargs["mcp_servers"] = self.mcp_servers
         if self.skill_directories:
             kwargs["skill_directories"] = self.skill_directories
+        if self.disabled_skills:
+            kwargs["disabled_skills"] = self.disabled_skills
 
         self.session = await client.create_session(**kwargs)
+        if owns_client:
+            self._client = client
+            self._owns_client = True
+
+    async def cleanup(self) -> None:
+        """Stop the owned client if this agent has one."""
+        if self._owns_client and self._client is not None:
+            try:
+                await self._client.stop()
+            except Exception:
+                log.warning("agent_client_stop_failed", agent=self.name)
+            self._client = None
 
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""
         self.event_bus.emit_sync("sdk_event", {"agent": self.name, "event": event})
+
+    MAX_TOOL_FAILURES = 5
 
     async def execute_task(
         self, task: Task, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
@@ -143,8 +163,10 @@ class SwarmAgent:
         error_holder: list[str] = []
         text_content: list[str] = []
         delta_parts: list[str] = []
+        consecutive_tool_failures = 0
 
         def _handler(event: Any) -> None:
+            nonlocal consecutive_tool_failures
             raw = getattr(event, "type", "")
             et = getattr(raw, "value", str(raw)).lower()
 
@@ -159,6 +181,24 @@ class SwarmAgent:
                     getattr(data, "error", None) or getattr(data, "message", "unknown error")
                 )
                 done.set()
+            # Circuit breaker: track consecutive tool failures
+            if "tool.execution_complete" in et or "tool_execution_complete" in et:
+                data = getattr(event, "data", None)
+                success = getattr(data, "success", None)
+                if success is False:
+                    consecutive_tool_failures += 1
+                    if consecutive_tool_failures >= self.MAX_TOOL_FAILURES:
+                        error_msg = getattr(data, "error", "") or ""
+                        error_holder.append(
+                            f"Circuit breaker: {consecutive_tool_failures} consecutive "
+                            f"tool failures. Last error: {error_msg}"
+                        )
+                        log.warning("circuit_breaker_tripped",
+                                    agent=self.name, task_id=task.id,
+                                    failures=consecutive_tool_failures)
+                        done.set()
+                elif success is True:
+                    consecutive_tool_failures = 0
             # Accumulate streamed deltas as fallback
             if "assistant.message_delta" in et:
                 data = getattr(event, "data", None)
@@ -202,7 +242,7 @@ class SwarmAgent:
                 return
 
             if error_holder:
-                await self.task_board.update_status(task.id, "failed")
+                await self.task_board.update_status(task.id, "failed", error_holder[0])
                 return
 
             # Check if agent already completed via task_update tool

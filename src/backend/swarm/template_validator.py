@@ -102,6 +102,26 @@ def validate_template_file(filename: str, content: str) -> ValidationResult:
         if not body.strip():
             errors.append(ValidationError(f"{filename} must have non-empty body after frontmatter"))
 
+    # skills validation (worker files only)
+    skills = frontmatter.get("skills")
+    if skills is not None:
+        if not isinstance(skills, list):
+            errors.append(ValidationError("skills must be a list"))
+        elif skills != ["*"]:
+            for s in skills:
+                if not isinstance(s, str):
+                    errors.append(
+                        ValidationError(f"Each skill must be a string, got: {type(s).__name__}")
+                    )
+
+    # maxInstances validation (worker files only)
+    max_instances = frontmatter.get("maxInstances")
+    if max_instances is not None:
+        if not isinstance(max_instances, int) or isinstance(max_instances, bool) or max_instances < 1:
+            errors.append(
+                ValidationError("maxInstances must be a positive integer (>= 1)")
+            )
+
     # Tools validation (applies to all files with tools)
     tools = frontmatter.get("tools")
     if tools is not None:

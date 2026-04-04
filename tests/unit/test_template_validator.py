@@ -104,6 +104,154 @@ name: leader
         assert result.valid is False
         assert any("body" in e.message.lower() or "empty" in e.message.lower() for e in result.errors)
 
+    # -----------------------------------------------------------------------
+    # maxInstances validation
+    # -----------------------------------------------------------------------
+
+    def test_valid_worker_with_max_instances_passes(self) -> None:
+        """Worker with maxInstances: 3 passes validation."""
+        content = '''---
+name: scaler
+displayName: Scalable Worker
+description: Scales out for parallel tasks
+maxInstances: 3
+tools:
+  - task_update
+---
+
+You are a scalable worker.
+'''
+        result = validate_template_file("worker-scaler.md", content)
+        assert result.valid is True
+
+    def test_max_instances_zero_fails(self) -> None:
+        """maxInstances: 0 fails validation."""
+        content = '''---
+name: broken
+displayName: Broken Worker
+description: Zero instances
+maxInstances: 0
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-broken.md", content)
+        assert result.valid is False
+        assert any("maxinstances" in e.message.lower() for e in result.errors)
+
+    def test_max_instances_negative_fails(self) -> None:
+        """maxInstances: -1 fails validation."""
+        content = '''---
+name: broken
+displayName: Broken Worker
+description: Negative instances
+maxInstances: -1
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-broken.md", content)
+        assert result.valid is False
+        assert any("maxinstances" in e.message.lower() for e in result.errors)
+
+    def test_max_instances_non_integer_fails(self) -> None:
+        """maxInstances: 'three' fails validation."""
+        content = '''---
+name: broken
+displayName: Broken Worker
+description: String instances
+maxInstances: three
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-broken.md", content)
+        assert result.valid is False
+        assert any("maxinstances" in e.message.lower() for e in result.errors)
+
+    def test_max_instances_float_fails(self) -> None:
+        """maxInstances: 2.5 fails validation."""
+        content = '''---
+name: broken
+displayName: Broken Worker
+description: Float instances
+maxInstances: 2.5
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-broken.md", content)
+        assert result.valid is False
+        assert any("maxinstances" in e.message.lower() for e in result.errors)
+
+    def test_worker_without_max_instances_passes(self) -> None:
+        """Existing workers without maxInstances still pass (backward compat)."""
+        content = '''---
+name: classic
+displayName: Classic Worker
+description: No maxInstances field
+tools:
+  - task_update
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-classic.md", content)
+        assert result.valid is True
+
+    # -----------------------------------------------------------------------
+    # skills validation
+    # -----------------------------------------------------------------------
+
+    def test_skills_field_must_be_list(self) -> None:
+        """Worker with skills: 'not-a-list' fails validation."""
+        content = '''---
+name: broken
+displayName: Broken Worker
+description: Bad skills
+skills: not-a-list
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-broken.md", content)
+        assert result.valid is False
+        assert any("skills" in e.message.lower() for e in result.errors)
+
+    def test_skills_entries_must_be_strings(self) -> None:
+        """Worker with skills: [123] fails validation."""
+        content = '''---
+name: broken
+displayName: Broken Worker
+description: Numeric skills
+skills:
+  - 123
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-broken.md", content)
+        assert result.valid is False
+        assert any("skill" in e.message.lower() and "string" in e.message.lower() for e in result.errors)
+
+    def test_valid_skills_field_passes(self) -> None:
+        """Worker with skills: [azure-architect] passes validation."""
+        content = '''---
+name: valid
+displayName: Valid Worker
+description: Good skills
+skills:
+  - azure-architect
+  - entra-expert
+tools:
+  - task_update
+---
+
+Body text.
+'''
+        result = validate_template_file("worker-valid.md", content)
+        assert result.valid is True
+
     def test_valid_template_yaml_passes(self) -> None:
         """A well-formed _template.yaml passes validation."""
         content = '''---

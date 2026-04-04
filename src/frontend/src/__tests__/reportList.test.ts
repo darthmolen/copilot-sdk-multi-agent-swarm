@@ -88,12 +88,50 @@ describe('buildReportList', () => {
     expect(result[1].status).toBe('live');
   });
 
-  it('skips active swarms without leaderReport', () => {
+  it('includes active swarm in executing phase as running', () => {
     const swarms: Record<string, SwarmState> = {
       's1': { ...baseSwarm, phase: 'executing', leaderReport: '' },
     };
     const result = buildReportList(['s1'], [], swarms, []);
-    expect(result).toHaveLength(0);
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe('running');
+    expect(result[0].swarmId).toBe('s1');
+  });
+
+  it('includes active swarm in qa phase as running', () => {
+    const swarms: Record<string, SwarmState> = {
+      's1': { ...baseSwarm, phase: 'qa', leaderReport: '' },
+    };
+    const result = buildReportList(['s1'], [], swarms, []);
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe('running');
+  });
+
+  it('includes active swarm in planning phase as running', () => {
+    const swarms: Record<string, SwarmState> = {
+      's1': { ...baseSwarm, phase: 'planning', leaderReport: '' },
+    };
+    const result = buildReportList(['s1'], [], swarms, []);
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe('running');
+  });
+
+  it('running items sort before live and saved', () => {
+    const swarms: Record<string, SwarmState> = {
+      'run': { ...baseSwarm, phase: 'executing', leaderReport: '' },
+      'done': { ...baseSwarm, phase: 'complete', leaderReport: '# Done' },
+    };
+    const result = buildReportList(['run'], ['done'], swarms, []);
+    expect(result[0].status).toBe('running');
+    expect(result[1].status).toBe('live');
+  });
+
+  it('running swarm title includes truncated swarm ID', () => {
+    const swarms: Record<string, SwarmState> = {
+      'abcdef12-3456-7890': { ...baseSwarm, phase: 'executing', leaderReport: '' },
+    };
+    const result = buildReportList(['abcdef12-3456-7890'], [], swarms, []);
+    expect(result[0].title).toContain('abcdef12');
   });
 
   it('extracts title from first heading line of report', () => {

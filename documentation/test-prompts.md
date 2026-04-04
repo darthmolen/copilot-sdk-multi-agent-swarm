@@ -2,6 +2,12 @@
 
 Here are some prompts we used to generate some of the documents seen in documentation/example_research_output.
 
+## Azure Solutions Agent
+
+### IT Centralization
+
+I need to centralize the applications IT manages. They are a mix of modern and legacy systems. We want to containerize them and have the ability to scale-up and scale-down. we have need of a service bus for app messaging and need alerts based on high usage and or errors in the application itself.
+
 ## Deep Research Prompts
 
 ### Pre-Fill

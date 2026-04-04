@@ -19,7 +19,7 @@ from backend.swarm.prompts import (
 )
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
-from backend.swarm.template_loader import LoadedTemplate
+from backend.swarm.template_loader import AgentDefinition, LoadedTemplate
 from backend.swarm.tools import create_plan_tool
 
 log = structlog.get_logger()
@@ -44,6 +44,12 @@ async def _create_session_with_tools(
     model: str | None = None,
 ) -> Any:
     """Create a session with the given tools, compatible with real SDK and mocks."""
+    tool_names = [t.name for t in tools] if tools else []
+    log.info("session_creating", session_id=session_id, model=model,
+             tool_count=len(tools) if tools else 0, tool_names=tool_names,
+             has_mcp=mcp_servers is not None,
+             has_skills=skill_directories is not None,
+             prompt_len=len(system_prompt))
     try:
         kwargs: dict[str, Any] = {
             "on_permission_request": _approve_all,
@@ -58,9 +64,12 @@ async def _create_session_with_tools(
             kwargs["skill_directories"] = skill_directories
         if model:
             kwargs["model"] = model
-        return await client.create_session(**kwargs)
+        session = await client.create_session(**kwargs)
+        log.info("session_created", session_id=session_id)
+        return session
     except TypeError:
         # Fallback for mocks that don't accept all SDK kwargs
+        log.debug("session_create_fallback", session_id=session_id)
         return await client.create_session(tools=tools)
 
 
@@ -78,13 +87,16 @@ class SwarmOrchestrator:
         model: str = "gemini-3-pro-preview",
         swarm_id: str | None = None,
         work_base: Path | None = None,
+        client_factory: Any | None = None,
     ) -> None:
         self.client = client
+        self.client_factory = client_factory
         self.event_bus = event_bus
         self.task_board = TaskBoard()
         self.inbox = InboxSystem()
         self.registry = TeamRegistry()
         self.agents: dict[str, SwarmAgent] = {}
+        self._agent_defs: dict[str, AgentDefinition] = {}
         default_config: dict[str, Any] = {"max_rounds": 3, "timeout": 1800}
         self.config = {**default_config, **(config or {})}
         self.template = template
@@ -98,6 +110,10 @@ class SwarmOrchestrator:
         self.synthesis_session_id: str | None = None
         self._chat_lock = asyncio.Lock()
         self._cancelled = False
+        self.qa_session: Any = None
+        self.qa_complete = asyncio.Event()
+        self.qa_refined_goal: str | None = None
+        self._known_files: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -108,6 +124,13 @@ class SwarmOrchestrator:
         if self.swarm_id:
             data = {**data, "swarm_id": self.swarm_id}
         await self.event_bus.emit(event_type, data)
+
+    async def _cleanup_agents(self) -> None:
+        """Stop per-agent clients after execution completes."""
+        for agent in self.agents.values():
+            await agent.cleanup()
+        log.info("agent_clients_cleaned_up", swarm_id=self.swarm_id,
+                 agent_count=len(self.agents))
 
     async def cancel(self) -> None:
         """Cancel the swarm execution."""
@@ -255,18 +278,204 @@ class SwarmOrchestrator:
             })
             return response
 
+    async def start_qa(self, goal: str) -> str:
+        """Start a Q&A session with the leader. Returns the refined goal.
+
+        Creates a leader session with the begin_swarm tool, sends the user's
+        goal, then waits for the leader to call begin_swarm (triggered by
+        user chat messages via qa_chat).
+        """
+        from backend.swarm.tools import create_begin_swarm_tool
+
+        leader_prompt = self.template.leader_prompt if self.template else ""
+        goal_holder: list[str] = []
+        begin_tool = create_begin_swarm_tool(goal_holder, self.qa_complete)
+
+        mcp_servers = self.template.mcp_servers if self.template else None
+        skill_dirs = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
+
+        log.info("qa_session_creating", swarm_id=self.swarm_id)
+        self.qa_session = await _create_session_with_tools(
+            self.client, leader_prompt, [begin_tool],
+            mcp_servers=mcp_servers, skill_directories=skill_dirs,
+            model=self.model,
+        )
+
+        await self._emit("swarm.phase_changed", {"phase": "qa"})
+
+        # Stream the leader's initial response (opening interview question)
+        message_id = f"qa-init-{self.swarm_id}"
+        done = asyncio.Event()
+        delta_parts: list[str] = []
+
+        def _on_init_event(event: Any) -> None:
+            raw = getattr(event, "type", "")
+            et = getattr(raw, "value", str(raw)).lower()
+            if "idle" in et:
+                done.set()
+            elif "session" in et and "error" in et:
+                done.set()
+            if "assistant.message" in et and "delta" not in et:
+                data = getattr(event, "data", None)
+                content = getattr(data, "content", None)
+                if content and str(content).strip():
+                    delta_parts.append(str(content))
+                    self.event_bus.emit_sync("leader.chat_delta", {
+                        "delta": str(content),
+                        "message_id": message_id,
+                        "swarm_id": self.swarm_id,
+                    })
+            if "assistant.message_delta" in et:
+                data = getattr(event, "data", None)
+                delta = getattr(data, "content", "")
+                if delta:
+                    delta_parts.append(str(delta))
+                    self.event_bus.emit_sync("leader.chat_delta", {
+                        "delta": str(delta),
+                        "message_id": message_id,
+                        "swarm_id": self.swarm_id,
+                    })
+
+        unsubscribe = self.qa_session.on(_on_init_event)
+        timeout = self.config.get("timeout", 300)
+
+        # Send the user's goal — the leader will read it and start asking questions
+        log.info("qa_goal_sent", swarm_id=self.swarm_id, goal_len=len(goal))
+        try:
+            await self.qa_session.send(
+                f"A user has submitted the following goal. Interview them to gather "
+                f"enough context to right-size the solution, then call begin_swarm "
+                f"with a refined goal.\n\nUser's goal:\n{goal}"
+            )
+            await asyncio.wait_for(done.wait(), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            log.warning("qa_init_response_timeout", swarm_id=self.swarm_id)
+        finally:
+            unsubscribe()
+
+        # Emit complete message for the initial response
+        if delta_parts:
+            await self._emit("leader.chat_message", {
+                "content": "".join(delta_parts),
+                "message_id": message_id,
+            })
+
+        # Wait for begin_swarm tool call (set by qa_chat messages or leader auto-completing)
+        timeout = self.config.get("timeout", 300)
+        try:
+            await asyncio.wait_for(self.qa_complete.wait(), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            log.warning("qa_timeout", swarm_id=self.swarm_id)
+
+        refined = goal_holder[0] if goal_holder else self.qa_refined_goal or goal
+        self.qa_refined_goal = refined
+        log.info("qa_complete", swarm_id=self.swarm_id, refined_len=len(refined))
+        return refined
+
+    async def qa_chat(self, message: str) -> str:
+        """Send a user message to the Q&A session and return the leader's response."""
+        if not self.qa_session:
+            raise ValueError("No Q&A session available")
+
+        log.info("qa_chat_start", swarm_id=self.swarm_id, message_len=len(message))
+
+        async with self._chat_lock:
+            done = asyncio.Event()
+            text_content: list[str] = []
+            delta_parts: list[str] = []
+            message_id = f"qa-{id(message)}"
+
+            def _on_event(event: Any) -> None:
+                raw = getattr(event, "type", "")
+                et = getattr(raw, "value", str(raw)).lower()
+                if "idle" in et:
+                    done.set()
+                elif "session" in et and "error" in et:
+                    done.set()
+                if "assistant.message" in et and "delta" not in et:
+                    data = getattr(event, "data", None)
+                    content = getattr(data, "content", None)
+                    if content and str(content).strip():
+                        text_content.append(str(content))
+                        self.event_bus.emit_sync("leader.chat_delta", {
+                            "delta": str(content),
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        })
+                if "assistant.message_delta" in et:
+                    data = getattr(event, "data", None)
+                    delta = getattr(data, "content", "")
+                    if delta:
+                        delta_parts.append(str(delta))
+                        self.event_bus.emit_sync("leader.chat_delta", {
+                            "delta": str(delta),
+                            "message_id": message_id,
+                            "swarm_id": self.swarm_id,
+                        })
+
+            unsubscribe = self.qa_session.on(_on_event)
+            timeout = self.config.get("timeout", 300)
+
+            try:
+                await self.qa_session.send(message)
+                await asyncio.wait_for(done.wait(), timeout=timeout)
+            except (TimeoutError, asyncio.TimeoutError):
+                log.warning("qa_chat_timeout", swarm_id=self.swarm_id)
+            finally:
+                unsubscribe()
+
+            response = (
+                "\n".join(text_content) if text_content
+                else "".join(delta_parts) if delta_parts
+                else ""
+            )
+            log.info("qa_chat_complete", swarm_id=self.swarm_id,
+                     response_len=len(response))
+            await self._emit("leader.chat_message", {
+                "content": response,
+                "message_id": message_id,
+            })
+            return response
+
     async def run(self, goal: str) -> str:
         """Full swarm lifecycle. Returns final report."""
         try:
             if self.work_dir:
                 self.work_dir.mkdir(parents=True, exist_ok=True)
                 log.info("work_dir_created", path=str(self.work_dir))
+                (self.work_dir / "goal.md").write_text(
+                    f"# Goal\n\n{goal}\n", encoding="utf-8"
+                )
+
+            log.info("swarm_phase_planning", swarm_id=self.swarm_id,
+                     goal_len=len(goal),
+                     template=self.template.key if self.template else None,
+                     client_type=type(self.client).__name__ if self.client else "None")
+            await self._emit("swarm.phase_changed", {"phase": "planning"})
             plan = await self._plan(goal)
+            task_count = len(plan.get("tasks", []))
+            log.info("swarm_plan_received", swarm_id=self.swarm_id,
+                     task_count=task_count)
+
+            log.info("swarm_phase_spawning", swarm_id=self.swarm_id)
             await self._spawn(plan)
+            log.info("swarm_agents_spawned", swarm_id=self.swarm_id,
+                     agent_count=len(self.agents))
+
+            log.info("swarm_phase_executing", swarm_id=self.swarm_id)
             await self._execute()
+            await self._cleanup_agents()
+
+            log.info("swarm_phase_synthesizing", swarm_id=self.swarm_id)
             report = await self._synthesize(goal)
+            log.info("swarm_complete", swarm_id=self.swarm_id,
+                     report_len=len(report) if report else 0)
             return report
         except Exception as e:
+            log.error("swarm_lifecycle_error", swarm_id=self.swarm_id,
+                      error=str(e), exc_info=True)
             await self._emit("swarm.error", {"message": str(e)})
             raise
 
@@ -323,8 +532,6 @@ class SwarmOrchestrator:
         plan = plan_holder[0]
 
         # Create tasks on the board
-        await self._emit("swarm.phase_changed", {"phase": "planning"})
-
         tasks_data = plan.get("tasks", [])
         task_ids: list[str] = [f"task-{idx}" for idx in range(len(tasks_data))]
 
@@ -363,9 +570,11 @@ class SwarmOrchestrator:
             agent_available_tools: list[str] | None = None
             agent_prompt_template: str | None = None
             system_preamble = ""
+            agent_def: AgentDefinition | None = None
             if self.template:
                 agent_def = next((a for a in self.template.agents if a.name == name), None)
                 if agent_def:
+                    self._agent_defs[name] = agent_def
                     display_name = agent_def.display_name
                     role = agent_def.description or role
                     agent_available_tools = agent_def.tools  # None = all, list = built-in whitelist
@@ -378,6 +587,23 @@ class SwarmOrchestrator:
             skill_dirs = (
                 [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
             )
+
+            # Compute per-worker disabled_skills from skills allowlist
+            disabled_skills: list[str] | None = None
+            if self.template and agent_def and agent_def.skills is not None:
+                if agent_def.skills == ["*"] or not agent_def.skills:
+                    # Wildcard = no filtering; empty = disable all
+                    if not agent_def.skills:
+                        disabled_skills = sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                else:
+                    # Map directory names to actual skill names
+                    worker_skill_names = {
+                        self.template.skill_name_map[dir_name]
+                        for dir_name in agent_def.skills
+                        if dir_name in self.template.skill_name_map
+                    }
+                    to_disable = self.template.all_skill_names - worker_skill_names
+                    disabled_skills = sorted(to_disable) if to_disable else None
 
             agent = SwarmAgent(
                 name=name,
@@ -396,8 +622,13 @@ class SwarmOrchestrator:
                 swarm_id=self.swarm_id,
                 mcp_servers=mcp_servers,
                 skill_directories=skill_dirs,
+                disabled_skills=disabled_skills,
             )
-            await agent.create_session(self.client)
+            if self.client_factory:
+                agent_client = await self.client_factory()
+                await agent.create_session(agent_client, owns_client=True)
+            else:
+                await agent.create_session(self.client)
             self.agents[name] = agent
 
             await self.registry.register(name, role, display_name)
@@ -412,11 +643,67 @@ class SwarmOrchestrator:
         )
 
     # ------------------------------------------------------------------
+    # Work directory file watcher
+    # ------------------------------------------------------------------
+
+    async def _scan_work_dir(self) -> None:
+        """Scan work directory for new files and emit file.created events."""
+        if not self.work_dir or not self.work_dir.is_dir():
+            return
+        for f in sorted(self.work_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            rel_path = str(f.relative_to(self.work_dir))
+            if rel_path not in self._known_files:
+                self._known_files.add(rel_path)
+                await self._emit("file.created", {
+                    "filename": rel_path,
+                    "size_bytes": f.stat().st_size,
+                })
+
+    # ------------------------------------------------------------------
+    # Ephemeral agent creation (for scalable workers)
+    # ------------------------------------------------------------------
+
+    async def _create_ephemeral_agent(self, worker_name: str) -> SwarmAgent:
+        """Create an ephemeral SwarmAgent with its own session for a scalable worker."""
+        base = self.agents[worker_name]
+        ephemeral = SwarmAgent(
+            name=base.name,
+            role=base.role,
+            display_name=base.display_name,
+            task_board=base.task_board,
+            inbox=base.inbox,
+            registry=base.registry,
+            event_bus=base.event_bus,
+            available_tools=base.available_tools,
+            prompt_template=base.prompt_template,
+            system_preamble=base.system_preamble,
+            system_tools=base.system_tools,
+            model=base.model,
+            work_dir=base.work_dir,
+            swarm_id=base.swarm_id,
+            mcp_servers=base.mcp_servers,
+            skill_directories=base.skill_directories,
+            disabled_skills=base.disabled_skills,
+        )
+        if self.client_factory:
+            agent_client = await self.client_factory()
+            await ephemeral.create_session(agent_client, owns_client=True)
+        else:
+            await ephemeral.create_session(self.client)
+        return ephemeral
+
+    # ------------------------------------------------------------------
     # Phase 3: Round-based execution
     # ------------------------------------------------------------------
 
     async def _execute(self) -> None:
-        """Round-based execution. One task per worker per round."""
+        """Round-based execution with max_instances support.
+
+        Workers with max_instances > 1 can run multiple tasks concurrently
+        via ephemeral agent sessions.
+        """
         max_rounds = self.config.get("max_rounds", 3)
         timeout = self.config.get("timeout", 300)
 
@@ -435,10 +722,17 @@ class SwarmOrchestrator:
                 {"round": round_num, "runnable_count": len(runnable)},
             )
 
-            assigned: dict[str, Task] = {}
+            # Build per-worker assignment lists, respecting max_instances
+            assigned: dict[str, list[Task]] = {}
             for task in runnable:
-                if task.worker_name not in assigned and task.worker_name in self.agents:
-                    assigned[task.worker_name] = task
+                worker_name = task.worker_name
+                if worker_name not in self.agents:
+                    continue
+                agent_def = self._agent_defs.get(worker_name)
+                max_inst = agent_def.max_instances if agent_def else 1
+                worker_tasks = assigned.setdefault(worker_name, [])
+                if len(worker_tasks) < max_inst:
+                    worker_tasks.append(task)
 
             # Mark agents as working
             for worker_name in assigned:
@@ -446,15 +740,45 @@ class SwarmOrchestrator:
                     "agent_name": worker_name, "status": "working",
                 })
 
-            results = await asyncio.gather(
-                *[
-                    self.agents[worker_name].execute_task(task, timeout=timeout)
-                    for worker_name, task in assigned.items()
-                ],
-                return_exceptions=True,
-            )
+            # Prepare execution: base agent for first task, ephemeral for rest
+            task_agent_pairs: list[tuple[str, Task]] = []
+            ephemeral_agents: list[SwarmAgent] = []
 
-            for (worker_name, task), result in zip(assigned.items(), results):
+            # Phase 1: Collect ephemeral agent creation coroutines
+            creation_coros: list[Any] = []
+            execution_plan: list[tuple[SwarmAgent | None, str, Task]] = []
+            for worker_name, tasks in assigned.items():
+                base_agent = self.agents[worker_name]
+                for idx, task in enumerate(tasks):
+                    if idx == 0:
+                        execution_plan.append((base_agent, worker_name, task))
+                    else:
+                        creation_coros.append(self._create_ephemeral_agent(worker_name))
+                        execution_plan.append((None, worker_name, task))
+
+            # Phase 2: Create all ephemeral agents in parallel
+            created = await asyncio.gather(*creation_coros) if creation_coros else []
+            ephemeral_agents.extend(created)
+
+            # Phase 3: Assign agents and build execution coroutines
+            coros = []
+            ephemeral_idx = 0
+            for agent_or_none, worker_name, task in execution_plan:
+                if agent_or_none is not None:
+                    coros.append(agent_or_none.execute_task(task, timeout=timeout))
+                else:
+                    coros.append(ephemeral_agents[ephemeral_idx].execute_task(task, timeout=timeout))
+                    ephemeral_idx += 1
+                task_agent_pairs.append((worker_name, task))
+
+            results = await asyncio.gather(*coros, return_exceptions=True)
+
+            # Cleanup ephemeral agents (stop owned clients to avoid CLI subprocess leaks)
+            for eph in ephemeral_agents:
+                await eph.cleanup()
+            ephemeral_agents.clear()
+
+            for (worker_name, task), result in zip(task_agent_pairs, results):
                 if isinstance(result, Exception):
                     log.warning("agent_task_failed", agent=worker_name, task_id=task.id, error=str(result))
                     current_task = next(
@@ -488,6 +812,20 @@ class SwarmOrchestrator:
                 await self._emit("task.updated", {"task": t.to_dict()})
 
             await self._emit("swarm.round_end", {"round": round_num})
+            await self._scan_work_dir()
+
+        # Warn if tasks remain after all rounds exhausted
+        all_tasks = await self.task_board.get_tasks()
+        unfinished = [t for t in all_tasks if t.status not in (TaskStatus.COMPLETED,)]
+        if unfinished:
+            log.warning("swarm_rounds_exhausted",
+                        swarm_id=self.swarm_id,
+                        remaining_tasks=len(unfinished),
+                        max_rounds=max_rounds)
+            await self._emit("swarm.rounds_exhausted", {
+                "remaining_tasks": len(unfinished),
+                "max_rounds": max_rounds,
+            })
 
     # ------------------------------------------------------------------
     # Phase 4: Synthesis (tool-based structured output)
@@ -601,5 +939,6 @@ class SwarmOrchestrator:
 
         await self._emit("leader.report", {"content": report})
         await self._emit("swarm.phase_changed", {"phase": "complete"})
+        await self._scan_work_dir()
         await self._emit("swarm.synthesis_complete", {})
         return report
