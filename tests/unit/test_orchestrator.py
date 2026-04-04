@@ -2091,6 +2091,7 @@ class TestSwarmAgentResumeSession:
 
         mock_session = MagicMock()
         mock_session.on = MagicMock()
+        mock_session.send = AsyncMock()
         client = MagicMock()
         client.resume_session = AsyncMock(return_value=mock_session)
 
@@ -2099,7 +2100,9 @@ class TestSwarmAgentResumeSession:
         client.resume_session.assert_awaited_once()
         call_args = client.resume_session.call_args
         assert call_args[0][0] == "test-session-123"
+        assert call_args.kwargs["on_permission_request"] is not None
         mock_session.on.assert_called_once()
+        mock_session.send.assert_awaited_once_with("try again")
 
     async def test_resume_without_session_id_raises(self, event_bus: EventBus) -> None:
         """resume_session() raises RuntimeError if no session_id stored."""
@@ -2154,6 +2157,7 @@ class TestSwarmAgentResumeSession:
 
         new_session = MagicMock()
         new_session.on = MagicMock()
+        new_session.send = AsyncMock()
         client = MagicMock()
         client.resume_session = AsyncMock(return_value=new_session)
 

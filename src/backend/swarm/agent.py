@@ -165,6 +165,8 @@ class SwarmAgent:
             on_permission_request=_approve_all,
         )
         self.session.on(self._on_event)
+        if nudge:
+            await self.session.send(nudge)
         log.info("agent_session_resumed", agent=self.name, session_id=self.session_id)
 
     def _on_event(self, event: Any) -> None:
