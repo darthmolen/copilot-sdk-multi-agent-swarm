@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from backend.mcp.deps import get_deps
@@ -46,8 +47,7 @@ def get_session_manager():  # type: ignore[return-type]
 def _resolve_swarm_id(swarm_id: str | None) -> dict[str, Any]:
     """Return the swarm state dict for the given (or inferred) swarm_id.
 
-    Returns a dict with an "error" key on failure so tool callers
-    always get a serializable response.
+    Raises ToolError if the swarm cannot be resolved.
     """
     deps = get_deps()
     store = deps.swarm_store
@@ -55,14 +55,14 @@ def _resolve_swarm_id(swarm_id: str | None) -> dict[str, Any]:
     if swarm_id is not None:
         state = store.get(swarm_id)
         if state is None:
-            return {"error": f"Swarm '{swarm_id}' not found. Available: {list(store.keys())}"}
+            raise ToolError(f"Swarm '{swarm_id}' not found. Available: {list(store.keys())}")
         return dict(state)
 
     if len(store) == 0:
-        return {"error": "No active swarms."}
+        raise ToolError("No active swarms.")
     if len(store) == 1:
         return dict(next(iter(store.values())))
-    return {"error": f"Multiple swarms active. Specify swarm_id. Available: {list(store.keys())}"}
+    raise ToolError(f"Multiple swarms active. Specify swarm_id. Available: {list(store.keys())}")
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +89,6 @@ async def get_active_swarms() -> list[dict[str, Any]]:
 async def get_swarm_status(swarm_id: str | None = None) -> dict:
     """Get current swarm phase, round number, active agent count, and task counts."""
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     orch = state.get("orchestrator")
     if orch is None:
@@ -118,11 +116,9 @@ async def list_tasks(
     swarm_id: str | None = None,
     status: str | None = None,
     worker: str | None = None,
-) -> list[dict] | dict:
+) -> list[dict]:
     """List all tasks, optionally filtered by status or worker name."""
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     orch = state["orchestrator"]
     tasks = await orch.service.task_board.get_tasks(owner=worker)
@@ -137,15 +133,13 @@ async def list_tasks(
 async def get_task_detail(swarm_id: str | None = None, task_id: str = "") -> dict:
     """Get full detail for a specific task including result and timeline."""
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     orch = state["orchestrator"]
     tasks = await orch.service.task_board.get_tasks()
     for t in tasks:
         if t.id == task_id:
             return t.to_dict()
-    return {"error": f"Task '{task_id}' not found."}
+    raise ToolError(f"Task '{task_id}' not found.")
 
 
 @mcp.tool()
@@ -153,16 +147,14 @@ async def get_recent_events(
     swarm_id: str | None = None,
     count: int = 20,
     since: str | None = None,
-) -> list[dict] | dict:
+) -> list[dict]:
     """Get recent swarm events. Requires database persistence."""
     deps = get_deps()
 
     if deps.repository is None:
-        return {"error": "Event history requires database persistence (DATABASE_URL)."}
+        raise ToolError("Event history requires database persistence (DATABASE_URL).")
 
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     since_dt = None
     if since is not None:
@@ -178,11 +170,9 @@ async def get_recent_events(
 
 
 @mcp.tool()
-async def list_agents(swarm_id: str | None = None) -> list[dict] | dict:
+async def list_agents(swarm_id: str | None = None) -> list[dict]:
     """List all agents with their roles, status, and tasks completed."""
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     orch = state["orchestrator"]
     agents = await orch.service.registry.get_all()
@@ -199,12 +189,10 @@ async def list_agents(swarm_id: str | None = None) -> list[dict] | dict:
 
 
 @mcp.tool()
-async def list_artifacts(swarm_id: str | None = None) -> list[dict] | dict:
+async def list_artifacts(swarm_id: str | None = None) -> list[dict]:
     """List files created in the swarm work directory."""
     deps = get_deps()
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     swarm_dir = Path(deps.work_dir) / state["swarm_id"]
     if not swarm_dir.is_dir():
@@ -228,18 +216,16 @@ async def read_artifact(swarm_id: str | None = None, path: str = "") -> dict:
     """Read a file from the swarm work directory. Path is relative to the swarm dir."""
     deps = get_deps()
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     swarm_dir = Path(deps.work_dir) / state["swarm_id"]
     target = (swarm_dir / path).resolve()
 
     # Path traversal guard
     if not str(target).startswith(str(swarm_dir.resolve())):
-        return {"error": "Path traversal not allowed."}
+        raise ToolError("Path traversal not allowed.")
 
     if not target.is_file():
-        return {"error": f"File not found: {path}"}
+        raise ToolError(f"File not found: {path}")
 
     return {"path": path, "content": target.read_text()}
 
@@ -253,13 +239,11 @@ async def read_artifact(swarm_id: str | None = None, path: str = "") -> dict:
 async def restart_agent(swarm_id: str | None = None, agent_name: str = "") -> dict:
     """Restart a stuck or failed agent by recreating its session."""
     state = _resolve_swarm_id(swarm_id)
-    if "error" in state:
-        return state
 
     orch = state["orchestrator"]
     try:
         await orch.restart_agent(agent_name)
     except KeyError as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
 
     return {"ok": True, "agent_name": agent_name}
