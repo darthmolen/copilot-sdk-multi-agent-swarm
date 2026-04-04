@@ -182,3 +182,71 @@ class TestSwarmTableSchema:
         col = swarms.c.max_rounds
         assert col.server_default is not None
         assert col.server_default.arg == "8"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# TestListSwarmsByPhase
+# ---------------------------------------------------------------------------
+
+
+class TestListSwarmsByPhase:
+    async def test_filters_by_single_phase(self) -> None:
+        """list_swarms_by_phase('executing') returns only executing swarms."""
+        engine, _mock_conn, read_conn = _make_engine()
+
+        # Simulate rows returned from DB
+        fake_rows = [
+            {"id": uuid4(), "goal": "A", "phase": "executing"},
+        ]
+        read_conn.execute = AsyncMock(
+            return_value=MagicMock(mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=fake_rows))))
+        )
+
+        repo = SwarmRepository(engine)
+        result = await repo.list_swarms_by_phase("executing")
+
+        assert len(result) == 1
+        assert result[0]["phase"] == "executing"
+
+        # Verify the SQL statement contains WHERE ... IN clause
+        stmt = read_conn.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        sql_text = str(compiled)
+        assert "IN" in sql_text.upper()
+        assert "phase" in sql_text
+
+    async def test_filters_by_multiple_phases(self) -> None:
+        """list_swarms_by_phase('executing', 'planning') returns both."""
+        engine, _mock_conn, read_conn = _make_engine()
+
+        fake_rows = [
+            {"id": uuid4(), "goal": "A", "phase": "executing"},
+            {"id": uuid4(), "goal": "B", "phase": "planning"},
+        ]
+        read_conn.execute = AsyncMock(
+            return_value=MagicMock(mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=fake_rows))))
+        )
+
+        repo = SwarmRepository(engine)
+        result = await repo.list_swarms_by_phase("executing", "planning")
+
+        assert len(result) == 2
+
+        # Verify the SQL statement includes both phases in IN clause
+        stmt = read_conn.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        sql_text = str(compiled)
+        assert "IN" in sql_text.upper()
+
+    async def test_returns_empty_for_no_matches(self) -> None:
+        """Returns empty list when no swarms match."""
+        engine, _mock_conn, read_conn = _make_engine()
+
+        read_conn.execute = AsyncMock(
+            return_value=MagicMock(mappings=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+        )
+
+        repo = SwarmRepository(engine)
+        result = await repo.list_swarms_by_phase("nonexistent_phase")
+
+        assert result == []

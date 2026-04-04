@@ -156,3 +156,79 @@ class TestSwarmServiceRoundTracking:
         await service.update_round(3)
 
         assert service._current_round == 3
+
+
+# ---------------------------------------------------------------
+# Load restores state
+# ---------------------------------------------------------------
+
+
+def _make_fake_state(swarm_id: str, phase: str, current_round: int) -> dict:
+    """Build a minimal state dict mimicking repo.load_swarm_state() output."""
+    return {
+        "swarm": {
+            "id": swarm_id,
+            "goal": "Test goal",
+            "phase": phase,
+            "current_round": current_round,
+            "template_key": None,
+        },
+        "tasks": [],
+        "agents": [],
+        "messages": [],
+        "files": [],
+    }
+
+
+class TestLoadRestoresState:
+    async def test_load_restores_phase_from_db(self) -> None:
+        """load() sets _phase from persisted swarm data."""
+        mock_repo = AsyncMock()
+        swarm_id = str(uuid4())
+        mock_repo.load_swarm_state.return_value = _make_fake_state(
+            swarm_id, phase="suspended", current_round=0
+        )
+
+        service = SwarmService(repo=mock_repo)
+        await service.load(swarm_id)
+
+        assert service._phase == "suspended"
+
+    async def test_load_restores_current_round(self) -> None:
+        """load() sets _current_round from persisted swarm data."""
+        mock_repo = AsyncMock()
+        swarm_id = str(uuid4())
+        mock_repo.load_swarm_state.return_value = _make_fake_state(
+            swarm_id, phase="executing", current_round=5
+        )
+
+        service = SwarmService(repo=mock_repo)
+        await service.load(swarm_id)
+
+        assert service._current_round == 5
+
+    async def test_load_defaults_phase_when_missing(self) -> None:
+        """load() defaults _phase to 'suspended' if not in DB data."""
+        mock_repo = AsyncMock()
+        swarm_id = str(uuid4())
+        state = _make_fake_state(swarm_id, phase="executing", current_round=0)
+        del state["swarm"]["phase"]  # simulate missing key
+        mock_repo.load_swarm_state.return_value = state
+
+        service = SwarmService(repo=mock_repo)
+        await service.load(swarm_id)
+
+        assert service._phase == "suspended"
+
+    async def test_load_defaults_current_round_when_missing(self) -> None:
+        """load() defaults _current_round to 0 if not in DB data."""
+        mock_repo = AsyncMock()
+        swarm_id = str(uuid4())
+        state = _make_fake_state(swarm_id, phase="executing", current_round=3)
+        del state["swarm"]["current_round"]  # simulate missing key
+        mock_repo.load_swarm_state.return_value = state
+
+        service = SwarmService(repo=mock_repo)
+        await service.load(swarm_id)
+
+        assert service._current_round == 0
