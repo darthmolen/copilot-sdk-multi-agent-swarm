@@ -237,3 +237,25 @@ async def read_artifact(swarm_id: str, path: str) -> dict:
         raise ToolError(f"File '{path}' is not a text file and cannot be read as text") from exc
 
     return {"path": path, "content": content}
+
+
+@mcp.tool()
+async def resume_agent(swarm_id: str, agent_name: str, nudge: str = "") -> dict[str, object]:
+    """Resume a failed agent's session, preserving its full conversation history.
+
+    Sends a nudge message to guide the agent toward a different approach.
+    Unlike restart (which creates a fresh session), resume keeps the agent's
+    memory of what it already tried.
+    """
+    state = _resolve_swarm(swarm_id)
+
+    orch = state.get("orchestrator")
+    if orch is None:
+        raise ToolError("Swarm has no orchestrator.")
+
+    try:
+        await orch.resume_agent(agent_name, nudge)
+    except (KeyError, RuntimeError) as exc:
+        raise ToolError(exc.args[0] if exc.args else str(exc)) from exc
+
+    return {"ok": True, "agent_name": agent_name, "resumed": True}
