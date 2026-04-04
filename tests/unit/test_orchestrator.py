@@ -2061,7 +2061,6 @@ class TestSwarmServiceIntegration:
         assert orch.inbox is not None
 
 
-
 @pytest.mark.asyncio
 class TestSwarmAgentResumeSession:
     """Tests for SwarmAgent.resume_session() method."""
