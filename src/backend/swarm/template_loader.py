@@ -134,7 +134,7 @@ class TemplateLoader:
             all_skill_names=all_skill_names,
             skill_name_map=skill_name_map,
             qa_enabled=bool(leader_meta.get("qa", False)),
-            max_retries=meta.get("maxRetries", 2),
+            max_retries=int(meta.get("maxRetries", 2)),
         )
 
     def load_all(self) -> dict[str, LoadedTemplate]:
@@ -187,6 +187,6 @@ class TemplateLoader:
             infer=metadata.get("infer", False),
             prompt_template=body,
             max_instances=metadata.get("maxInstances", 1),
-            max_retries=metadata.get("maxRetries"),
+            max_retries=int(raw) if (raw := metadata.get("maxRetries")) is not None else None,
             skills=metadata.get("skills"),
         )

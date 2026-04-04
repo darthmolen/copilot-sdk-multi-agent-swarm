@@ -884,37 +884,50 @@ class SwarmOrchestrator:
                     agent = self.agents.get(worker_name)
                     last_error = result
 
-                    # Retry loop: consume retry budget before marking FAILED
+                    # Retry loop: per-task budget, consume before marking FAILED
                     retry_succeeded = False
-                    while agent is not None and agent.retries_used < agent.max_retries:
-                        agent.retries_used += 1
+                    task_retries = 0
+                    max_task_retries = agent.max_retries if agent is not None else 0
+                    while agent is not None and task_retries < max_task_retries:
+                        task_retries += 1
+                        agent.retries_used += 1  # observability: total retries across tasks
                         log.info(
                             "task_retry",
                             agent=worker_name,
                             task_id=task.id,
-                            attempt=agent.retries_used,
-                            max_retries=agent.max_retries,
+                            attempt=task_retries,
+                            max_retries=max_task_retries,
                             error=str(last_error),
                         )
                         client = agent._client or self.client
                         nudge = (
                             f"Your previous attempt failed with: {last_error}. "
-                            f"Attempt {agent.retries_used} of {agent.max_retries}. "
+                            f"Attempt {task_retries} of {max_task_retries}. "
                             f"Try a different approach."
                         )
                         try:
                             await agent.resume_session(client, nudge)
                             await self.task_board.update_status(task.id, "in_progress")
-                            await agent.execute_task(task)
-                            retry_succeeded = True
-                            break
+                            await agent.execute_task(task, timeout=timeout)
+                            # Check post-execution status — execute_task can
+                            # set FAILED/TIMEOUT without raising
+                            refreshed = next(
+                                (t for t in await self.task_board.get_tasks() if t.id == task.id),
+                                task,
+                            )
+                            if refreshed.status == TaskStatus.COMPLETED:
+                                retry_succeeded = True
+                                break
+                            last_error = RuntimeError(
+                                f"Task {task.id} ended retry with status {refreshed.status.value}"
+                            )
                         except Exception as retry_err:
                             last_error = retry_err
                             log.warning(
                                 "retry_failed",
                                 agent=worker_name,
                                 task_id=task.id,
-                                attempt=agent.retries_used,
+                                attempt=task_retries,
                                 error=str(retry_err),
                             )
 

@@ -2394,7 +2394,17 @@ class TestAutoRetry:
         mock_agent.retries_used = 0
         mock_agent._client = None
         mock_agent.resume_session = AsyncMock()
-        mock_agent.execute_task = AsyncMock(side_effect=[RuntimeError("tool failed"), None])
+        task_board_ref = orch.task_board
+        call_count = 0
+
+        async def _fail_then_succeed(task: Any, **kwargs: Any) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("tool failed")
+            await task_board_ref.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed)
         orch.agents["analyst"] = mock_agent
 
         await orch.task_board.add_task(
@@ -2450,7 +2460,18 @@ class TestAutoRetry:
         mock_agent.retries_used = 0
         mock_agent._client = None
         mock_agent.resume_session = AsyncMock()
-        mock_agent.execute_task = AsyncMock(side_effect=[RuntimeError("fail"), None])
+
+        task_board_ref = orch.task_board
+        call_count = 0
+
+        async def _fail_then_succeed(task: Any, **kwargs: Any) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("fail")
+            await task_board_ref.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed)
         orch.agents["analyst"] = mock_agent
 
         await orch.task_board.add_task(
@@ -2487,7 +2508,18 @@ class TestAutoRetry:
         mock_agent.retries_used = 0
         mock_agent._client = None
         mock_agent.resume_session = AsyncMock()
-        mock_agent.execute_task = AsyncMock(side_effect=[RuntimeError("fail"), None])
+
+        task_board_ref_tracking = orch.task_board
+        tracking_call_count = 0
+
+        async def _fail_then_succeed_tracking(task: Any, **kwargs: Any) -> None:
+            nonlocal tracking_call_count
+            tracking_call_count += 1
+            if tracking_call_count == 1:
+                raise RuntimeError("fail")
+            await task_board_ref_tracking.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed_tracking)
         orch.agents["analyst"] = mock_agent
 
         await orch.task_board.add_task(
@@ -2522,7 +2554,18 @@ class TestAutoRetry:
         mock_agent.retries_used = 0
         mock_agent._client = None
         mock_agent.resume_session = AsyncMock()
-        mock_agent.execute_task = AsyncMock(side_effect=[RuntimeError("fail"), None])
+
+        task_board_ref = orch.task_board
+        emit_call_count = 0
+
+        async def _fail_then_succeed_for_emit(task: Any, **kwargs: Any) -> None:
+            nonlocal emit_call_count
+            emit_call_count += 1
+            if emit_call_count == 1:
+                raise RuntimeError("fail")
+            await task_board_ref.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed_for_emit)
         orch.agents["analyst"] = mock_agent
 
         await orch.task_board.add_task(
