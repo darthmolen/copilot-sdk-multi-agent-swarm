@@ -12,6 +12,8 @@ tools:
   - inbox_send
   - inbox_receive
   - task_list
+  - bash
+  - write
 ---
 
 # {display_name} — {role}
