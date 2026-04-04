@@ -1,5 +1,5 @@
 import { useReducer } from 'react';
-import type { SwarmState, SwarmEvent, Task, AgentInfo, ActiveTool } from '../types/swarm';
+import type { SwarmState, SwarmPhase, SwarmEvent, Task, AgentInfo, ActiveTool } from '../types/swarm';
 
 export const initialState: SwarmState = {
   phase: null,
@@ -131,13 +131,20 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
       };
     }
 
+    case 'swarm.suspended':
+      return {
+        ...state,
+        phase: 'suspended' as SwarmPhase,
+        suspended: event.data as unknown as SwarmState['suspended'],
+      };
+
     default:
       return state;
   }
 }
 
 export function isThinking(phase: SwarmState['phase']): boolean {
-  return phase !== null && phase !== 'complete' && phase !== 'cancelled' && phase !== 'failed';
+  return phase !== null && phase !== 'complete' && phase !== 'cancelled' && phase !== 'failed' && phase !== 'suspended';
 }
 
 export function shouldShowReportView(

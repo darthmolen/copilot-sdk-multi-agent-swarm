@@ -1,6 +1,6 @@
 export type TaskStatus = 'blocked' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'timeout';
 export type AgentStatus = 'idle' | 'thinking' | 'working' | 'ready' | 'failed';
-export type SwarmPhase = 'starting' | 'planning' | 'spawning' | 'executing' | 'synthesizing' | 'qa' | 'complete' | 'cancelled' | 'failed';
+export type SwarmPhase = 'starting' | 'planning' | 'spawning' | 'executing' | 'synthesizing' | 'qa' | 'complete' | 'cancelled' | 'failed' | 'suspended';
 
 export interface Task {
   id: string;
@@ -49,6 +49,7 @@ export interface SwarmState {
   activeTools: ActiveTool[];
   roundNumber: number;
   error: string | null;
+  suspended?: { remaining_tasks: number; max_rounds: number; reason: string };
 }
 
 export interface ChatMessage {
