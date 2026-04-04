@@ -20,6 +20,7 @@ import { saveReport, getSavedReports, getReportById, truncateTitle } from './uti
 import { parseSessionFromSearch } from './utils/urlSession';
 import { buildReportList } from './utils/buildReportList';
 import { ReportList } from './components/ReportList';
+import { InterventionView } from './components/InterventionView';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
@@ -133,6 +134,9 @@ function SwarmDashboard() {
   const [swarmFiles, setSwarmFiles] = useState<FileInfo[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [activeFileContent, setActiveFileContent] = useState<string | null>(null);
+
+  // Intervention view state
+  const [interventionTaskId, setInterventionTaskId] = useState<string | null>(null);
 
   // Fetch report from backend when URL has a session but localStorage is empty
   const fetchedRef = useRef(false);
@@ -396,9 +400,42 @@ function SwarmDashboard() {
   // Chat is always enabled — backend can resume_session for any past swarm
   const chatEnabled = !!reportSwarmId;
 
+  // Compute failed/timeout tasks for intervention view
+  const failedTasks = allTasks.filter(
+    (t) => t.status === 'failed' || t.status === 'timeout',
+  );
+
+  // Determine template key for the intervention swarm (use first active swarm's id as fallback)
+  const interventionSwarmId = latestActiveSwarmId ?? reportSwarmId ?? '';
+
   // Mermaid diagram rendering for report view
   const reportContentRef = useRef<HTMLDivElement>(null);
   useMermaid(reportContentRef, [activeFileContent, currentReport]);
+
+  // Intervention view: shown when a task is selected for intervention
+  if (interventionTaskId && failedTasks.length > 0) {
+    return (
+      <div className="app app--intervention-view">
+        {/* Keep WS connections alive */}
+        {store.activeSwarmIds.map((id) => (
+          <SwarmConnection key={id} swarmId={id} onEvent={handleSwarmEvent} />
+        ))}
+        <InterventionView
+          swarmId={interventionSwarmId}
+          templateKey={interventionSwarmId}
+          tasks={failedTasks}
+          selectedTaskId={interventionTaskId}
+          onSelectTask={setInterventionTaskId}
+          agentOutputs={allOutputs}
+          onBack={() => setInterventionTaskId(null)}
+          onSaveAndRetry={() => {
+            // TODO: Wire to actual retry endpoint
+            setInterventionTaskId(null);
+          }}
+        />
+      </div>
+    );
+  }
 
   // Full-screen report + chat view (also shown during QA phase before report exists)
   if (shouldShowReportView(reportSwarmId, currentReport, currentPhase)) {
