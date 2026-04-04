@@ -44,25 +44,16 @@ def get_session_manager():  # type: ignore[return-type]
 # ---------------------------------------------------------------------------
 
 
-def _resolve_swarm_id(swarm_id: str | None) -> dict[str, Any]:
-    """Return the swarm state dict for the given (or inferred) swarm_id.
+def _resolve_swarm_id(swarm_id: str) -> dict[str, Any]:
+    """Return the swarm state dict for the given swarm_id.
 
-    Raises ToolError if the swarm cannot be resolved.
+    Raises ToolError if the swarm is not found.
     """
     deps = get_deps()
-    store = deps.swarm_store
-
-    if swarm_id is not None:
-        state = store.get(swarm_id)
-        if state is None:
-            raise ToolError(f"Swarm '{swarm_id}' not found. Available: {list(store.keys())}")
-        return dict(state)
-
-    if len(store) == 0:
-        raise ToolError("No active swarms.")
-    if len(store) == 1:
-        return dict(next(iter(store.values())))
-    raise ToolError(f"Multiple swarms active. Specify swarm_id. Available: {list(store.keys())}")
+    state = deps.swarm_store.get(swarm_id)
+    if state is None:
+        raise ToolError(f"Swarm '{swarm_id}' not found. Available: {list(deps.swarm_store.keys())}")
+    return dict(state)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +77,7 @@ async def get_active_swarms() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def get_swarm_status(swarm_id: str | None = None) -> dict:
+async def get_swarm_status(swarm_id: str) -> dict:
     """Get current swarm phase, round number, active agent count, and task counts."""
     state = _resolve_swarm_id(swarm_id)
 
@@ -113,7 +104,7 @@ async def get_swarm_status(swarm_id: str | None = None) -> dict:
 
 @mcp.tool()
 async def list_tasks(
-    swarm_id: str | None = None,
+    swarm_id: str,
     status: str | None = None,
     worker: str | None = None,
 ) -> list[dict]:
@@ -130,7 +121,7 @@ async def list_tasks(
 
 
 @mcp.tool()
-async def get_task_detail(swarm_id: str | None = None, task_id: str = "") -> dict:
+async def get_task_detail(swarm_id: str, task_id: str) -> dict:
     """Get full detail for a specific task including result and timeline."""
     state = _resolve_swarm_id(swarm_id)
 
@@ -144,7 +135,7 @@ async def get_task_detail(swarm_id: str | None = None, task_id: str = "") -> dic
 
 @mcp.tool()
 async def get_recent_events(
-    swarm_id: str | None = None,
+    swarm_id: str,
     count: int = 20,
     since: str | None = None,
 ) -> list[dict]:
@@ -170,7 +161,7 @@ async def get_recent_events(
 
 
 @mcp.tool()
-async def list_agents(swarm_id: str | None = None) -> list[dict]:
+async def list_agents(swarm_id: str) -> list[dict]:
     """List all agents with their roles, status, and tasks completed."""
     state = _resolve_swarm_id(swarm_id)
 
@@ -189,7 +180,7 @@ async def list_agents(swarm_id: str | None = None) -> list[dict]:
 
 
 @mcp.tool()
-async def list_artifacts(swarm_id: str | None = None) -> list[dict]:
+async def list_artifacts(swarm_id: str) -> list[dict]:
     """List files created in the swarm work directory."""
     deps = get_deps()
     state = _resolve_swarm_id(swarm_id)
@@ -212,7 +203,7 @@ async def list_artifacts(swarm_id: str | None = None) -> list[dict]:
 
 
 @mcp.tool()
-async def read_artifact(swarm_id: str | None = None, path: str = "") -> dict:
+async def read_artifact(swarm_id: str, path: str) -> dict:
     """Read a file from the swarm work directory. Path is relative to the swarm dir."""
     deps = get_deps()
     state = _resolve_swarm_id(swarm_id)
@@ -236,7 +227,7 @@ async def read_artifact(swarm_id: str | None = None, path: str = "") -> dict:
 
 
 @mcp.tool()
-async def restart_agent(swarm_id: str | None = None, agent_name: str = "") -> dict:
+async def restart_agent(swarm_id: str, agent_name: str) -> dict:
     """Restart a stuck or failed agent by recreating its session."""
     state = _resolve_swarm_id(swarm_id)
 

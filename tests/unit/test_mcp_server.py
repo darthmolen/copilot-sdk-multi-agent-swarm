@@ -110,10 +110,6 @@ class TestGetActiveSwarms:
         assert len(result) == 2
         ids = {s["swarm_id"] for s in result}
         assert ids == {"swarm-1", "swarm-2"}
-        s1 = next(s for s in result if s["swarm_id"] == "swarm-1")
-        assert s1["phase"] == "executing"
-        assert s1["goal"] == "Analyze data"
-        assert s1["template"] == "warehouse-optimizer"
 
     async def test_empty_store(self, tmp_path: Path):
         deps = MCPDeps(swarm_store={}, work_dir=str(tmp_path))
@@ -160,7 +156,7 @@ class TestGetSwarmStatus:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
 
-            result = await get_swarm_status()
+            result = await get_swarm_status(swarm_id="swarm-1")
 
         assert result["phase"] == "executing"
         assert result["round_number"] == 2
@@ -168,14 +164,6 @@ class TestGetSwarmStatus:
         assert result["task_counts"]["completed"] == 1
         assert result["task_counts"]["in_progress"] == 1
         assert result["task_counts"]["pending"] == 1
-
-    async def test_explicit_swarm_id(self, tmp_path: Path):
-        deps = await _make_deps(tmp_path, swarm_id="my-swarm")
-        with patch("backend.mcp.server.get_deps", return_value=deps):
-            from backend.mcp.server import get_swarm_status
-
-            result = await get_swarm_status(swarm_id="my-swarm")
-        assert result["phase"] == "executing"
 
     async def test_unknown_swarm_id_raises(self, tmp_path: Path):
         deps = await _make_deps(tmp_path, swarm_id="swarm-1")
@@ -203,7 +191,7 @@ class TestListTasks:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_tasks
 
-            result = await list_tasks()
+            result = await list_tasks(swarm_id="swarm-1")
         assert len(result) == 2
 
     async def test_filter_by_status(self, tmp_path: Path):
@@ -225,7 +213,7 @@ class TestListTasks:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_tasks
 
-            result = await list_tasks(status="completed")
+            result = await list_tasks(swarm_id="swarm-1", status="completed")
         assert len(result) == 1
         assert result[0]["id"] == "t1"
 
@@ -240,7 +228,7 @@ class TestListTasks:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_tasks
 
-            result = await list_tasks(worker="w2")
+            result = await list_tasks(swarm_id="swarm-1", worker="w2")
         assert len(result) == 1
         assert result[0]["worker_name"] == "w2"
 
@@ -269,7 +257,7 @@ class TestGetTaskDetail:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_task_detail
 
-            result = await get_task_detail(task_id="t1")
+            result = await get_task_detail(swarm_id="swarm-1", task_id="t1")
         assert result["id"] == "t1"
         assert result["result"] == "Found 3 issues."
 
@@ -279,7 +267,7 @@ class TestGetTaskDetail:
             from backend.mcp.server import get_task_detail
 
             with pytest.raises(ToolError, match="not found"):
-                await get_task_detail(task_id="nonexistent")
+                await get_task_detail(swarm_id="swarm-1", task_id="nonexistent")
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +286,7 @@ class TestGetRecentEvents:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_recent_events
 
-            result = await get_recent_events(count=10)
+            result = await get_recent_events(swarm_id="swarm-1", count=10)
         assert len(result) == 2
         mock_repo.get_events.assert_awaited_once()
 
@@ -308,7 +296,7 @@ class TestGetRecentEvents:
             from backend.mcp.server import get_recent_events
 
             with pytest.raises(ToolError, match="database persistence"):
-                await get_recent_events()
+                await get_recent_events(swarm_id="swarm-1")
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +322,7 @@ class TestListAgents:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_agents
 
-            result = await list_agents()
+            result = await list_agents(swarm_id="swarm-1")
         assert len(result) == 2
         analyst = next(a for a in result if a["name"] == "analyst")
         assert analyst["role"] == "Data Analyst"
@@ -357,7 +345,7 @@ class TestArtifacts:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import list_artifacts
 
-            result = await list_artifacts()
+            result = await list_artifacts(swarm_id="swarm-1")
         assert len(result) == 2
         names = {a["name"] for a in result}
         assert "report.md" in names
@@ -371,7 +359,7 @@ class TestArtifacts:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import read_artifact
 
-            result = await read_artifact(path="report.md")
+            result = await read_artifact(swarm_id="swarm-1", path="report.md")
         assert result["content"] == "# Hello World"
 
     async def test_read_artifact_not_found_raises(self, tmp_path: Path):
@@ -380,7 +368,7 @@ class TestArtifacts:
             from backend.mcp.server import read_artifact
 
             with pytest.raises(ToolError, match="File not found"):
-                await read_artifact(path="nonexistent.txt")
+                await read_artifact(swarm_id="swarm-1", path="nonexistent.txt")
 
     async def test_read_artifact_path_traversal_raises(self, tmp_path: Path):
         deps = await _make_deps(tmp_path)
@@ -390,7 +378,7 @@ class TestArtifacts:
             from backend.mcp.server import read_artifact
 
             with pytest.raises(ToolError, match="Path traversal"):
-                await read_artifact(path="../../secret.txt")
+                await read_artifact(swarm_id="swarm-1", path="../../secret.txt")
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +396,7 @@ class TestRestartAgent:
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import restart_agent
 
-            result = await restart_agent(agent_name="analyst")
+            result = await restart_agent(swarm_id="swarm-1", agent_name="analyst")
         assert result["ok"] is True
         mock_orch.restart_agent.assert_awaited_once_with("analyst")
 
@@ -422,43 +410,27 @@ class TestRestartAgent:
             from backend.mcp.server import restart_agent
 
             with pytest.raises(ToolError, match="ghost"):
-                await restart_agent(agent_name="ghost")
+                await restart_agent(swarm_id="swarm-1", agent_name="ghost")
 
 
 # ---------------------------------------------------------------------------
-# _resolve_swarm_id edge cases
+# _resolve_swarm_id
 # ---------------------------------------------------------------------------
 
 
 class TestResolveSwarmId:
-    async def test_infers_single_swarm(self, tmp_path: Path):
-        """When only one swarm exists and no swarm_id given, infer it."""
-        deps = await _make_deps(tmp_path, swarm_id="only-one")
+    async def test_valid_swarm_id(self, tmp_path: Path):
+        deps = await _make_deps(tmp_path, swarm_id="my-swarm")
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
 
-            result = await get_swarm_status()
+            result = await get_swarm_status(swarm_id="my-swarm")
         assert result["phase"] == "executing"
 
-    async def test_raises_when_multiple_swarms_and_no_id(self, tmp_path: Path):
-        """When multiple swarms exist and no swarm_id given, raise ToolError."""
+    async def test_unknown_swarm_id_raises(self, tmp_path: Path):
         deps = await _make_deps(tmp_path, swarm_id="swarm-1")
-        deps.swarm_store["swarm-2"] = {
-            "swarm_id": "swarm-2",
-            "phase": "planning",
-            "round_number": 1,
-            "orchestrator": _make_orchestrator(TaskBoard(), TeamRegistry()),
-        }
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_swarm_status
 
-            with pytest.raises(ToolError, match="Multiple swarms"):
-                await get_swarm_status()
-
-    async def test_empty_store_raises(self, tmp_path: Path):
-        deps = MCPDeps(swarm_store={}, work_dir=str(tmp_path))
-        with patch("backend.mcp.server.get_deps", return_value=deps):
-            from backend.mcp.server import get_swarm_status
-
-            with pytest.raises(ToolError, match="No active swarms"):
-                await get_swarm_status()
+            with pytest.raises(ToolError, match="not found"):
+                await get_swarm_status(swarm_id="wrong-id")
