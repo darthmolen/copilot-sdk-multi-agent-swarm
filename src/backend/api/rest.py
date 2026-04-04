@@ -262,8 +262,7 @@ async def continue_swarm(swarm_id: str) -> dict[str, object]:
     orch = entry.get("orchestrator")
     if not orch or not getattr(orch, "_continue_event", None):
         raise HTTPException(status_code=404, detail="Swarm not paused")
-    orch._continue_action = "continue"
-    orch._continue_event.set()
+    orch.signal_continue()
     return {"ok": True, "swarm_id": swarm_id, "action": "continue"}
 
 
@@ -276,8 +275,7 @@ async def skip_to_synthesis(swarm_id: str) -> dict[str, object]:
     orch = entry.get("orchestrator")
     if not orch or not getattr(orch, "_continue_event", None):
         raise HTTPException(status_code=404, detail="Swarm not paused")
-    orch._continue_action = "skip"
-    orch._continue_event.set()
+    orch.signal_skip()
     return {"ok": True, "swarm_id": swarm_id, "action": "skip"}
 
 

@@ -1247,8 +1247,7 @@ class TestContinueEndpoint:
         assert body["ok"] is True
         assert body["swarm_id"] == swarm_id
         assert body["action"] == "continue"
-        assert orch._continue_action == "continue"
-        assert event.is_set()
+        orch.signal_continue.assert_called_once()
 
     def test_continue_404_when_not_paused(self) -> None:
         """POST /continue returns 404 if orchestrator has no _continue_event."""
@@ -1319,8 +1318,7 @@ class TestSkipToSynthesisEndpoint:
         assert body["ok"] is True
         assert body["swarm_id"] == swarm_id
         assert body["action"] == "skip"
-        assert orch._continue_action == "skip"
-        assert event.is_set()
+        orch.signal_skip.assert_called_once()
 
     def test_skip_404_when_not_found(self) -> None:
         """POST /skip-to-synthesis returns 404 for unknown swarm."""

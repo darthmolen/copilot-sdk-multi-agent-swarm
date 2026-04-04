@@ -46,10 +46,13 @@ class SwarmService:
         template_key: str | None = None,
     ) -> None:
         self._swarm_id = swarm_id
+        self._phase = "starting"
+        self._current_round = 0
         if self._repo:
             await self._repo.create_swarm(UUID(swarm_id), goal=goal, template_key=template_key)
 
     async def update_phase(self, phase: str) -> None:
+        self._phase = phase
         if self._repo and self._swarm_id:
             await self._repo.update_phase(UUID(self._swarm_id), phase)
 
