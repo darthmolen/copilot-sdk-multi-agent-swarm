@@ -2658,11 +2658,12 @@ class TestAutoRetry:
 
 
 class _MockService:
-    """Minimal mock for SwarmService with suspend() and update_round()."""
+    """Minimal mock for SwarmService with suspend(), update_round(), and update_phase()."""
 
     def __init__(self) -> None:
         self.suspend_calls: list[str] = []
         self.update_round_calls: list[int] = []
+        self.update_phase_calls: list[str] = []
         self.task_board = TaskBoard()
         self.inbox = InboxSystem()
         self.registry = TeamRegistry()
@@ -2672,6 +2673,9 @@ class _MockService:
 
     async def update_round(self, round_num: int) -> None:
         self.update_round_calls.append(round_num)
+
+    async def update_phase(self, phase: str) -> None:
+        self.update_phase_calls.append(phase)
 
 
 @pytest.mark.asyncio
@@ -3090,3 +3094,84 @@ class TestRebuildAgents:
 
         assert len(factory_clients) == 1, "client_factory should be called once per agent"
         assert orch.agents["analyst"]._owns_client is True
+
+
+# ---------------------------------------------------------------------------
+# Phase persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestPhasePersistence:
+    async def test_run_persists_phase_at_each_transition(self, event_bus: EventBus) -> None:
+        """run() calls service.update_phase for planning, spawning, executing, synthesizing, complete."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        service = MagicMock()
+        service.task_board = TaskBoard()
+        service.inbox = InboxSystem()
+        service.registry = TeamRegistry()
+        service.update_phase = AsyncMock()
+        service.update_round = AsyncMock()
+
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            service=service,
+            swarm_id="swarm-persist",
+        )
+
+        await orch.run("Build something")
+
+        called_phases = [call.args[0] for call in service.update_phase.call_args_list]
+        assert "planning" in called_phases, f"Expected 'planning' in {called_phases}"
+        assert "spawning" in called_phases, f"Expected 'spawning' in {called_phases}"
+        assert "executing" in called_phases, f"Expected 'executing' in {called_phases}"
+        assert "synthesizing" in called_phases, f"Expected 'synthesizing' in {called_phases}"
+        assert "complete" in called_phases, f"Expected 'complete' in {called_phases}"
+        # Verify ordering: planning before spawning before executing before synthesizing before complete
+        assert called_phases.index("planning") < called_phases.index("spawning")
+        assert called_phases.index("spawning") < called_phases.index("executing")
+        assert called_phases.index("executing") < called_phases.index("synthesizing")
+        assert called_phases.index("synthesizing") < called_phases.index("complete")
+
+    async def test_resume_persists_phase_transitions(self, event_bus: EventBus) -> None:
+        """resume() calls service.update_phase for executing, synthesizing, complete."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        service = MagicMock()
+        service.task_board = TaskBoard()
+        service.inbox = InboxSystem()
+        service.registry = TeamRegistry()
+        service.update_phase = AsyncMock()
+        service.update_round = AsyncMock()
+        service.load = AsyncMock()
+        service.suspend = AsyncMock()
+
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            service=service,
+            swarm_id="swarm-resume-persist",
+        )
+
+        # Pre-populate a task so _execute has something to do
+        await service.task_board.add_task(
+            id="task-0",
+            subject="Task 1",
+            description="Do thing 1",
+            worker_role="Analyst",
+            worker_name="analyst",
+        )
+        # Register the agent so _rebuild_agents can find it
+        await service.registry.register("analyst", "Analyst", "Analyst")
+
+        await orch.resume("Build something")
+
+        called_phases = [call.args[0] for call in service.update_phase.call_args_list]
+        assert "executing" in called_phases
+        assert "synthesizing" in called_phases
+        assert "complete" in called_phases
+        assert called_phases.index("executing") < called_phases.index("synthesizing")
+        assert called_phases.index("synthesizing") < called_phases.index("complete")

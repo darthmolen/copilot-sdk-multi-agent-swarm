@@ -84,3 +84,4 @@ class SwarmState(_SwarmStateRequired, total=False):
 
     orchestrator: Any  # SwarmOrchestrator — can't import here (circular)
     report: str | None
+    error: str | None

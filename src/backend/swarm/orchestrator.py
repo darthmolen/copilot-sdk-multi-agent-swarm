@@ -512,6 +512,8 @@ class SwarmOrchestrator:
                 client_type=type(self.client).__name__ if self.client else "None",
             )
             await self._emit("swarm.phase_changed", {"phase": "planning"})
+            if self.service:
+                await self.service.update_phase("planning")
             plan = await self._plan(goal)
             task_count = len(plan.get("tasks", []))
             log.info("swarm_plan_received", swarm_id=self.swarm_id, task_count=task_count)
@@ -562,6 +564,8 @@ class SwarmOrchestrator:
                         await self.service.suspend("rounds_exhausted")
                     await self._cleanup_agents()
                     await self._emit("swarm.phase_changed", {"phase": "suspended"})
+                    if self.service:
+                        await self.service.update_phase("suspended")
                     return ""
                 else:
                     break  # "skip" — fall through to synthesis
@@ -631,6 +635,8 @@ class SwarmOrchestrator:
                     await self.service.suspend("rounds_exhausted")
                 await self._cleanup_agents()
                 await self._emit("swarm.phase_changed", {"phase": "suspended"})
+                if self.service:
+                    await self.service.update_phase("suspended")
                 return ""
             else:
                 break  # "skip" — fall through to synthesis
@@ -680,6 +686,8 @@ class SwarmOrchestrator:
             self.agents[name] = agent
 
         await self._emit("swarm.phase_changed", {"phase": "spawning"})
+        if self.service:
+            await self.service.update_phase("spawning")
         await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
 
     # ------------------------------------------------------------------
@@ -853,6 +861,8 @@ class SwarmOrchestrator:
             )
 
         await self._emit("swarm.phase_changed", {"phase": "spawning"})
+        if self.service:
+            await self.service.update_phase("spawning")
         await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
 
     # ------------------------------------------------------------------
@@ -972,6 +982,8 @@ class SwarmOrchestrator:
         timeout = self.config.get("timeout", 300)
 
         await self._emit("swarm.phase_changed", {"phase": "executing"})
+        if self.service:
+            await self.service.update_phase("executing")
 
         for round_num in range(1, max_rounds + 1):
             if self._cancelled:
@@ -1168,6 +1180,8 @@ class SwarmOrchestrator:
         session.idle when truly done, so we don't miss late responses.
         """
         await self._emit("swarm.phase_changed", {"phase": "synthesizing"})
+        if self.service:
+            await self.service.update_phase("synthesizing")
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
             f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}" for t in all_tasks
@@ -1271,6 +1285,8 @@ class SwarmOrchestrator:
 
         await self._emit("leader.report", {"content": report})
         await self._emit("swarm.phase_changed", {"phase": "complete"})
+        if self.service:
+            await self.service.update_phase("complete")
         await self._scan_work_dir()
         await self._emit("swarm.synthesis_complete", {})
         return report
