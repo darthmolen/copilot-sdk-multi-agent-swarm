@@ -4,26 +4,37 @@ interface ResizableLayoutProps {
   left: ReactNode;
   right: ReactNode;
   defaultLeftPercent?: number;
+  direction?: 'horizontal' | 'vertical';
 }
 
 export function ResizableLayout({
   left,
   right,
   defaultLeftPercent = 50,
+  direction = 'horizontal',
 }: ResizableLayoutProps) {
   const [leftPercent, setLeftPercent] = useState(defaultLeftPercent);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
+  const isVertical = direction === 'vertical';
+
   const handleMouseDown = useCallback(() => {
     dragging.current = true;
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = isVertical ? 'row-resize' : 'col-resize';
     document.body.style.userSelect = 'none';
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+
+      let pct: number;
+      if (isVertical) {
+        pct = ((e.clientY - rect.top) / rect.height) * 100;
+      } else {
+        pct = ((e.clientX - rect.left) / rect.width) * 100;
+      }
+
       // Clamp between 20% and 80%
       setLeftPercent(Math.min(80, Math.max(20, pct)));
     };
@@ -38,10 +49,15 @@ export function ResizableLayout({
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, []);
+  }, [isVertical]);
+
+  const containerClass = [
+    'resizable-layout',
+    isVertical ? 'resizable-layout--vertical' : '',
+  ].filter(Boolean).join(' ');
 
   return (
-    <div ref={containerRef} className="resizable-layout">
+    <div ref={containerRef} className={containerClass}>
       <div className="resizable-layout__left" style={{ flexBasis: `${leftPercent}%` }}>
         {left}
       </div>
