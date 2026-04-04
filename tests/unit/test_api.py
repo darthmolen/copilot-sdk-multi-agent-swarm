@@ -1144,7 +1144,7 @@ def test_get_events_endpoint_returns_404_without_repo():
     """Events endpoint returns 404 when no repo configured."""
     _clear_swarm_store()
     client = TestClient(app)
-    resp = client.get("/api/swarm/test-id/events")
+    resp = client.get("/api/swarm/00000000-0000-0000-0000-000000000001/events")
     assert resp.status_code == 404
 
 

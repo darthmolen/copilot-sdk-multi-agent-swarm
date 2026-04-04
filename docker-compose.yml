@@ -17,14 +17,7 @@ services:
       timeout: 5s
       retries: 5
 
-  migrate:
-    build: .
-    command: alembic upgrade head
-    environment:
-      DATABASE_URL: postgresql+asyncpg://swarm:swarm@postgres:5432/swarm
-    depends_on:
-      postgres:
-        condition: service_healthy
+  # Migrations: run manually with `alembic upgrade head` (see README)
 
   swarm:
     build: .
@@ -38,8 +31,8 @@ services:
       - ./workdir:/app/workdir
       - ./logs:/app/logs
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

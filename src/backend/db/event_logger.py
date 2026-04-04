@@ -42,8 +42,8 @@ class EventLogger:
                         data_json=clean_data,
                     )
                 )
-        except Exception:
-            log.warning("event_logger_write_failed", event_type=event_type)
+        except Exception as e:
+            log.warning("event_logger_write_failed", event_type=event_type, error=str(e))
 
     async def on_event(self, event_type: str, data: dict[str, Any]) -> None:
         """EventBus subscriber callback."""

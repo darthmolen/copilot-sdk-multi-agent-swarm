@@ -145,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     db_url = os.environ.get("DATABASE_URL", "")
     repository = None
     event_logger = None
+    db_engine = None
     if db_url:
         from backend.db.engine import create_async_engine
         from backend.db.repository import SwarmRepository
@@ -221,6 +222,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # --- Shutdown ---------------------------------------------------------
     unsub()
+    if db_engine:
+        await db_engine.dispose()
+        log.info("db_engine_disposed")
     if copilot_client:
         await copilot_client.stop()
         log.info("copilot_cli_stopped")

@@ -137,6 +137,7 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
     # Create SwarmService with optional repo for persistence
     from backend.services.swarm_service import SwarmService
     service = SwarmService(repo=_repository) if _repository else SwarmService()
+    await service.create_swarm(swarm_id, goal=goal, template_key=template_key)
 
     orch = SwarmOrchestrator(
         client=_copilot_client, event_bus=_event_bus,
@@ -623,16 +624,19 @@ async def deploy_template_zip(file: UploadFile) -> dict:
 
 
 @router.get("/api/swarm/{swarm_id}/events")
-async def get_swarm_events(swarm_id: str, since: str | None = None):
+async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
     """Return event log for replay. Requires DATABASE_URL configured."""
     if _repository is None:
         return JSONResponse({"error": "Persistence not configured"}, status_code=404)
-    from uuid import UUID
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    swarm_uuid = UUID(swarm_id)
-    since_dt = datetime.fromisoformat(since) if since else None
-    events = await _repository.get_events(swarm_uuid, since=since_dt)
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid 'since' datetime format")
+    events = await _repository.get_events(swarm_id, since=since_dt)
     return {"events": events}
 
 
@@ -641,10 +645,19 @@ async def list_swarms():
     """Return all swarms from DB. Requires DATABASE_URL configured."""
     if _repository is None:
         return JSONResponse({"error": "Persistence not configured"}, status_code=404)
+    from datetime import datetime
+
     swarms = await _repository.list_swarms()
     # Convert UUIDs and datetimes to strings for JSON
     result = []
     for s in swarms:
-        entry = {k: str(v) if hasattr(v, 'hex') else v for k, v in s.items()}
+        entry = {}
+        for k, v in s.items():
+            if hasattr(v, 'hex'):       # UUID
+                entry[k] = str(v)
+            elif isinstance(v, datetime):
+                entry[k] = v.isoformat()
+            else:
+                entry[k] = v
         result.append(entry)
     return {"swarms": result}

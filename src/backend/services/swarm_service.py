@@ -60,6 +60,8 @@ class SwarmService:
         self, swarm_id: str, task_id: str, subject: str, description: str,
         worker_role: str, worker_name: str, blocked_by: list[str] | None = None,
     ) -> Task:
+        if not self._swarm_id:
+            self._swarm_id = swarm_id
         task = await self.task_board.add_task(
             id=task_id, subject=subject, description=description,
             worker_role=worker_role, worker_name=worker_name,
