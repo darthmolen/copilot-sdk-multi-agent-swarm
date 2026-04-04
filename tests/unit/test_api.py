@@ -1208,3 +1208,147 @@ def test_list_swarms_endpoint_returns_404_without_repo():
     client = TestClient(app)
     resp = client.get("/api/swarms")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Continue endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestContinueEndpoint:
+    """Tests for POST /api/swarm/{id}/continue."""
+
+    def test_continue_signals_orchestrator(self) -> None:
+        """POST /api/swarm/{id}/continue sets continue_action and signals event."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_id = "test-continue-swarm"
+        event = asyncio.Event()
+        orch = MagicMock()
+        orch._continue_event = event
+        orch._continue_action = ""
+
+        swarm_store[swarm_id] = {
+            "swarm_id": swarm_id,
+            "goal": "test",
+            "template": None,
+            "phase": "executing",
+            "round_number": 1,
+            "orchestrator": orch,
+        }
+
+        resp = client.post(f"/api/swarm/{swarm_id}/continue")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["swarm_id"] == swarm_id
+        assert body["action"] == "continue"
+        assert orch._continue_action == "continue"
+        assert event.is_set()
+
+    def test_continue_404_when_not_paused(self) -> None:
+        """POST /continue returns 404 if orchestrator has no _continue_event."""
+        from unittest.mock import MagicMock
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_id = "test-not-paused"
+        orch = MagicMock(spec=[])  # no attributes
+        swarm_store[swarm_id] = {
+            "swarm_id": swarm_id,
+            "goal": "test",
+            "template": None,
+            "phase": "executing",
+            "round_number": 1,
+            "orchestrator": orch,
+        }
+
+        resp = client.post(f"/api/swarm/{swarm_id}/continue")
+        assert resp.status_code == 404
+        assert "not paused" in resp.json()["detail"].lower()
+
+    def test_continue_404_when_swarm_not_found(self) -> None:
+        """POST /continue returns 404 for unknown swarm_id."""
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        resp = client.post("/api/swarm/nonexistent-id/continue")
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Skip-to-synthesis endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestSkipToSynthesisEndpoint:
+    """Tests for POST /api/swarm/{id}/skip-to-synthesis."""
+
+    def test_skip_signals_orchestrator(self) -> None:
+        """POST /api/swarm/{id}/skip-to-synthesis sets skip action and signals event."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_id = "test-skip-swarm"
+        event = asyncio.Event()
+        orch = MagicMock()
+        orch._continue_event = event
+        orch._continue_action = ""
+
+        swarm_store[swarm_id] = {
+            "swarm_id": swarm_id,
+            "goal": "test",
+            "template": None,
+            "phase": "executing",
+            "round_number": 3,
+            "orchestrator": orch,
+        }
+
+        resp = client.post(f"/api/swarm/{swarm_id}/skip-to-synthesis")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["swarm_id"] == swarm_id
+        assert body["action"] == "skip"
+        assert orch._continue_action == "skip"
+        assert event.is_set()
+
+    def test_skip_404_when_not_found(self) -> None:
+        """POST /skip-to-synthesis returns 404 for unknown swarm."""
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        resp = client.post("/api/swarm/nonexistent-id/skip-to-synthesis")
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+
+    def test_skip_404_when_not_paused(self) -> None:
+        """POST /skip-to-synthesis returns 404 if orchestrator has no _continue_event."""
+        from unittest.mock import MagicMock
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_id = "test-skip-not-paused"
+        orch = MagicMock(spec=[])  # no attributes
+        swarm_store[swarm_id] = {
+            "swarm_id": swarm_id,
+            "goal": "test",
+            "template": None,
+            "phase": "executing",
+            "round_number": 1,
+            "orchestrator": orch,
+        }
+
+        resp = client.post(f"/api/swarm/{swarm_id}/skip-to-synthesis")
+        assert resp.status_code == 404
+        assert "not paused" in resp.json()["detail"].lower()
