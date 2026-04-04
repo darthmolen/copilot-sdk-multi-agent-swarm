@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import shutil
 import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import structlog
 import yaml
@@ -38,6 +40,9 @@ router = APIRouter()
 # In-memory swarm state store, keyed by swarm_id.
 # Each entry holds the mutable state for one swarm run.
 swarm_store: dict[str, SwarmState] = {}
+
+# Strong references for fire-and-forget background tasks (prevents GC).
+_background_tasks: set[asyncio.Task[None]] = set()
 
 # Injected dependencies (set by main.py lifespan)
 _event_bus: Any = None
@@ -277,6 +282,52 @@ async def skip_to_synthesis(swarm_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Swarm not paused")
     orch.signal_skip()
     return {"ok": True, "swarm_id": swarm_id, "action": "skip"}
+
+
+@router.post("/api/swarm/{swarm_id}/resume")
+async def resume_swarm(swarm_id: str) -> dict[str, object]:
+    """Resume a suspended swarm from persisted state."""
+    if not _repository:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    swarm_data = await _repository.get_swarm(UUID(swarm_id))
+    if not swarm_data:
+        raise HTTPException(status_code=404, detail="Swarm not found")
+    if swarm_data["phase"] != "suspended":
+        raise HTTPException(status_code=409, detail=f"Swarm is {swarm_data['phase']}, not suspended")
+
+    from backend.main import SWARM_MODEL, SWARM_TASK_TIMEOUT, SWARM_WORK_DIR
+    from backend.services.swarm_service import SwarmService
+    from backend.swarm.orchestrator import SwarmOrchestrator
+
+    # Rebuild orchestrator
+    service = SwarmService(repo=_repository)
+    template = None
+    if swarm_data.get("template_key") and _template_loader:
+        template = _template_loader.load(swarm_data["template_key"])
+
+    orch = SwarmOrchestrator(
+        client=_copilot_client,
+        event_bus=_event_bus,
+        service=service,
+        template=template,
+        swarm_id=swarm_id,
+        work_base=Path(SWARM_WORK_DIR) if SWARM_WORK_DIR else None,
+        client_factory=_client_factory,
+        config={"max_rounds": swarm_data.get("max_rounds", 8), "timeout": SWARM_TASK_TIMEOUT},
+        model=SWARM_MODEL,
+    )
+
+    swarm_store[swarm_id] = _create_swarm_state(swarm_id, swarm_data["goal"], swarm_data.get("template_key"))
+    swarm_store[swarm_id]["orchestrator"] = orch
+    swarm_store[swarm_id]["phase"] = "resuming"
+
+    goal = swarm_data.get("qa_refined_goal") or swarm_data["goal"]
+    task = asyncio.create_task(orch.resume(goal))  # type: ignore[attr-defined]  # resume() added by Agent B
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return {"ok": True, "swarm_id": swarm_id, "phase": "resuming"}
 
 
 @router.post("/api/swarm/{swarm_id}/chat")

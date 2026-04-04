@@ -99,6 +99,22 @@ async def verify_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")
 # ---------------------------------------------------------------------------
 
 
+async def recover_orphaned_swarms(repository: object) -> None:
+    """Suspend swarms stuck in non-terminal phases from a prior crash.
+
+    Called during startup to clean up any swarms that were mid-execution
+    when the process was last stopped.
+    """
+    orphaned = await repository.list_swarms_by_phase("executing", "planning", "spawning")  # type: ignore[union-attr]
+    for swarm in orphaned:
+        await repository.suspend_swarm(swarm["id"])  # type: ignore[union-attr]
+        log.warning(
+            "orphaned_swarm_recovered",
+            swarm_id=str(swarm["id"]),
+            previous_phase=swarm["phase"],
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifecycle (startup/shutdown)."""
@@ -184,6 +200,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _mcp_cm = get_session_manager().run()
     await _mcp_cm.__aenter__()
+
+    # --- Recover orphaned swarms stuck in non-terminal phases -------------
+    if repository:
+        await recover_orphaned_swarms(repository)
 
     # --- EventBus → WebSocket forwarder -----------------------------------
     def _make_ws_forwarder():
