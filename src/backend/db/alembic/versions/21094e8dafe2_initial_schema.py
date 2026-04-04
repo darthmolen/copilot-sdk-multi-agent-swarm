@@ -42,6 +42,9 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('current_round', sa.Integer(), server_default='0', nullable=False),
+    sa.Column('max_rounds', sa.Integer(), server_default='8', nullable=False),
+    sa.Column('suspended_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('agents',
