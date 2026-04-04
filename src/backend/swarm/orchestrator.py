@@ -673,6 +673,12 @@ class SwarmOrchestrator:
                 skill_directories=skill_dirs,
                 disabled_skills=disabled_skills,
             )
+            # Resolve max_retries: worker override > template default > hardcoded 2
+            if agent_def and agent_def.max_retries is not None:
+                agent.max_retries = agent_def.max_retries
+            elif self.template:
+                agent.max_retries = self.template.max_retries
+
             if self.client_factory:
                 agent_client = await self.client_factory()
                 await agent.create_session(agent_client, owns_client=True)
@@ -721,44 +727,36 @@ class SwarmOrchestrator:
                 )
 
     # ------------------------------------------------------------------
-    # Agent restart (for stuck/failed agents)
+    # Agent session resume (for failed agent retry)
     # ------------------------------------------------------------------
 
-    async def restart_agent(self, agent_name: str) -> None:
-        """Restart a stuck/failed agent by recreating its session."""
+    async def resume_agent(self, agent_name: str, nudge: str = "") -> None:
+        """Resume a failed agent's session, preserving conversation history."""
         if agent_name not in self.agents:
             raise KeyError(f"Agent '{agent_name}' not found")
+        agent = self.agents[agent_name]
+        client = agent._client or self.client
+        default_nudge = "Your previous attempt failed. Try a different approach."
+        await agent.resume_session(client, nudge or default_nudge)
+        await self._emit("agent.resumed", {"agent_name": agent_name})
 
-        old_agent = self.agents[agent_name]
-        await old_agent.cleanup()
-
-        new_agent = SwarmAgent(
-            name=old_agent.name,
-            role=old_agent.role,
-            display_name=old_agent.display_name,
-            task_board=old_agent.task_board,
-            inbox=old_agent.inbox,
-            registry=old_agent.registry,
-            event_bus=old_agent.event_bus,
-            available_tools=old_agent.available_tools,
-            prompt_template=old_agent.prompt_template,
-            system_preamble=old_agent.system_preamble,
-            system_tools=old_agent.system_tools,
-            model=old_agent.model,
-            work_dir=old_agent.work_dir,
-            swarm_id=old_agent.swarm_id,
-            mcp_servers=old_agent.mcp_servers,
-            skill_directories=old_agent.skill_directories,
-            disabled_skills=old_agent.disabled_skills,
+    async def _mark_task_failed(self, task_id: str, worker_name: str, error: str) -> None:
+        """Mark a task as FAILED and emit failure events."""
+        log.warning("agent_task_failed", agent=worker_name, task_id=task_id, error=error)
+        current_task = next(
+            (t for t in await self.task_board.get_tasks() if t.id == task_id),
+            None,
         )
-        if self.client_factory:
-            agent_client = await self.client_factory()
-            await new_agent.create_session(agent_client, owns_client=True)
-        else:
-            await new_agent.create_session(self.client)
-        self.agents[agent_name] = new_agent
-
-        await self._emit("agent.restarted", {"agent_name": agent_name})
+        if current_task and current_task.status == TaskStatus.IN_PROGRESS:
+            await self.task_board.update_status(task_id, "failed", error)
+        await self._emit(
+            "swarm.task_failed",
+            {"task_id": task_id, "agent": worker_name, "error": error},
+        )
+        await self._emit(
+            "agent.status_changed",
+            {"agent_name": worker_name, "status": "failed"},
+        )
 
     # ------------------------------------------------------------------
     # Ephemeral agent creation (for scalable workers)
@@ -883,24 +881,73 @@ class SwarmOrchestrator:
 
             for (worker_name, task), result in zip(task_agent_pairs, results, strict=False):
                 if isinstance(result, Exception):
-                    log.warning("agent_task_failed", agent=worker_name, task_id=task.id, error=str(result))
-                    current_task = next(
-                        (t for t in await self.task_board.get_tasks() if t.id == task.id),
-                        None,
-                    )
-                    if current_task and current_task.status == TaskStatus.IN_PROGRESS:
-                        await self.task_board.update_status(task.id, "failed", str(result))
-                    await self._emit(
-                        "swarm.task_failed",
-                        {"task_id": task.id, "agent": worker_name, "error": str(result)},
-                    )
-                    await self._emit(
-                        "agent.status_changed",
-                        {
-                            "agent_name": worker_name,
-                            "status": "failed",
-                        },
-                    )
+                    agent = self.agents.get(worker_name)
+                    last_error = result
+
+                    # Retry loop: per-task budget, consume before marking FAILED
+                    retry_succeeded = False
+                    task_retries = 0
+                    max_task_retries = agent.max_retries if agent is not None else 0
+                    while agent is not None and task_retries < max_task_retries:
+                        task_retries += 1
+                        agent.retries_used += 1  # observability: total retries across tasks
+                        log.info(
+                            "task_retry",
+                            agent=worker_name,
+                            task_id=task.id,
+                            attempt=task_retries,
+                            max_retries=max_task_retries,
+                            error=str(last_error),
+                        )
+                        client = agent._client or self.client
+                        nudge = (
+                            f"Your previous attempt failed with: {last_error}. "
+                            f"Attempt {task_retries} of {max_task_retries}. "
+                            f"Try a different approach."
+                        )
+                        try:
+                            await agent.resume_session(client, nudge)
+                            await self.task_board.update_status(task.id, "in_progress")
+                            await agent.execute_task(task, timeout=timeout)
+                            # Check post-execution status — execute_task can
+                            # set FAILED/TIMEOUT without raising
+                            refreshed = next(
+                                (t for t in await self.task_board.get_tasks() if t.id == task.id),
+                                task,
+                            )
+                            if refreshed.status == TaskStatus.COMPLETED:
+                                retry_succeeded = True
+                                break
+                            last_error = RuntimeError(
+                                f"Task {task.id} ended retry with status {refreshed.status.value}"
+                            )
+                        except Exception as retry_err:
+                            last_error = retry_err
+                            log.warning(
+                                "retry_failed",
+                                agent=worker_name,
+                                task_id=task.id,
+                                attempt=task_retries,
+                                error=str(retry_err),
+                            )
+
+                    if retry_succeeded:
+                        all_tasks_now = await self.task_board.get_tasks()
+                        completed_count = sum(
+                            1
+                            for t in all_tasks_now
+                            if t.worker_name == worker_name and t.status == TaskStatus.COMPLETED
+                        )
+                        await self._emit(
+                            "agent.status_changed",
+                            {
+                                "agent_name": worker_name,
+                                "status": "idle",
+                                "tasks_completed": completed_count,
+                            },
+                        )
+                    else:
+                        await self._mark_task_failed(task.id, worker_name, str(last_error))
                 else:
                     # Count completed tasks for this agent
                     all_tasks = await self.task_board.get_tasks()

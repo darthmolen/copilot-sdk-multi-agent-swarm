@@ -239,14 +239,14 @@ async def read_artifact(swarm_id: str, path: str) -> dict:
     return {"path": path, "content": content}
 
 
-# ---------------------------------------------------------------------------
-# Write tools
-# ---------------------------------------------------------------------------
-
-
 @mcp.tool()
-async def restart_agent(swarm_id: str, agent_name: str) -> dict:
-    """Restart a stuck or failed agent by recreating its session."""
+async def resume_agent(swarm_id: str, agent_name: str, nudge: str = "") -> dict[str, object]:
+    """Resume a failed agent's session, preserving its full conversation history.
+
+    Sends a nudge message to guide the agent toward a different approach.
+    Unlike restart (which creates a fresh session), resume keeps the agent's
+    memory of what it already tried.
+    """
     state = _resolve_swarm(swarm_id)
 
     orch = state.get("orchestrator")
@@ -254,8 +254,8 @@ async def restart_agent(swarm_id: str, agent_name: str) -> dict:
         raise ToolError("Swarm has no orchestrator.")
 
     try:
-        await orch.restart_agent(agent_name)
-    except KeyError as exc:
+        await orch.resume_agent(agent_name, nudge)
+    except (KeyError, RuntimeError) as exc:
         raise ToolError(exc.args[0] if exc.args else str(exc)) from exc
 
-    return {"ok": True, "agent_name": agent_name}
+    return {"ok": True, "agent_name": agent_name, "resumed": True}

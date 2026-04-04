@@ -17,6 +17,7 @@ class AgentDefinition:
     infer: bool = False
     prompt_template: str = ""  # markdown body
     max_instances: int = 1  # max concurrent tasks per round
+    max_retries: int | None = None  # None = use template default
     skills: list[str] | None = None  # per-worker skill directory names
 
 
@@ -34,6 +35,7 @@ class LoadedTemplate:
     all_skill_names: set[str] = field(default_factory=set)
     skill_name_map: dict[str, str] = field(default_factory=dict)  # dir_name -> skill_name
     qa_enabled: bool = False
+    max_retries: int = 2  # swarm-wide default, overridable in _template.yaml
 
 
 class TemplateLoader:
@@ -132,6 +134,7 @@ class TemplateLoader:
             all_skill_names=all_skill_names,
             skill_name_map=skill_name_map,
             qa_enabled=bool(leader_meta.get("qa", False)),
+            max_retries=int(meta.get("maxRetries", 2)),
         )
 
     def load_all(self) -> dict[str, LoadedTemplate]:
@@ -184,5 +187,6 @@ class TemplateLoader:
             infer=metadata.get("infer", False),
             prompt_template=body,
             max_instances=metadata.get("maxInstances", 1),
+            max_retries=int(raw) if (raw := metadata.get("maxRetries")) is not None else None,
             skills=metadata.get("skills"),
         )

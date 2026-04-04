@@ -19,7 +19,7 @@ In-process FastMCP server mounted on the FastAPI app at `/mcp` (streamable HTTP,
 | `list_agents` | Agent roster with status |
 | `list_artifacts` | Files in work directory |
 | `read_artifact` | Read a specific file |
-| `restart_agent` | Restart a stuck/failed agent |
+| ~~`restart_agent`~~ | *(removed — replaced by `resume_agent`)* |
 
 ### Key design decisions
 
@@ -33,7 +33,7 @@ In-process FastMCP server mounted on the FastAPI app at `/mcp` (streamable HTTP,
 
 - `src/backend/mcp/__init__.py`, `deps.py`, `server.py` — MCP server + dependency holder
 - `src/backend/main.py` — ASGI mount, session manager lifecycle, auth middleware
-- `src/backend/swarm/orchestrator.py` — `restart_agent()`, `_get_mcp_servers()`, auto-injection
+- `src/backend/swarm/orchestrator.py` — `_get_mcp_servers()`, auto-injection (note: `restart_agent()` removed)
 - `tests/unit/test_mcp_server.py` — 20 unit tests
 - `tests/integration/test_mcp_mount.py` — 5 integration tests (ASGI mount + auth)
 

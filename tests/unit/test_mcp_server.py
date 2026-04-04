@@ -384,35 +384,39 @@ class TestArtifacts:
 
 
 # ---------------------------------------------------------------------------
-# restart_agent
+# resume_agent
 # ---------------------------------------------------------------------------
 
 
-class TestRestartAgent:
-    async def test_success(self, tmp_path: Path):
+@pytest.mark.asyncio
+class TestResumeAgent:
+    async def test_success(self, tmp_path: Path) -> None:
+        """resume_agent MCP tool calls orchestrator.resume_agent."""
         mock_orch = _make_orchestrator(TaskBoard(), TeamRegistry())
-        mock_orch.restart_agent = AsyncMock(return_value=None)
+        mock_orch.resume_agent = AsyncMock(return_value=None)
         deps = await _make_deps(tmp_path, orch_agents={"analyst": MagicMock()})
         deps.swarm_store["swarm-1"]["orchestrator"] = mock_orch
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
-            from backend.mcp.server import restart_agent
+            from backend.mcp.server import resume_agent
 
-            result = await restart_agent(swarm_id="swarm-1", agent_name="analyst")
+            result = await resume_agent(swarm_id="swarm-1", agent_name="analyst")
         assert result["ok"] is True
-        mock_orch.restart_agent.assert_awaited_once_with("analyst")
+        assert result["resumed"] is True
+        mock_orch.resume_agent.assert_awaited_once_with("analyst", "")
 
-    async def test_unknown_agent_raises(self, tmp_path: Path):
+    async def test_unknown_agent_raises_tool_error(self, tmp_path: Path) -> None:
+        """resume_agent MCP tool raises ToolError for unknown agent."""
         mock_orch = _make_orchestrator(TaskBoard(), TeamRegistry())
-        mock_orch.restart_agent = AsyncMock(side_effect=KeyError("Agent 'ghost' not found"))
+        mock_orch.resume_agent = AsyncMock(side_effect=KeyError("Agent 'ghost' not found"))
         deps = await _make_deps(tmp_path)
         deps.swarm_store["swarm-1"]["orchestrator"] = mock_orch
 
         with patch("backend.mcp.server.get_deps", return_value=deps):
-            from backend.mcp.server import restart_agent
+            from backend.mcp.server import resume_agent
 
             with pytest.raises(ToolError, match="ghost"):
-                await restart_agent(swarm_id="swarm-1", agent_name="ghost")
+                await resume_agent(swarm_id="swarm-1", agent_name="ghost")
 
 
 # ---------------------------------------------------------------------------

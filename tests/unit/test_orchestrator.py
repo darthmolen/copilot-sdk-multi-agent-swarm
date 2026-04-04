@@ -222,6 +222,7 @@ def make_orchestrator(
     config: dict[str, Any] | None = None,
     swarm_id: str | None = None,
     work_base: Path | None = None,
+    template: LoadedTemplate | None = None,
 ) -> SwarmOrchestrator:
     client = MockCopilotClient(
         leader_plan=leader_plan,
@@ -234,6 +235,7 @@ def make_orchestrator(
         config=config,
         swarm_id=swarm_id,
         work_base=work_base,
+        template=template,
     )
 
 
@@ -2061,44 +2063,587 @@ class TestSwarmServiceIntegration:
         assert orch.inbox is not None
 
 
-class TestRestartAgent:
-    async def test_restart_replaces_agent(self, event_bus: EventBus) -> None:
-        """restart_agent cleans up old agent and creates a replacement."""
-        orch = make_orchestrator(event_bus)
+@pytest.mark.asyncio
+class TestSwarmAgentResumeSession:
+    """Tests for SwarmAgent.resume_session() method."""
 
-        # Manually register a fake agent
+    async def test_resume_calls_client_resume_session(self, event_bus: EventBus) -> None:
+        """resume_session() calls client.resume_session with stored session_id."""
         from unittest.mock import AsyncMock, MagicMock
 
-        old_agent = MagicMock()
-        old_agent.name = "analyst"
-        old_agent.role = "Data Analyst"
-        old_agent.display_name = "Analyst"
-        old_agent.task_board = orch.task_board
-        old_agent.inbox = orch.inbox
-        old_agent.registry = orch.registry
-        old_agent.event_bus = orch.event_bus
-        old_agent.available_tools = None
-        old_agent.prompt_template = None
-        old_agent.system_preamble = ""
-        old_agent.system_tools = []
-        old_agent.model = "test-model"
-        old_agent.work_dir = None
-        old_agent.swarm_id = None
-        old_agent.mcp_servers = None
-        old_agent.skill_directories = None
-        old_agent.disabled_skills = None
-        old_agent.cleanup = AsyncMock()
-        orch.agents["analyst"] = old_agent
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
 
-        await orch.restart_agent("analyst")
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
 
-        old_agent.cleanup.assert_awaited_once()
-        new_agent = orch.agents["analyst"]
-        assert new_agent is not old_agent
-        assert new_agent.name == "analyst"
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        agent.session_id = "test-session-123"
 
-    async def test_restart_unknown_agent_raises(self, event_bus: EventBus) -> None:
-        """restart_agent with unknown name raises KeyError."""
+        mock_session = MagicMock()
+        mock_session.on = MagicMock()
+        mock_session.send = AsyncMock()
+        client = MagicMock()
+        client.resume_session = AsyncMock(return_value=mock_session)
+
+        await agent.resume_session(client, "try again")
+
+        client.resume_session.assert_awaited_once()
+        call_args = client.resume_session.call_args
+        assert call_args[0][0] == "test-session-123"
+        assert call_args.kwargs["on_permission_request"] is not None
+        mock_session.on.assert_called_once()
+        mock_session.send.assert_awaited_once_with("try again")
+
+    async def test_resume_without_session_id_raises(self, event_bus: EventBus) -> None:
+        """resume_session() raises RuntimeError if no session_id stored."""
+        from unittest.mock import MagicMock
+
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+
+        mock_client = MagicMock()
+        with pytest.raises(RuntimeError, match="analyst"):
+            await agent.resume_session(mock_client, "nudge")
+
+    async def test_resume_replaces_session_handle(self, event_bus: EventBus) -> None:
+        """After resume, agent.session is the new resumed session."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        agent.session_id = "test-session-456"
+
+        new_session = MagicMock()
+        new_session.on = MagicMock()
+        new_session.send = AsyncMock()
+        client = MagicMock()
+        client.resume_session = AsyncMock(return_value=new_session)
+
+        await agent.resume_session(client, "nudge")
+
+        assert agent.session is new_session
+
+    async def test_max_retries_defaults_to_2(self, event_bus: EventBus) -> None:
+        """SwarmAgent.max_retries defaults to 2."""
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        assert agent.max_retries == 2
+
+    async def test_retries_used_starts_at_0(self, event_bus: EventBus) -> None:
+        """SwarmAgent.retries_used starts at 0."""
+        from backend.swarm.agent import SwarmAgent
+        from backend.swarm.inbox_system import InboxSystem
+        from backend.swarm.task_board import TaskBoard
+        from backend.swarm.team_registry import TeamRegistry
+
+        task_board = TaskBoard()
+        inbox = InboxSystem()
+        registry = TeamRegistry()
+
+        agent = SwarmAgent(
+            name="analyst",
+            role="Data Analyst",
+            display_name="Analyst",
+            task_board=task_board,
+            inbox=inbox,
+            registry=registry,
+            event_bus=event_bus,
+        )
+        assert agent.retries_used == 0
+
+
+@pytest.mark.asyncio
+class TestResumeAgent:
+    """Tests for SwarmOrchestrator.resume_agent() method."""
+
+    async def test_resume_calls_agent_resume_session(self, event_bus: EventBus) -> None:
+        """resume_agent() delegates to agent.resume_session() with nudge."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+        mock_agent = MagicMock()
+        mock_agent.resume_session = AsyncMock()
+        mock_agent._client = None
+        orch.agents["analyst"] = mock_agent
+
+        await orch.resume_agent("analyst", "try again")
+
+        mock_agent.resume_session.assert_awaited_once()
+        call_args = mock_agent.resume_session.call_args
+        assert call_args[0][1] == "try again"
+
+    async def test_resume_unknown_agent_raises(self, event_bus: EventBus) -> None:
+        """resume_agent() with unknown name raises KeyError."""
         orch = make_orchestrator(event_bus)
         with pytest.raises(KeyError, match="ghost"):
-            await orch.restart_agent("ghost")
+            await orch.resume_agent("ghost")
+
+    async def test_resume_emits_event(self, event_bus: EventBus) -> None:
+        """resume_agent() emits agent.resumed event."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+        mock_agent = MagicMock()
+        mock_agent.resume_session = AsyncMock()
+        mock_agent._client = None
+        orch.agents["analyst"] = mock_agent
+
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda et, data: events.append((et, data)))
+
+        await orch.resume_agent("analyst", "nudge")
+
+        resumed = [(et, d) for et, d in events if et == "agent.resumed"]
+        assert len(resumed) == 1
+        assert resumed[0][1]["agent_name"] == "analyst"
+
+    async def test_resume_uses_default_nudge(self, event_bus: EventBus) -> None:
+        """Empty nudge falls back to default message."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+        mock_agent = MagicMock()
+        mock_agent.resume_session = AsyncMock()
+        mock_agent._client = None
+        orch.agents["analyst"] = mock_agent
+
+        await orch.resume_agent("analyst")
+
+        call_args = mock_agent.resume_session.call_args
+        nudge = call_args[0][1]
+        assert "failed" in nudge.lower()
+        assert "different approach" in nudge.lower()
+
+
+# ---------------------------------------------------------------------------
+# maxRetries wiring tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestMaxRetriesWiring:
+    """Tests for maxRetries flowing from template config to SwarmAgent."""
+
+    async def test_spawn_sets_max_retries_from_worker_override(self, event_bus: EventBus) -> None:
+        """Worker-level maxRetries overrides template default."""
+        template = LoadedTemplate(
+            key="test",
+            name="Test",
+            description="",
+            goal_template="",
+            leader_prompt="",
+            max_retries=2,
+        )
+        agent_def = AgentDefinition(
+            name="analyst",
+            display_name="Analyst",
+            description="Analyzes data",
+            max_retries=5,
+        )
+        template.agents = [agent_def]
+
+        orch = make_orchestrator(event_bus, template=template)
+        plan = {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "subject": "Test",
+                    "description": "Test task",
+                    "worker_name": "analyst",
+                    "worker_role": "Analyst",
+                    "blocked_by": [],
+                }
+            ]
+        }
+        await orch._spawn(plan)
+
+        assert orch.agents["analyst"].max_retries == 5
+
+    async def test_spawn_sets_max_retries_from_template_default(self, event_bus: EventBus) -> None:
+        """Template-level maxRetries used when worker has no override."""
+        template = LoadedTemplate(
+            key="test",
+            name="Test",
+            description="",
+            goal_template="",
+            leader_prompt="",
+            max_retries=3,
+        )
+        agent_def = AgentDefinition(
+            name="analyst",
+            display_name="Analyst",
+            description="Analyzes data",
+            max_retries=None,
+        )
+        template.agents = [agent_def]
+
+        orch = make_orchestrator(event_bus, template=template)
+        plan = {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "subject": "Test",
+                    "description": "Test task",
+                    "worker_name": "analyst",
+                    "worker_role": "Analyst",
+                    "blocked_by": [],
+                }
+            ]
+        }
+        await orch._spawn(plan)
+
+        assert orch.agents["analyst"].max_retries == 3
+
+    async def test_spawn_uses_hardcoded_default_without_template(self, event_bus: EventBus) -> None:
+        """No template at all -> agent.max_retries=2 (hardcoded default)."""
+        orch = make_orchestrator(event_bus)
+        plan = {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "subject": "Test",
+                    "description": "Test task",
+                    "worker_name": "analyst",
+                    "worker_role": "Analyst",
+                    "blocked_by": [],
+                }
+            ]
+        }
+        await orch._spawn(plan)
+
+        assert orch.agents["analyst"].max_retries == 2
+
+
+# ---------------------------------------------------------------------------
+# Auto-retry tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestAutoRetry:
+    """Tests for automatic task retry on failure in _execute()."""
+
+    async def test_failed_task_retries_on_first_failure(self, event_bus: EventBus) -> None:
+        """Task fails once, orchestrator retries via resume, task succeeds."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 2
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+        task_board_ref = orch.task_board
+        call_count = 0
+
+        async def _fail_then_succeed(task: Any, **kwargs: Any) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("tool failed")
+            await task_board_ref.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed)
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        assert mock_agent.retries_used == 1
+        assert mock_agent.resume_session.await_count == 1
+
+    async def test_retries_exhausted_marks_failed(self, event_bus: EventBus) -> None:
+        """Task fails max_retries+1 times, ends up FAILED."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 1
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+        mock_agent.execute_task = AsyncMock(side_effect=RuntimeError("always fails"))
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        assert mock_agent.retries_used == 1
+        tasks = await orch.task_board.get_tasks()
+        t = next(t for t in tasks if t.id == "t1")
+        assert t.status == TaskStatus.FAILED
+
+    async def test_retry_preserves_session_via_resume(self, event_bus: EventBus) -> None:
+        """Retry calls agent.resume_session, not create_session."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 2
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+
+        task_board_ref = orch.task_board
+        call_count = 0
+
+        async def _fail_then_succeed(task: Any, **kwargs: Any) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("fail")
+            await task_board_ref.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed)
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        mock_agent.resume_session.assert_awaited_once()
+        nudge = mock_agent.resume_session.call_args[0][1]
+        assert "fail" in nudge.lower()
+
+    async def test_retry_resets_task_to_in_progress(self, event_bus: EventBus) -> None:
+        """On retry, task status resets to IN_PROGRESS before re-execution."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+        status_transitions: list[str] = []
+
+        original_update = orch.task_board.update_status
+
+        async def tracking_update(task_id: str, status: str, result: str = "") -> Any:
+            status_transitions.append(status)
+            return await original_update(task_id, status, result)
+
+        orch.task_board.update_status = tracking_update  # type: ignore[assignment]
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 2
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+
+        task_board_ref_tracking = orch.task_board
+        tracking_call_count = 0
+
+        async def _fail_then_succeed_tracking(task: Any, **kwargs: Any) -> None:
+            nonlocal tracking_call_count
+            tracking_call_count += 1
+            if tracking_call_count == 1:
+                raise RuntimeError("fail")
+            await task_board_ref_tracking.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed_tracking)
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        assert "in_progress" in status_transitions
+
+    async def test_retry_does_not_emit_task_failed_on_success(self, event_bus: EventBus) -> None:
+        """Auto-retry that succeeds does not emit swarm.task_failed."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        events: list[tuple[str, dict[str, Any]]] = []
+        original_emit = orch._emit
+
+        async def capture_emit(event_name: str, data: dict[str, Any]) -> None:
+            events.append((event_name, data))
+            await original_emit(event_name, data)
+
+        orch._emit = capture_emit  # type: ignore[assignment]
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 2
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+
+        task_board_ref = orch.task_board
+        emit_call_count = 0
+
+        async def _fail_then_succeed_for_emit(task: Any, **kwargs: Any) -> None:
+            nonlocal emit_call_count
+            emit_call_count += 1
+            if emit_call_count == 1:
+                raise RuntimeError("fail")
+            await task_board_ref.update_status(task.id, "completed", "done")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_then_succeed_for_emit)
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        failed_events = [e for e in events if e[0] == "swarm.task_failed"]
+        assert len(failed_events) == 0
+
+    async def test_zero_max_retries_skips_retry(self, event_bus: EventBus) -> None:
+        """agent.max_retries=0 means no retries -- immediate FAILED."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 0
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+
+        task_board_ref = orch.task_board
+
+        async def _fail_after_in_progress(task: Any, **kwargs: Any) -> None:
+            await task_board_ref.update_status(task.id, "in_progress")
+            raise RuntimeError("fail")
+
+        mock_agent.execute_task = AsyncMock(side_effect=_fail_after_in_progress)
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        mock_agent.resume_session.assert_not_awaited()
+        tasks = await orch.task_board.get_tasks()
+        t = next(t for t in tasks if t.id == "t1")
+        assert t.status == TaskStatus.FAILED
+
+    async def test_multiple_retries_before_exhaustion(self, event_bus: EventBus) -> None:
+        """With max_retries=2, agent retries twice before marking FAILED."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        orch = make_orchestrator(event_bus)
+
+        mock_agent = MagicMock()
+        mock_agent.max_retries = 2
+        mock_agent.retries_used = 0
+        mock_agent._client = None
+        mock_agent.resume_session = AsyncMock()
+        # All 3 attempts fail (initial + 2 retries)
+        mock_agent.execute_task = AsyncMock(side_effect=RuntimeError("always fails"))
+        orch.agents["analyst"] = mock_agent
+
+        await orch.task_board.add_task(
+            id="t1",
+            subject="Test",
+            description="Do it",
+            worker_name="analyst",
+            worker_role="Analyst",
+        )
+
+        await orch._execute()
+
+        assert mock_agent.retries_used == 2
+        assert mock_agent.resume_session.await_count == 2
+        tasks = await orch.task_board.get_tasks()
+        t = next(t for t in tasks if t.id == "t1")
+        assert t.status == TaskStatus.FAILED

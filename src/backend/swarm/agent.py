@@ -83,6 +83,8 @@ class SwarmAgent:
         self._client: Any = None  # Set by create_session if owns_client
         self._owns_client: bool = False
         self._monitor_tasks: list[asyncio.Task[None]] = []
+        self.max_retries: int = 2
+        self.retries_used: int = 0
 
     async def create_session(self, client: Any, *, owns_client: bool = False) -> None:
         """Create a CopilotSession with system_message mode:replace.
@@ -149,6 +151,23 @@ class SwarmAgent:
             except Exception:
                 log.warning("agent_client_stop_failed", agent=self.name)
             self._client = None
+
+    async def resume_session(self, client: Any, nudge: str) -> None:  # Any: SDK has no type stubs
+        """Resume this agent's existing session, preserving conversation history.
+
+        Uses client.resume_session() so the agent retains memory of what it
+        tried and can take a different approach on retry.
+        """
+        if not self.session_id:
+            raise RuntimeError(f"Agent '{self.name}' has no session_id to resume")
+        self.session = await client.resume_session(
+            self.session_id,
+            on_permission_request=_approve_all,
+        )
+        self.session.on(self._on_event)
+        if nudge:
+            await self.session.send(nudge)
+        log.info("agent_session_resumed", agent=self.name, session_id=self.session_id)
 
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""

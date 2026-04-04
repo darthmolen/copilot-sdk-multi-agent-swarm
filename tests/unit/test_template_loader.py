@@ -442,6 +442,60 @@ class TestQAFlag:
         assert "enterprise size" in tpl.leader_prompt
 
 
+class TestMaxRetriesConfig:
+    """Tests for maxRetries at both template and worker levels."""
+
+    def test_agent_definition_max_retries_defaults_none(self) -> None:
+        """AgentDefinition.max_retries defaults to None (use template default)."""
+        agent_def = AgentDefinition(name="test", display_name="Test", description="test agent")
+        assert agent_def.max_retries is None
+
+    def test_parse_agent_file_reads_max_retries(self, tmp_path: Path) -> None:
+        """maxRetries in worker frontmatter parsed into AgentDefinition."""
+        worker_file = tmp_path / "worker-test.md"
+        worker_file.write_text(
+            "---\nname: test-worker\ndisplayName: Test Worker\n"
+            "description: A test worker\nmaxRetries: 5\n---\nDo the work."
+        )
+        agent_def = TemplateLoader.parse_agent_file(worker_file)
+        assert agent_def.max_retries == 5
+
+    def test_parse_agent_file_without_max_retries(self, tmp_path: Path) -> None:
+        """Worker without maxRetries gets None (template default)."""
+        worker_file = tmp_path / "worker-test.md"
+        worker_file.write_text(
+            "---\nname: test-worker\ndisplayName: Test Worker\ndescription: A test worker\n---\nDo the work."
+        )
+        agent_def = TemplateLoader.parse_agent_file(worker_file)
+        assert agent_def.max_retries is None
+
+    def test_loaded_template_max_retries_default(self) -> None:
+        """LoadedTemplate.max_retries defaults to 2."""
+        template = LoadedTemplate(key="test", name="Test", description="", goal_template="", leader_prompt="")
+        assert template.max_retries == 2
+
+    def test_template_yaml_max_retries(self, tmp_path: Path) -> None:
+        """maxRetries in _template.yaml flows to LoadedTemplate."""
+        # Create a minimal template directory structure
+        template_dir = tmp_path / "templates" / "test-template"
+        template_dir.mkdir(parents=True)
+
+        # Write _template.yaml with maxRetries
+        (template_dir / "_template.yaml").write_text(
+            "key: test-template\nname: Test Template\n"
+            "description: A test\ngoal_template: '{user_input}'\nmaxRetries: 4\n"
+        )
+
+        # Write a minimal worker file (required by loader)
+        (template_dir / "worker-default.md").write_text(
+            "---\nname: default-worker\ndisplayName: Default\ndescription: Default worker\n---\nWork."
+        )
+
+        loader = TemplateLoader(tmp_path / "templates")
+        template = loader.load("test-template")
+        assert template.max_retries == 4
+
+
 class TestLoadAllAndListAvailable:
     def test_load_all_returns_multiple_templates(self, tmp_path: Path) -> None:
         _create_template_dir(tmp_path, key="tpl-a", name="Template A")

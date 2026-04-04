@@ -167,7 +167,7 @@ class TestMCPServer:
                     "list_agents",
                     "list_artifacts",
                     "read_artifact",
-                    "restart_agent",
+                    "resume_agent",
                 ]
                 for tool_name in expected_tools:
                     assert tool_name in body, f"Tool '{tool_name}' not found in response"
