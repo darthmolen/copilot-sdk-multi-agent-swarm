@@ -576,6 +576,85 @@ def test_chat_endpoint_logs_request_received(caplog: pytest.fixture) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task logs endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestTaskLogsEndpoint:
+    def test_get_task_logs_returns_events(self) -> None:
+        """GET /task/{id}/logs returns structured events."""
+        from unittest.mock import AsyncMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+        swarm_id = swarm_resp.json()["swarm_id"]
+
+        fake_events = [
+            {"id": 1, "event_type": "task.updated", "data_json": {"task_id": "t1"}},
+            {"id": 2, "event_type": "agent.tool_call", "data_json": {"task_id": "t1"}},
+        ]
+        mock_repo = AsyncMock()
+        mock_repo.get_task_events = AsyncMock(return_value=fake_events)
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            response = client.get(f"/api/swarm/{swarm_id}/task/t1/logs")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["swarm_id"] == swarm_id
+            assert body["task_id"] == "t1"
+            assert len(body["events"]) == 2
+            assert body["events"][0]["event_type"] == "task.updated"
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_task_logs_404_no_events(self) -> None:
+        """GET /task/{id}/logs returns 404 when no events found."""
+        from unittest.mock import AsyncMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        swarm_resp = client.post("/api/swarm/start", json={"goal": "Test"})
+        swarm_id = swarm_resp.json()["swarm_id"]
+
+        mock_repo = AsyncMock()
+        mock_repo.get_task_events = AsyncMock(return_value=[])
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            response = client.get(f"/api/swarm/{swarm_id}/task/nonexistent/logs")
+            assert response.status_code == 404
+            assert "No logs found" in response.json()["detail"]
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_task_logs_500_no_db(self) -> None:
+        """GET /task/{id}/logs returns 500 without database."""
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+        client = TestClient(app)
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = None
+        try:
+            response = client.get("/api/swarm/some-id/task/t1/logs")
+            assert response.status_code == 500
+            assert "Database not configured" in response.json()["detail"]
+        finally:
+            rest_mod._repository = old_repo
+
+
+# ---------------------------------------------------------------------------
 # File endpoint tests
 # ---------------------------------------------------------------------------
 

@@ -733,6 +733,21 @@ async def deploy_template_zip(file: UploadFile) -> dict:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/api/swarm/{swarm_id}/task/{task_id}/logs")
+async def get_task_logs(swarm_id: str, task_id: str) -> dict[str, object]:
+    """Get events and agent output for a specific task."""
+    if not _repository:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    task_events = await _repository.get_task_events(uuid.UUID(swarm_id), task_id)
+    if not task_events:
+        raise HTTPException(status_code=404, detail="No logs found for task")
+
+    from fastapi.encoders import jsonable_encoder
+
+    return {"swarm_id": swarm_id, "task_id": task_id, "events": jsonable_encoder(task_events)}
+
+
 @router.get("/api/swarm/{swarm_id}/events")
 async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
     """Return event log for replay. Requires DATABASE_URL configured."""
