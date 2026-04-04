@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -125,6 +126,23 @@ class SwarmOrchestrator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _get_mcp_servers(self) -> dict | None:
+        """Merge template MCP servers with the in-process swarm-state server."""
+        template_mcp = self.template.mcp_servers if self.template else None
+        swarm_mcp_url = os.environ.get("SWARM_MCP_URL", "http://localhost:8000/mcp")
+        api_key = os.environ.get("SWARM_API_KEY", "")
+        swarm_state_mcp: dict[str, Any] = {
+            "swarm-state": {
+                "type": "http",
+                "url": swarm_mcp_url,
+                "tools": ["*"],
+                **({"headers": {"X-API-Key": api_key}} if api_key else {}),
+            }
+        }
+        if template_mcp:
+            return {**template_mcp, **swarm_state_mcp}
+        return swarm_state_mcp
 
     async def _emit(self, event_type: str, data: dict[str, Any]) -> None:
         """Emit an event with swarm_id attached (if set)."""
@@ -298,7 +316,7 @@ class SwarmOrchestrator:
         goal_holder: list[str] = []
         begin_tool = create_begin_swarm_tool(goal_holder, self.qa_complete)
 
-        mcp_servers = self.template.mcp_servers if self.template else None
+        mcp_servers = self._get_mcp_servers()
         skill_dirs = (
             [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
         )
@@ -499,7 +517,7 @@ class SwarmOrchestrator:
         plan_holder: list[dict[str, Any]] = []
         plan_tool = create_plan_tool(plan_holder)
 
-        mcp_servers = self.template.mcp_servers if self.template else None
+        mcp_servers = self._get_mcp_servers()
         skill_dirs = (
             [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
         )
@@ -590,7 +608,7 @@ class SwarmOrchestrator:
             system_preamble = self.system_preamble
 
             # MCP servers and skills from template (if available)
-            mcp_servers = self.template.mcp_servers if self.template else None
+            mcp_servers = self._get_mcp_servers()
             skill_dirs = (
                 [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
             )
@@ -667,6 +685,46 @@ class SwarmOrchestrator:
                     "filename": rel_path,
                     "size_bytes": f.stat().st_size,
                 })
+
+    # ------------------------------------------------------------------
+    # Agent restart (for stuck/failed agents)
+    # ------------------------------------------------------------------
+
+    async def restart_agent(self, agent_name: str) -> None:
+        """Restart a stuck/failed agent by recreating its session."""
+        if agent_name not in self.agents:
+            raise KeyError(f"Agent '{agent_name}' not found")
+
+        old_agent = self.agents[agent_name]
+        await old_agent.cleanup()
+
+        new_agent = SwarmAgent(
+            name=old_agent.name,
+            role=old_agent.role,
+            display_name=old_agent.display_name,
+            task_board=old_agent.task_board,
+            inbox=old_agent.inbox,
+            registry=old_agent.registry,
+            event_bus=old_agent.event_bus,
+            available_tools=old_agent.available_tools,
+            prompt_template=old_agent.prompt_template,
+            system_preamble=old_agent.system_preamble,
+            system_tools=old_agent.system_tools,
+            model=old_agent.model,
+            work_dir=old_agent.work_dir,
+            swarm_id=old_agent.swarm_id,
+            mcp_servers=old_agent.mcp_servers,
+            skill_directories=old_agent.skill_directories,
+            disabled_skills=old_agent.disabled_skills,
+        )
+        if self.client_factory:
+            agent_client = await self.client_factory()
+            await new_agent.create_session(agent_client, owns_client=True)
+        else:
+            await new_agent.create_session(self.client)
+        self.agents[agent_name] = new_agent
+
+        await self._emit("agent.restarted", {"agent_name": agent_name})
 
     # ------------------------------------------------------------------
     # Ephemeral agent creation (for scalable workers)
@@ -881,7 +939,7 @@ class SwarmOrchestrator:
         )
 
         synthesis_session_id = f"synth-{self.swarm_id}" if self.swarm_id else None
-        synth_mcp = self.template.mcp_servers if self.template else None
+        synth_mcp = self._get_mcp_servers()
         synth_skills = (
             [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
         )
