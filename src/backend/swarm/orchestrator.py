@@ -512,6 +512,8 @@ class SwarmOrchestrator:
                 client_type=type(self.client).__name__ if self.client else "None",
             )
             await self._emit("swarm.phase_changed", {"phase": "planning"})
+            if self.service:
+                await self.service.update_phase("planning")
             plan = await self._plan(goal)
             task_count = len(plan.get("tasks", []))
             log.info("swarm_plan_received", swarm_id=self.swarm_id, task_count=task_count)
@@ -562,6 +564,8 @@ class SwarmOrchestrator:
                         await self.service.suspend("rounds_exhausted")
                     await self._cleanup_agents()
                     await self._emit("swarm.phase_changed", {"phase": "suspended"})
+                    if self.service:
+                        await self.service.update_phase("suspended")
                     return ""
                 else:
                     break  # "skip" — fall through to synthesis
@@ -631,6 +635,8 @@ class SwarmOrchestrator:
                     await self.service.suspend("rounds_exhausted")
                 await self._cleanup_agents()
                 await self._emit("swarm.phase_changed", {"phase": "suspended"})
+                if self.service:
+                    await self.service.update_phase("suspended")
                 return ""
             else:
                 break  # "skip" — fall through to synthesis
@@ -666,8 +672,8 @@ class SwarmOrchestrator:
                 model=self.model,
                 work_dir=self.work_dir,
                 swarm_id=self.swarm_id,
-                mcp_servers=self._get_mcp_servers(),
             )
+            self._configure_agent(agent, name, agent_def)
 
             # Create a fresh session — true session resume requires
             # session_id from DB agents table (future enhancement)
@@ -680,7 +686,46 @@ class SwarmOrchestrator:
             self.agents[name] = agent
 
         await self._emit("swarm.phase_changed", {"phase": "spawning"})
+        if self.service:
+            await self.service.update_phase("spawning")
         await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
+
+    def _configure_agent(self, agent: SwarmAgent, name: str, agent_def: AgentDefinition | None) -> None:
+        """Apply shared template config to a SwarmAgent instance.
+
+        Called from both _spawn() and _rebuild_agents() so rebuilt agents
+        receive the same configuration as freshly-spawned ones.
+        """
+        if agent_def:
+            self._agent_defs[name] = agent_def
+
+        agent.mcp_servers = self._get_mcp_servers()
+
+        agent.skill_directories = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
+
+        if agent_def and agent_def.max_retries is not None:
+            agent.max_retries = agent_def.max_retries
+        elif self.template:
+            agent.max_retries = self.template.max_retries
+
+        disabled_skills: list[str] | None = None
+        if self.template and agent_def and agent_def.skills is not None:
+            if agent_def.skills == ["*"] or not agent_def.skills:
+                if not agent_def.skills:
+                    disabled_skills = (
+                        sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                    )
+            else:
+                worker_skill_names = {
+                    self.template.skill_name_map[dir_name]
+                    for dir_name in agent_def.skills
+                    if dir_name in self.template.skill_name_map
+                }
+                to_disable = self.template.all_skill_names - worker_skill_names
+                disabled_skills = sorted(to_disable) if to_disable else None
+        agent.disabled_skills = disabled_skills
 
     # ------------------------------------------------------------------
     # Phase 1: Planning (tool-based structured output)
@@ -754,6 +799,54 @@ class SwarmOrchestrator:
     # Phase 2: Spawning workers
     # ------------------------------------------------------------------
 
+    def _configure_agent(self, agent: SwarmAgent, name: str, agent_def: AgentDefinition | None) -> None:
+        """Apply shared template config to a SwarmAgent instance.
+
+        Called from both _spawn() and _rebuild_agents() so that rebuilt agents
+        receive the same configuration as freshly-spawned ones:
+        - Populates ``self._agent_defs``
+        - Sets ``max_retries`` (worker override > template default > hardcoded 2)
+        - Computes ``disabled_skills`` from template skill map
+        - Sets ``skill_directories`` from template
+        - Sets ``mcp_servers`` via ``_get_mcp_servers()``
+        """
+        if agent_def:
+            self._agent_defs[name] = agent_def
+
+        # MCP servers (always wired)
+        agent.mcp_servers = self._get_mcp_servers()
+
+        # Skill directories from template
+        agent.skill_directories = (
+            [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
+        )
+
+        # Resolve max_retries: worker override > template default > hardcoded 2
+        if agent_def and agent_def.max_retries is not None:
+            agent.max_retries = agent_def.max_retries
+        elif self.template:
+            agent.max_retries = self.template.max_retries
+
+        # Compute per-worker disabled_skills from skills allowlist
+        disabled_skills: list[str] | None = None
+        if self.template and agent_def and agent_def.skills is not None:
+            if agent_def.skills == ["*"] or not agent_def.skills:
+                # Wildcard = no filtering; empty = disable all
+                if not agent_def.skills:
+                    disabled_skills = (
+                        sorted(self.template.all_skill_names) if self.template.all_skill_names else None
+                    )
+            else:
+                # Map directory names to actual skill names
+                worker_skill_names = {
+                    self.template.skill_name_map[dir_name]
+                    for dir_name in agent_def.skills
+                    if dir_name in self.template.skill_name_map
+                }
+                to_disable = self.template.all_skill_names - worker_skill_names
+                disabled_skills = sorted(to_disable) if to_disable else None
+        agent.disabled_skills = disabled_skills
+
     async def _spawn(self, plan: dict[str, Any]) -> None:
         """Create SwarmAgents for each unique worker in the plan."""
         seen: set[str] = set()
@@ -769,41 +862,14 @@ class SwarmOrchestrator:
             # Use template-specific agent config if available
             agent_available_tools: list[str] | None = None
             agent_prompt_template: str | None = None
-            system_preamble = ""
             agent_def: AgentDefinition | None = None
             if self.template:
                 agent_def = next((a for a in self.template.agents if a.name == name), None)
                 if agent_def:
-                    self._agent_defs[name] = agent_def
                     display_name = agent_def.display_name
                     role = agent_def.description or role
                     agent_available_tools = agent_def.tools  # None = all, list = built-in whitelist
                     agent_prompt_template = agent_def.prompt_template
-
-            system_preamble = self.system_preamble
-
-            # MCP servers and skills from template (if available)
-            mcp_servers = self._get_mcp_servers()
-            skill_dirs = [str(self.template.skills_dir)] if self.template and self.template.skills_dir else None
-
-            # Compute per-worker disabled_skills from skills allowlist
-            disabled_skills: list[str] | None = None
-            if self.template and agent_def and agent_def.skills is not None:
-                if agent_def.skills == ["*"] or not agent_def.skills:
-                    # Wildcard = no filtering; empty = disable all
-                    if not agent_def.skills:
-                        disabled_skills = (
-                            sorted(self.template.all_skill_names) if self.template.all_skill_names else None
-                        )
-                else:
-                    # Map directory names to actual skill names
-                    worker_skill_names = {
-                        self.template.skill_name_map[dir_name]
-                        for dir_name in agent_def.skills
-                        if dir_name in self.template.skill_name_map
-                    }
-                    to_disable = self.template.all_skill_names - worker_skill_names
-                    disabled_skills = sorted(to_disable) if to_disable else None
 
             agent = SwarmAgent(
                 name=name,
@@ -815,20 +881,13 @@ class SwarmOrchestrator:
                 event_bus=self.event_bus,
                 available_tools=agent_available_tools,
                 prompt_template=agent_prompt_template,
-                system_preamble=system_preamble,
+                system_preamble=self.system_preamble,
                 system_tools=self.system_tools,
                 model=self.model,
                 work_dir=self.work_dir,
                 swarm_id=self.swarm_id,
-                mcp_servers=mcp_servers,
-                skill_directories=skill_dirs,
-                disabled_skills=disabled_skills,
             )
-            # Resolve max_retries: worker override > template default > hardcoded 2
-            if agent_def and agent_def.max_retries is not None:
-                agent.max_retries = agent_def.max_retries
-            elif self.template:
-                agent.max_retries = self.template.max_retries
+            self._configure_agent(agent, name, agent_def)
 
             if self.client_factory:
                 agent_client = await self.client_factory()
@@ -853,6 +912,8 @@ class SwarmOrchestrator:
             )
 
         await self._emit("swarm.phase_changed", {"phase": "spawning"})
+        if self.service:
+            await self.service.update_phase("spawning")
         await self._emit("swarm.spawn_complete", {"agent_count": len(self.agents)})
 
     # ------------------------------------------------------------------
@@ -972,6 +1033,8 @@ class SwarmOrchestrator:
         timeout = self.config.get("timeout", 300)
 
         await self._emit("swarm.phase_changed", {"phase": "executing"})
+        if self.service:
+            await self.service.update_phase("executing")
 
         for round_num in range(1, max_rounds + 1):
             if self._cancelled:
@@ -1168,6 +1231,8 @@ class SwarmOrchestrator:
         session.idle when truly done, so we don't miss late responses.
         """
         await self._emit("swarm.phase_changed", {"phase": "synthesizing"})
+        if self.service:
+            await self.service.update_phase("synthesizing")
         all_tasks = await self.task_board.get_tasks()
         task_results = "\n\n".join(
             f"## {t.subject} (by {t.worker_name})\nStatus: {t.status.value}\nResult: {t.result}" for t in all_tasks
@@ -1271,6 +1336,8 @@ class SwarmOrchestrator:
 
         await self._emit("leader.report", {"content": report})
         await self._emit("swarm.phase_changed", {"phase": "complete"})
+        if self.service:
+            await self.service.update_phase("complete")
         await self._scan_work_dir()
         await self._emit("swarm.synthesis_complete", {})
         return report

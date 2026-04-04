@@ -283,6 +283,18 @@ async def skip_to_synthesis(swarm_id: str) -> dict[str, object]:
     return {"ok": True, "swarm_id": swarm_id, "action": "skip"}
 
 
+async def _run_resume(sid: str, orch: object, goal: str) -> None:
+    """Background task: run orchestrator.resume() and update swarm_store on completion/failure."""
+    try:
+        report = await orch.resume(goal)  # type: ignore[union-attr]
+        swarm_store[sid]["phase"] = "complete"
+        swarm_store[sid]["report"] = report
+    except Exception as exc:
+        log.error("resume_failed", swarm_id=sid, error=str(exc), exc_info=True)
+        swarm_store[sid]["phase"] = "failed"
+        swarm_store[sid]["error"] = str(exc)
+
+
 @router.post("/api/swarm/{swarm_id}/resume")
 async def resume_swarm(swarm_id: str) -> dict[str, object]:
     """Resume a suspended swarm from persisted state."""
@@ -330,7 +342,7 @@ async def resume_swarm(swarm_id: str) -> dict[str, object]:
     swarm_store[swarm_id]["phase"] = "resuming"
 
     goal = swarm_data.get("qa_refined_goal") or swarm_data["goal"]
-    task = asyncio.create_task(orch.resume(goal))  # type: ignore[attr-defined]  # resume() added by Agent B
+    task = asyncio.create_task(_run_resume(swarm_id, orch, goal))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 

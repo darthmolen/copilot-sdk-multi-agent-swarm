@@ -1654,3 +1654,116 @@ class TestOrphanRecovery:
         await recover_orphaned_swarms(mock_repo)
 
         mock_repo.suspend_swarm.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Resume background callback tests
+# ---------------------------------------------------------------------------
+
+
+class TestResumeCallback:
+    @pytest.mark.asyncio
+    async def test_resume_updates_store_on_success(self) -> None:
+        """Background resume task updates swarm_store phase to 'complete'."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        # Save originals
+        old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
+        old_bus = rest_mod._event_bus
+        old_loader = rest_mod._template_loader
+
+        try:
+            # Set up mock repository that returns a suspended swarm
+            mock_repo = MagicMock()
+            swarm_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            mock_repo.get_swarm = AsyncMock(return_value={
+                "phase": "suspended",
+                "goal": "Test goal",
+                "template_key": None,
+                "max_rounds": 3,
+            })
+
+            # Mock orchestrator whose resume() returns a report
+            mock_orch = MagicMock()
+            mock_orch.resume = AsyncMock(return_value="Final report text")
+
+            rest_mod._repository = mock_repo
+            rest_mod._copilot_client = MagicMock()
+            rest_mod._event_bus = MagicMock()
+            rest_mod._template_loader = None
+
+            # Monkey-patch the resume endpoint to use our mock orchestrator
+            # We do this by pre-creating the swarm state then calling the endpoint
+
+
+            # Patch SwarmOrchestrator creation to return our mock
+            import backend.swarm.orchestrator as orch_mod
+
+            original_init = orch_mod.SwarmOrchestrator.__init__
+
+            def _mock_init(self_orch, **kwargs):
+                original_init(self_orch, **kwargs)
+
+            # Instead, directly test the background task pattern by simulating what the endpoint does
+            rest_mod.swarm_store[swarm_id] = rest_mod._create_swarm_state(swarm_id, "Test goal", None)
+            rest_mod.swarm_store[swarm_id]["orchestrator"] = mock_orch
+            rest_mod.swarm_store[swarm_id]["phase"] = "resuming"
+
+            # Import the _run_resume helper (it should exist after the fix)
+            from backend.api.rest import _run_resume
+
+            await _run_resume(swarm_id, mock_orch, "Test goal")
+
+            assert rest_mod.swarm_store[swarm_id]["phase"] == "complete"
+            assert rest_mod.swarm_store[swarm_id]["report"] == "Final report text"
+        finally:
+            rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
+            rest_mod._event_bus = old_bus
+            rest_mod._template_loader = old_loader
+
+    @pytest.mark.asyncio
+    async def test_resume_updates_store_on_failure(self) -> None:
+        """Background resume task updates swarm_store phase to 'failed' on error."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        old_repo = rest_mod._repository
+        old_client = rest_mod._copilot_client
+        old_bus = rest_mod._event_bus
+        old_loader = rest_mod._template_loader
+
+        try:
+            swarm_id = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
+
+            mock_orch = MagicMock()
+            mock_orch.resume = AsyncMock(side_effect=RuntimeError("Execution blew up"))
+
+            rest_mod._repository = MagicMock()
+            rest_mod._copilot_client = MagicMock()
+            rest_mod._event_bus = MagicMock()
+            rest_mod._template_loader = None
+
+            rest_mod.swarm_store[swarm_id] = rest_mod._create_swarm_state(swarm_id, "Test goal", None)
+            rest_mod.swarm_store[swarm_id]["orchestrator"] = mock_orch
+            rest_mod.swarm_store[swarm_id]["phase"] = "resuming"
+
+            from backend.api.rest import _run_resume
+
+            await _run_resume(swarm_id, mock_orch, "Test goal")
+
+            assert rest_mod.swarm_store[swarm_id]["phase"] == "failed"
+            assert "Execution blew up" in rest_mod.swarm_store[swarm_id]["error"]
+        finally:
+            rest_mod._repository = old_repo
+            rest_mod._copilot_client = old_client
+            rest_mod._event_bus = old_bus
+            rest_mod._template_loader = old_loader

@@ -2658,11 +2658,12 @@ class TestAutoRetry:
 
 
 class _MockService:
-    """Minimal mock for SwarmService with suspend() and update_round()."""
+    """Minimal mock for SwarmService with suspend(), update_round(), and update_phase()."""
 
     def __init__(self) -> None:
         self.suspend_calls: list[str] = []
         self.update_round_calls: list[int] = []
+        self.update_phase_calls: list[str] = []
         self.task_board = TaskBoard()
         self.inbox = InboxSystem()
         self.registry = TeamRegistry()
@@ -2672,6 +2673,9 @@ class _MockService:
 
     async def update_round(self, round_num: int) -> None:
         self.update_round_calls.append(round_num)
+
+    async def update_phase(self, phase: str) -> None:
+        self.update_phase_calls.append(phase)
 
 
 @pytest.mark.asyncio
@@ -3090,3 +3094,251 @@ class TestRebuildAgents:
 
         assert len(factory_clients) == 1, "client_factory should be called once per agent"
         assert orch.agents["analyst"]._owns_client is True
+
+
+# ---------------------------------------------------------------------------
+# Phase persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestPhasePersistence:
+    async def test_run_persists_phase_at_each_transition(self, event_bus: EventBus) -> None:
+        """run() calls service.update_phase for planning, spawning, executing, synthesizing, complete."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        service = MagicMock()
+        service.task_board = TaskBoard()
+        service.inbox = InboxSystem()
+        service.registry = TeamRegistry()
+        service.update_phase = AsyncMock()
+        service.update_round = AsyncMock()
+
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            service=service,
+            swarm_id="swarm-persist",
+        )
+
+        await orch.run("Build something")
+
+        called_phases = [call.args[0] for call in service.update_phase.call_args_list]
+        assert "planning" in called_phases, f"Expected 'planning' in {called_phases}"
+        assert "spawning" in called_phases, f"Expected 'spawning' in {called_phases}"
+        assert "executing" in called_phases, f"Expected 'executing' in {called_phases}"
+        assert "synthesizing" in called_phases, f"Expected 'synthesizing' in {called_phases}"
+        assert "complete" in called_phases, f"Expected 'complete' in {called_phases}"
+        assert called_phases.index("planning") < called_phases.index("spawning")
+        assert called_phases.index("spawning") < called_phases.index("executing")
+        assert called_phases.index("executing") < called_phases.index("synthesizing")
+        assert called_phases.index("synthesizing") < called_phases.index("complete")
+
+    async def test_resume_persists_phase_transitions(self, event_bus: EventBus) -> None:
+        """resume() calls service.update_phase for executing, synthesizing, complete."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        service = MagicMock()
+        service.task_board = TaskBoard()
+        service.inbox = InboxSystem()
+        service.registry = TeamRegistry()
+        service.update_phase = AsyncMock()
+        service.update_round = AsyncMock()
+        service.load = AsyncMock()
+        service.suspend = AsyncMock()
+
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            service=service,
+            swarm_id="swarm-resume-persist",
+        )
+
+        await service.task_board.add_task(
+            id="task-0",
+            subject="Task 1",
+            description="Do thing 1",
+            worker_role="Analyst",
+            worker_name="analyst",
+        )
+        await service.registry.register("analyst", "Analyst", "Analyst")
+
+        await orch.resume("Build something")
+
+        called_phases = [call.args[0] for call in service.update_phase.call_args_list]
+        assert "executing" in called_phases
+        assert "synthesizing" in called_phases
+        assert "complete" in called_phases
+        assert called_phases.index("executing") < called_phases.index("synthesizing")
+        assert called_phases.index("synthesizing") < called_phases.index("complete")
+
+
+# ---------------------------------------------------------------------------
+# Rebuild agents parity tests
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildAgentsParity:
+    """Rebuilt agents must receive the same config that _spawn() applies."""
+
+    @staticmethod
+    def _make_template(
+        *,
+        max_retries: int = 2,
+        agents: list[AgentDefinition] | None = None,
+        skills_dir: Path | None = None,
+        all_skill_names: set[str] | None = None,
+        skill_name_map: dict[str, str] | None = None,
+    ) -> LoadedTemplate:
+        if agents is None:
+            agents = [
+                AgentDefinition(
+                    name="analyst",
+                    display_name="Analyst",
+                    description="Analyze things",
+                ),
+            ]
+        return LoadedTemplate(
+            key="test",
+            name="Test Template",
+            description="A test template",
+            goal_template="Do {goal}",
+            leader_prompt="You are the leader",
+            agents=agents,
+            max_retries=max_retries,
+            skills_dir=skills_dir,
+            all_skill_names=all_skill_names or set(),
+            skill_name_map=skill_name_map or {},
+        )
+
+    @staticmethod
+    async def _make_orchestrator_for_rebuild(
+        event_bus: EventBus,
+        template: LoadedTemplate,
+    ) -> SwarmOrchestrator:
+        """Build an orchestrator, register agents in registry, ready for _rebuild_agents()."""
+        client = MockCopilotClient()
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            template=template,
+        )
+        # Register agents (simulates what _spawn/load would have done)
+        for agent_def in template.agents:
+            await orch.registry.register(
+                agent_def.name,
+                agent_def.description,
+                agent_def.display_name,
+            )
+        return orch
+
+    async def test_rebuild_populates_agent_defs(self, event_bus: EventBus) -> None:
+        """After rebuild, _agent_defs has entries for each agent from template."""
+        template = self._make_template()
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        assert len(orch._agent_defs) == 0  # precondition
+
+        await orch._rebuild_agents()
+
+        assert "analyst" in orch._agent_defs
+        assert orch._agent_defs["analyst"].name == "analyst"
+
+    async def test_rebuild_sets_max_retries_from_template(self, event_bus: EventBus) -> None:
+        """Rebuilt agents get max_retries from template config."""
+        agents = [
+            AgentDefinition(
+                name="analyst",
+                display_name="Analyst",
+                description="Analyze",
+                max_retries=5,
+            ),
+        ]
+        template = self._make_template(agents=agents)
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        await orch._rebuild_agents()
+
+        assert orch.agents["analyst"].max_retries == 5
+
+    async def test_rebuild_sets_max_retries_from_template_default(self, event_bus: EventBus) -> None:
+        """When worker has no override, rebuilt agent gets template-level max_retries."""
+        agents = [
+            AgentDefinition(
+                name="analyst",
+                display_name="Analyst",
+                description="Analyze",
+                max_retries=None,  # no worker override
+            ),
+        ]
+        template = self._make_template(max_retries=7, agents=agents)
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        await orch._rebuild_agents()
+
+        assert orch.agents["analyst"].max_retries == 7
+
+    async def test_rebuild_sets_max_instances_in_defs(self, event_bus: EventBus) -> None:
+        """agent_def.max_instances accessible after rebuild for _execute()."""
+        agents = [
+            AgentDefinition(
+                name="analyst",
+                display_name="Analyst",
+                description="Analyze",
+                max_instances=3,
+            ),
+        ]
+        template = self._make_template(agents=agents)
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        await orch._rebuild_agents()
+
+        assert orch._agent_defs["analyst"].max_instances == 3
+
+    async def test_rebuild_wires_mcp_servers(self, event_bus: EventBus) -> None:
+        """Rebuilt agents have mcp_servers from _get_mcp_servers()."""
+        template = self._make_template()
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        await orch._rebuild_agents()
+
+        agent = orch.agents["analyst"]
+        assert agent.mcp_servers is not None
+        assert "swarm-state" in agent.mcp_servers
+
+    async def test_rebuild_sets_skill_directories(self, event_bus: EventBus) -> None:
+        """Rebuilt agents get skill_directories from template.skills_dir."""
+        skills_path = Path("/tmp/test-skills")
+        template = self._make_template(skills_dir=skills_path)
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        await orch._rebuild_agents()
+
+        agent = orch.agents["analyst"]
+        assert agent.skill_directories == [str(skills_path)]
+
+    async def test_rebuild_computes_disabled_skills(self, event_bus: EventBus) -> None:
+        """Rebuilt agents get disabled_skills from template skill map."""
+        agents = [
+            AgentDefinition(
+                name="analyst",
+                display_name="Analyst",
+                description="Analyze",
+                skills=["search"],  # only allow 'search' skill directory
+            ),
+        ]
+        template = self._make_template(
+            agents=agents,
+            all_skill_names={"Search", "Write"},
+            skill_name_map={"search": "Search", "write": "Write"},
+        )
+        orch = await self._make_orchestrator_for_rebuild(event_bus, template)
+
+        await orch._rebuild_agents()
+
+        agent = orch.agents["analyst"]
+        # "Write" should be disabled because analyst only has "search"
+        assert agent.disabled_skills is not None
+        assert "Write" in agent.disabled_skills
+        assert "Search" not in agent.disabled_skills
