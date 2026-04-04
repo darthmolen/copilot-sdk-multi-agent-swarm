@@ -908,7 +908,7 @@ class SwarmOrchestrator:
                             await agent.execute_task(task)
                             retry_succeeded = True
                             break
-                        except Exception as retry_err:  # noqa: BLE001
+                        except Exception as retry_err:
                             last_error = retry_err
                             log.warning(
                                 "retry_failed",
