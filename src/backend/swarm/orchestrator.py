@@ -592,9 +592,6 @@ class SwarmOrchestrator:
 
         await self.service.load(self.swarm_id)
 
-        # Replay existing state so WebSocket listeners catch up
-        await self._replay_state()
-
         # Rebuild agents from DB state
         await self._rebuild_agents()
 

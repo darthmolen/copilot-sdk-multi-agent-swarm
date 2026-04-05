@@ -446,6 +446,32 @@ function SwarmDashboard() {
       swarmDispatch({ type: 'swarm.add', swarmId });
       // Remove from suspended list
       setSuspendedSwarms((prev) => prev.filter((s) => s.id !== swarmId));
+
+      // Hydrate existing task/agent state from backend before WS connects
+      try {
+        const statusResp = await fetch(`${API_BASE}/api/swarm/${swarmId}/status`, {
+          headers: apiKey ? { 'X-API-Key': apiKey } : {},
+        });
+        if (statusResp.ok) {
+          const status = await statusResp.json();
+          for (const task of status.tasks ?? []) {
+            swarmDispatch({
+              type: 'swarm.event', swarmId,
+              event: { type: 'task.created', data: { task, swarm_id: swarmId } },
+            });
+            swarmDispatch({
+              type: 'swarm.event', swarmId,
+              event: { type: 'task.updated', data: { task, swarm_id: swarmId } },
+            });
+          }
+          for (const agent of status.agents ?? []) {
+            swarmDispatch({
+              type: 'swarm.event', swarmId,
+              event: { type: 'agent.spawned', data: { agent, swarm_id: swarmId } },
+            });
+          }
+        }
+      } catch { /* status fetch is best-effort */ }
     } catch {
       toast.error('Failed to resume swarm');
     }
