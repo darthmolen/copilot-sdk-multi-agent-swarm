@@ -121,6 +121,7 @@ goal_template: |
 | `name` | Yes | Human-readable team name shown in the UI dropdown |
 | `description` | Yes | Brief description shown in the UI |
 | `goal_template` | Yes | Template string that wraps the user's input into a structured goal. Must contain `{user_input}`. |
+| `maxRetries` | No | Default retry count for all workers (default: 2). Individual workers can override via their own `maxRetries` frontmatter. |
 
 The `goal_template` is your primary mechanism for **steering the leader's decomposition**. It is the user message sent to the leader. Use it to:
 - Suggest which specialist roles to create
@@ -221,8 +222,11 @@ Your output should include:
 | `name` | Yes | file stem | Snake-case identifier matching `worker_name` in plans |
 | `displayName` | Yes | same as `name` | Human-readable name for UI |
 | `description` | Yes | `""` | Role description, also used as `{role}` in prompt expansion |
-| `tools` | No | `null` (all tools) | Whitelist of allowed tools. `null` means all tools are available. List specific tool names to restrict. |
+| `tools` | No | `null` (all tools) | Whitelist of allowed tools. `null` means all tools are available. List specific tool names to restrict. Includes both swarm tools (`task_update`, `inbox_send`, etc.) and SDK built-in tools (`bash`, `write`, etc.). |
 | `infer` | No | `false` | Reserved for future use |
+| `maxInstances` | No | `1` | Max concurrent tasks this worker can handle per round. Values > 1 enable ephemeral agent sessions for parallel execution. |
+| `maxRetries` | No | `null` (use template default) | Max automatic retries on task failure. Retries use session resume to preserve conversation history. `null` inherits from `_template.yaml` default (2). |
+| `skills` | No | `null` (all skills) | List of skill directory names this worker can use. `["*"]` = all, `[]` = none. |
 
 **Body content**: The markdown body becomes the worker's domain-specific prompt. It is combined with the system preamble and work directory directive to form the full system message. See [Replacement Variables](replacement-variables.md) for available template variables.
 
@@ -431,7 +435,32 @@ The template validator (`template_validator.py`) enforces:
 | `worker-*.md` | Frontmatter must have `name`, `displayName`, `description`. |
 | `leader.md` | Must have non-empty body after frontmatter. |
 | `synthesis.md` | Must have non-empty body after frontmatter. |
-| Any file with `tools` | Tools list can only contain known tools: `task_update`, `inbox_send`, `inbox_receive`, `task_list`. |
+| Any file with `tools` | Tools list can only contain known swarm tools (`task_update`, `inbox_send`, `inbox_receive`, `task_list`) and/or SDK built-in tools (`bash`, `write`, etc.). |
+
+## Execution Features
+
+### Automatic Retry
+
+When a task fails (circuit breaker, tool errors, or timeout), the orchestrator automatically retries it if the worker has retry budget remaining. Retries use `session.resume()` to preserve the agent's full conversation history, then send a nudge message explaining the failure. Configure via:
+
+- `maxRetries` in `_template.yaml` — swarm-wide default (default: 2)
+- `maxRetries` in `worker-*.md` frontmatter — per-worker override
+
+### Multi-Instance Workers
+
+Workers with `maxInstances > 1` can handle multiple tasks per round via ephemeral agent sessions. The base agent handles the first task; additional tasks get their own temporary sessions. Useful for workers with many similar tasks (e.g., an `iac-developer` writing 7 Bicep modules).
+
+### Suspend and Resume
+
+If the swarm exhausts all execution rounds with tasks still pending, it pauses and waits for user input (Continue, Skip to synthesis, or auto-suspend after 30 minutes). Suspended swarms persist to Postgres and can resume across process restarts.
+
+### MCP Server Access
+
+All agent sessions (leader, workers, synthesis) receive the swarm-state MCP server, giving them 9 tools to query swarm status, read task results, list artifacts, and resume failed peers. This enables agents to self-coordinate beyond the basic inbox system.
+
+### Skills
+
+Templates can include a `skills/` subdirectory with per-worker skill definitions. Workers declare which skills they can use via the `skills` frontmatter field. The orchestrator computes `disabled_skills` from the skill map and restricts each worker accordingly.
 
 ## Tips for Effective Templates
 
@@ -440,3 +469,6 @@ The template validator (`template_validator.py`) enforces:
 - **Design worker prompts for autonomy**: Workers have no context beyond their system prompt and task description. Include everything they need to know -- methodology, deliverable format, quality standards.
 - **Use the synthesis template to control report quality**: The synthesis agent produces the user-facing output. A detailed synthesis template with specific section headings produces better reports than a vague "summarize the results" instruction.
 - **Keep worker tool lists explicit**: Listing tools in frontmatter (even if it's all four coordination tools) makes the template self-documenting and prevents accidental access to unintended built-in tools.
+- **Add file-write tools when workers produce artifacts**: Workers that need to create files in the work directory should have `bash` and `write` in their tools list. Without these, output goes into task results only.
+- **Set maxInstances for high-volume workers**: If a worker type handles many independent tasks (e.g., writing individual modules), increase `maxInstances` to enable parallel execution within a single round.
+- **Use maxRetries for unreliable tasks**: Tasks that depend on external tools or complex reasoning benefit from retry budget. The agent keeps its conversation history on retry, so it can learn from its mistakes.

@@ -112,6 +112,8 @@ Emitted by `SwarmOrchestrator._emit()` — all include `swarm_id`.
 | `swarm.error` | Fatal error | `{ message, swarm_id }` |
 | `swarm.cancelled` | User cancelled | `{ swarm_id }` |
 | `swarm.task_failed` | Task execution failed | `{ task_id, agent, error, swarm_id }` |
+| `swarm.rounds_exhausted` | Max rounds reached with tasks remaining | `{ remaining_tasks, max_rounds, swarm_id }` |
+| `swarm.suspended` | Swarm paused awaiting user decision | `{ remaining_tasks, max_rounds, reason, swarm_id }` |
 
 ### Task and Agent Events
 
@@ -121,6 +123,7 @@ Emitted by `SwarmOrchestrator._emit()` — all include `swarm_id`.
 | `task.updated` | Tool handler + orchestrator | Task status/result changed | `{ task: {id, status, result, ...}, swarm_id }` |
 | `agent.spawned` | Orchestrator spawn phase | New agent registered | `{ agent: {name, role, display_name, status, tasks_completed}, swarm_id }` |
 | `agent.status_changed` | Orchestrator execute phase | Agent working/idle/failed | `{ agent_name, status, tasks_completed?, swarm_id }` |
+| `agent.resumed` | Orchestrator resume_agent | Agent session resumed after failure | `{ agent_name, swarm_id }` |
 | `inbox.message` | Tool handler (inbox_send) | Inter-agent message | `{ sender, recipient, content, timestamp, swarm_id }` |
 | `leader.plan` | Orchestrator plan phase | Raw plan text | `{ content, swarm_id }` |
 | `leader.report` | Orchestrator synthesis phase | Final report | `{ content, swarm_id }` |
@@ -141,6 +144,7 @@ The `multiSwarmReducer` handles routing; the inner `swarmReducer` handles these 
 | `round.started` / `swarm.round_start` | Sets `roundNumber` |
 | `swarm.complete` | Sets `phase` to `"complete"` |
 | `swarm.error` | Sets `error` |
+| `swarm.suspended` | Sets `phase` to `"suspended"`, stores pause metadata |
 
 ### Multi-Swarm Store Actions
 
@@ -150,7 +154,25 @@ The `multiSwarmReducer` handles routing; the inner `swarmReducer` handles these 
 | `swarm.remove` | Frees all data for that swarm |
 | `swarm.event` | Routes inner event to correct swarm's reducer |
 
-Auto-transitions: When a swarm's phase becomes `complete` or `cancelled`, it moves from `activeSwarmIds` to `completedSwarmIds` (WS disconnects, data retained for report viewing). Hard cap of 10 swarms with oldest-completed auto-eviction.
+Auto-transitions: When a swarm's phase becomes `complete`, `cancelled`, or `failed`, it moves from `activeSwarmIds` to `completedSwarmIds` (WS disconnects, data retained for report viewing). Suspended swarms remain in `activeSwarmIds` — the user hasn't decided yet. Hard cap of 10 swarms with oldest-completed auto-eviction.
+
+### MCP Server Events
+
+The in-process MCP server at `/mcp` gives agent sessions 9 tools to query and manage swarm state. Agents can call these during task execution to coordinate with peers or inspect the task board.
+
+| MCP Tool | Description |
+| --- | --- |
+| `get_active_swarms` | List all swarms (no swarm_id required) |
+| `get_swarm_status` | Phase, round, agent count, task counts |
+| `list_tasks` | All tasks with optional status/worker filter |
+| `get_task_detail` | Full task including result text |
+| `get_recent_events` | Event history (requires DB) |
+| `list_agents` | Agent roster with status |
+| `list_artifacts` | Files in work directory |
+| `read_artifact` | Read a specific file (path traversal protected) |
+| `resume_agent` | Resume a failed agent's session with nudge message |
+
+All tools except `get_active_swarms` require `swarm_id` for multi-swarm isolation. Auth via `X-API-Key` header at ASGI layer.
 
 ## System Prompt Architecture
 
