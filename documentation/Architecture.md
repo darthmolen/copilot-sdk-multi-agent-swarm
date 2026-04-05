@@ -128,6 +128,50 @@ API key middleware (`verify_api_key`) checks `X-API-Key` header on REST endpoint
 - Any other environment + no key = 500 error (forces configuration)
 - Key set in any environment = auth enforced
 
+### Swarm Lifecycle Management (Saga)
+
+The orchestrator supports suspend/resume across restarts:
+
+- **Phase persistence**: `service.update_phase()` called at every transition (planning, spawning, executing, synthesizing, complete, suspended). Stored in Postgres `swarms.phase` column.
+- **Round tracking**: `service.update_round()` called each execution round. Stored in `swarms.current_round`.
+- **Pause on exhaustion**: After `_execute()`, if actionable tasks remain (PENDING/BLOCKED/IN_PROGRESS), the orchestrator pauses via `asyncio.Event` with a 30-minute auto-suspend timeout. User can Continue (run more rounds), Skip to synthesis, or let it auto-suspend.
+- **Crash recovery**: On startup, `recover_orphaned_swarms()` scans for swarms in non-terminal phases (executing, planning, spawning) and transitions them to `suspended`.
+- **Cold resume**: `POST /api/swarm/{id}/resume` rebuilds the orchestrator from DB: `SwarmService.load()` hydrates TaskBoard + TeamRegistry, `_rebuild_agents()` recreates SwarmAgent instances with `_configure_agent()` applying template config (max_retries, disabled_skills, mcp_servers), and `_execute()` resumes.
+
+### Automatic Task Retry
+
+When a task fails (circuit breaker or exception), the orchestrator checks the agent's retry budget:
+- Per-task retry counter (not per-agent) — each task gets its own budget
+- `maxRetries` configurable at template level (default 2) with per-worker override in frontmatter
+- Retry uses `agent.resume_session()` to preserve full conversation history, then sends a nudge message with failure context
+- Post-execution status check — if `execute_task()` sets FAILED/TIMEOUT without raising, the retry loop detects it
+
+### MCP Server (Swarm State)
+
+In-process FastMCP server mounted at `/mcp` on the FastAPI app. Provides 9 tools for agent self-awareness:
+
+| Tool | Description |
+|------|-------------|
+| `get_active_swarms` | List all swarms with IDs, phase, goal |
+| `get_swarm_status` | Phase, round, agent count, task counts |
+| `list_tasks` | All tasks with optional status/worker filter |
+| `get_task_detail` | Full task including result |
+| `get_recent_events` | Event history (requires DB) |
+| `list_agents` | Agent roster with status |
+| `list_artifacts` | Files in work directory |
+| `read_artifact` | Read a specific file (path traversal protected) |
+| `resume_agent` | Resume a failed agent's session |
+
+All tools require `swarm_id` (except `get_active_swarms`) for multi-swarm isolation. Auth via `X-API-Key` header at transport layer — invisible to agent context.
+
+### SwarmService (Cache-First Persistence)
+
+`SwarmService` owns the in-memory cache (TaskBoard, InboxSystem, TeamRegistry) and optional write-through to `SwarmRepository`:
+- Reads from cache, writes to cache + repo (if configured)
+- `load(swarm_id)` hydrates cache from Postgres for cold-start resume
+- `suspend(reason)` persists suspended state
+- `update_round(n)` persists round progress
+
 ## Key Design Decisions
 
 - **`system_message: mode:"replace"` instead of `customAgents`**: Empirically proven across 8 models that `customAgents` suppresses custom tool compliance. Direct system message replacement works reliably with Gemini 3 Pro Preview.

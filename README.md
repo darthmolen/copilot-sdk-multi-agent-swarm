@@ -4,7 +4,7 @@ A multi-agent swarm system using GitHub Copilot CLI in headless mode. A leader a
 
 ## Architecture Overview
 
-Four-phase lifecycle: **Plan** (leader decomposes goal via tool-based structured output) → **Spawn** (workers created with role-specific system prompts and model selection) → **Execute** (round-based concurrent execution with dependency resolution) → **Synthesize** (results consolidated with work directory files injected into context).
+Four-phase lifecycle: **Plan** (leader decomposes goal via tool-based structured output) → **Spawn** (workers created with role-specific system prompts and model selection) → **Execute** (round-based concurrent execution with dependency resolution and automatic retry) → **Synthesize** (results consolidated with work directory files injected into context). Swarms can **suspend** between phases and **resume** from Postgres checkpoints — even across process restarts.
 
 An `EventBus` decouples all components. Every event carries a `swarm_id` for per-swarm routing. SDK session events flow through the EventBus to WebSocket connections, enabling real-time frontend updates.
 
@@ -18,6 +18,10 @@ See [documentation/Architecture.md](documentation/Architecture.md) for component
 - **Refinement chat** — Talk to the synthesis agent after the report is done. Ask follow-up questions, request revisions, drill into specifics — all with full context of the original research.
 - **Download session files** — Export all artifacts from any session as a ZIP archive directly from the UI.
 - **Resumable sessions** — Share a URL to any report. Come back later and pick up the refinement conversation where you left off.
+- **Crash recovery** — If the app crashes mid-swarm, orphaned swarms auto-suspend on restart. Resume from the sidebar with full task board and agent state restored from Postgres.
+- **Automatic task retry** — Failed tasks auto-retry with session resume, preserving the agent's conversation history so it can try a different approach. Configurable per-worker via `maxRetries` in template frontmatter.
+- **Suspend and resume** — When execution rounds exhaust with tasks remaining, the swarm pauses and shows a status window with Continue or Go to Report options. Suspended swarms persist to DB and can resume across restarts.
+- **Intervention UI** — Click failed/timeout task pills to open a troubleshooting view with template editor, task logs, and chat side-by-side. Modify templates and retry.
 - **Custom templates** — Build your own team compositions through the in-browser template editor with live validation.
 - **Run anywhere** — Run locally on your machine or hosted by your IT organization. Same experience either way.
 
@@ -31,6 +35,8 @@ See [documentation/Architecture.md](documentation/Architecture.md) for component
 - **API key authentication** — Environment-based security policy: open for local dev, enforced in production. REST via `X-API-Key` header, WebSocket via query parameter.
 - **Path traversal protection** — All file endpoints validate resolved paths stay within the work directory. Symlinks outside the boundary are rejected.
 - **Defensive tool handlers** — All swarm tools validate arguments and return structured errors instead of crashing the session.
+- **Saga-style swarm lifecycle** — Swarms persist phase, round number, and task state to Postgres. Resume from any checkpoint: the orchestrator rebuilds agents from DB, resumes SDK sessions, and continues execution.
+- **MCP server for agent awareness** — In-process streamable HTTP MCP server gives agents 9 tools to query swarm status, list tasks, read artifacts, and resume failed peers.
 - **Dockerized deployment** — Container-ready for IT hosting with configurable auth and log output.
 
 ## Tech Stack
@@ -41,7 +47,7 @@ See [documentation/Architecture.md](documentation/Architecture.md) for component
 | Frontend | React 19, TypeScript 5.9, Vite      |
 | SDK      | GitHub Copilot SDK (headless CLI), Claude Sonnet 4.6 |
 | Database | PostgreSQL 17 (optional), SQLAlchemy 2.0, Alembic |
-| Testing  | pytest + pytest-asyncio (309+), Vitest (97+), 24+ integration |
+| Testing  | pytest + pytest-asyncio (425+), Vitest (110+), 24+ integration |
 
 ## Project Structure
 
@@ -55,12 +61,15 @@ copilot-sdk-multi-agent-swarm/
       events.py                  # EventBus (pub-sub with async/sync emit)
       logging_config.py          # structlog JSON logging
       api/
-        rest.py                  # REST endpoints: start, status, cancel, chat, files, download-zip, templates
+        rest.py                  # REST endpoints: start, status, cancel, chat, resume, continue, files, templates
         schemas.py               # Request/response Pydantic models
         websocket.py             # WebSocket connection manager (per-swarm routing)
+      mcp/
+        server.py                # In-process MCP server (9 tools: swarm status, tasks, artifacts, resume)
+        deps.py                  # MCP dependency injection
       swarm/
-        orchestrator.py          # Four-phase lifecycle with swarm_id routing
-        agent.py                 # SwarmAgent: event-driven session with work_dir
+        orchestrator.py          # Four-phase lifecycle with suspend/resume and auto-retry
+        agent.py                 # SwarmAgent: event-driven session with session resume
         models.py                # Task, TaskStatus models
         tools.py                 # Tool factory with defensive error handling
         template_loader.py       # YAML template loader with system prompt frontmatter
@@ -84,7 +93,10 @@ copilot-sdk-multi-agent-swarm/
           ChatPanel.tsx           # Refinement chat with streaming markdown
           ChatInput.tsx           # Chat input with Enter-to-send
           ArtifactList.tsx        # File explorer sidebar with ZIP download
-          ResizableLayout.tsx     # Draggable two-column split view
+          ResizableLayout.tsx     # Draggable split view (horizontal + vertical modes)
+          SwarmStatusWindow.tsx   # Live swarm status with Continue/Skip/Close actions
+          InterventionView.tsx    # Troubleshooting view: template editor + logs + chat
+          TemplateEditorPanel.tsx # Inline template editor (non-modal)
           StreamingMarkdown.tsx   # Progressive markdown renderer
           ToolCard.tsx            # Tool execution status cards
           TemplateEditor.tsx      # In-browser template CRUD with validation
@@ -153,7 +165,7 @@ cp .env.template .env
 | `ENVIRONMENT` | — | Set to `development` to disable auth when no key is set |
 | `SWARM_API_KEY` | — | API key for REST and WebSocket auth. Empty + development = open access |
 | `SWARM_TASK_TIMEOUT` | `1800` | Max seconds per agent task before timeout (30 min) |
-| `SWARM_MAX_ROUNDS` | `3` | Max execution rounds per swarm |
+| `SWARM_MAX_ROUNDS` | `8` | Max execution rounds per swarm |
 | `SWARM_MODEL` | `claude-sonnet-4.6` | LLM model identifier (run `scripts/list-models.py` for options) |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Comma-separated allowed CORS origins |
 | `SWARM_WORK_DIR` | `workdir` | Agent work directory (use absolute path for Docker) |
@@ -266,9 +278,11 @@ DATABASE_URL=postgresql+asyncpg://swarm:swarm@localhost:5432/swarm
 
 When `DATABASE_URL` is set, the backend automatically:
 - Persists swarm lifecycle, tasks, agents, messages, and files to Postgres
+- Persists phase and round number at every transition for crash recovery
 - Logs all events to an append-only event table
-- Exposes `GET /api/swarms` (historical swarm list) and `GET /api/swarm/{id}/events` (event replay)
-- Captures agent session IDs for future recovery features
+- Recovers orphaned swarms on startup (stuck in executing → auto-suspended)
+- Exposes `GET /api/swarms` (historical list), `GET /api/swarm/{id}/events` (replay), `POST /api/swarm/{id}/resume` (cold-start resume)
+- Enables the Resume button in the sidebar for suspended swarms
 
 When `DATABASE_URL` is empty or unset, the backend runs exactly as before — fully in-memory, no database required.
 
@@ -278,7 +292,7 @@ Six tables managed by Alembic migrations: `swarms`, `tasks`, `agents`, `messages
 
 ## Running Tests
 
-### Backend unit tests (309+)
+### Backend unit tests (425+)
 
 ```bash
 python -m pytest tests/unit/ -x -q
@@ -305,6 +319,7 @@ Each integration test gets its own isolated database with real migrations applie
 | Template | Workers | Dependency Pattern |
 |----------|---------|-------------------|
 | **Deep Research** | Primary Researcher, Skeptic, Data Analyst | All research parallel; synthesis blocked by all |
+| **Azure Solutions Agent** | Architect, Security, Cost Expert, IaC Architect, IaC Developer (x5) | 6 workers with 11 skills; 4-phase pipeline with IaC generation |
 | **Simple Coding Agent** | Architect, Implementer, Tester, Documenter | Deployable via zip pack; includes Microsoft Learn MCP + C# quality skill |
 | **Warehouse Optimization** | Inventory Analyst, Layout Optimizer, Demand Forecaster, Implementation Planner | Inventory + demand parallel; layout blocked by inventory; planner blocked by all three |
 
