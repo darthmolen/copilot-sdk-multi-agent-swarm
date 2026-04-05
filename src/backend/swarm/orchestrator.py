@@ -645,6 +645,28 @@ class SwarmOrchestrator:
         report = await self._synthesize(goal)
         return report
 
+    async def _replay_state(self) -> None:
+        """Re-emit existing tasks and agents so WebSocket listeners catch up."""
+        all_tasks = await self.task_board.get_tasks()
+        for t in all_tasks:
+            await self._emit("task.created", {"task": t.to_dict()})
+            await self._emit("task.updated", {"task": t.to_dict()})
+
+        agent_entries = await self.registry.get_all()
+        for info in agent_entries:
+            await self._emit(
+                "agent.spawned",
+                {
+                    "agent": {
+                        "name": info.name,
+                        "role": info.role,
+                        "display_name": info.display_name,
+                        "status": "idle",
+                        "tasks_completed": 0,
+                    }
+                },
+            )
+
     async def _rebuild_agents(self) -> None:
         """Recreate SwarmAgent instances from persisted registry and resume sessions."""
         self.agents.clear()

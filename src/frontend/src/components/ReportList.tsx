@@ -4,30 +4,43 @@ interface ReportListProps {
   items: ReportListItem[];
   activeId: string | null;
   onSelect: (swarmId: string) => void;
+  onResume?: (swarmId: string) => void;
 }
 
-export function ReportList({ items, activeId, onSelect }: ReportListProps) {
+export function ReportList({ items, activeId, onSelect, onResume }: ReportListProps) {
   return (
     <div className="report-list">
       {items.length === 0 ? (
         <div className="report-list-empty">No sessions yet</div>
       ) : (
         items.map((item) => (
-          <button
+          <div
             key={item.swarmId}
             className={[
               'report-list-item',
               `report-list-item--${item.status}`,
               item.swarmId === activeId ? 'report-list-item--active' : '',
             ].filter(Boolean).join(' ')}
-            onClick={() => onSelect(item.swarmId)}
           >
-            <span className={`report-status-dot report-status-dot--${item.status}`} />
-            <span className="report-list-title">{item.title}</span>
-            <span className="report-list-meta">
-              {item.swarmId.slice(0, 8)} · {new Date(item.timestamp).toLocaleDateString()}
-            </span>
-          </button>
+            <button
+              className="report-list-item__content"
+              onClick={() => onSelect(item.swarmId)}
+            >
+              <span className={`report-status-dot report-status-dot--${item.status}`} />
+              <span className="report-list-title">{item.title}</span>
+              <span className="report-list-meta">
+                {item.swarmId.slice(0, 8)} · {new Date(item.timestamp).toLocaleDateString()}
+              </span>
+            </button>
+            {item.status === 'suspended' && onResume && (
+              <button
+                className="report-list-resume-btn"
+                onClick={(e) => { e.stopPropagation(); onResume(item.swarmId); }}
+              >
+                Resume
+              </button>
+            )}
+          </div>
         ))
       )}
     </div>
