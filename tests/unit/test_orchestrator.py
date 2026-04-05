@@ -3097,6 +3097,71 @@ class TestRebuildAgents:
 
 
 # ---------------------------------------------------------------------------
+# Replay state tests (re-emit existing tasks/agents for WebSocket catch-up)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestReplayState:
+    """_replay_state re-emits existing tasks and agents for frontend catch-up."""
+
+    async def test_replay_emits_task_created_for_each_task(self, event_bus: EventBus) -> None:
+        """_replay_state emits task.created + task.updated for every task on the board."""
+        orch = make_orchestrator(event_bus)
+
+        await orch.task_board.add_task(
+            id="t1", subject="Task 1", description="Do 1",
+            worker_name="analyst", worker_role="Analyst",
+        )
+        await orch.task_board.add_task(
+            id="t2", subject="Task 2", description="Do 2",
+            worker_name="security", worker_role="Security",
+        )
+        await orch.task_board.update_status("t1", "completed", "done")
+
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda et, data: events.append((et, data)))
+
+        await orch._replay_state()
+
+        task_created = [e for e in events if e[0] == "task.created"]
+        task_updated = [e for e in events if e[0] == "task.updated"]
+        assert len(task_created) == 2
+        assert len(task_updated) == 2
+
+        # Verify task status is preserved in the emitted data
+        t1_update = next(e for e in task_updated if e[1]["task"]["id"] == "t1")
+        assert t1_update[1]["task"]["status"] == "completed"
+
+    async def test_replay_emits_agent_spawned_for_each_agent(self, event_bus: EventBus) -> None:
+        """_replay_state emits agent.spawned for every registered agent."""
+        orch = make_orchestrator(event_bus)
+        await orch.registry.register("analyst", "Analyst", "Data Analyst")
+        await orch.registry.register("security", "Security", "Security Arch")
+
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda et, data: events.append((et, data)))
+
+        await orch._replay_state()
+
+        spawned = [e for e in events if e[0] == "agent.spawned"]
+        assert len(spawned) == 2
+        names = {e[1]["agent"]["name"] for e in spawned}
+        assert names == {"analyst", "security"}
+
+    async def test_replay_with_empty_state(self, event_bus: EventBus) -> None:
+        """_replay_state with no tasks/agents emits nothing."""
+        orch = make_orchestrator(event_bus)
+
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda et, data: events.append((et, data)))
+
+        await orch._replay_state()
+
+        assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
 # Phase persistence tests
 # ---------------------------------------------------------------------------
 

@@ -227,8 +227,11 @@ function SwarmDashboard() {
           toast('Swarm paused — action required', { icon: '\u23F8', duration: 8000 });
         }
 
-        // Auto-switch to report view when Q&A phase starts
-        if (event.type === 'swarm.phase_changed' && event.data.phase === 'qa') {
+        // Auto-switch to report view when Q&A phase starts or swarm completes
+        if (
+          event.type === 'swarm.phase_changed' &&
+          (event.data.phase === 'qa' || event.data.phase === 'complete')
+        ) {
           setReportSwarmId(swarmId);
         }
 
