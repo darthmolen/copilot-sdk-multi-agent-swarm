@@ -445,3 +445,188 @@ class TestResolveSwarmId:
 
             with pytest.raises(ToolError, match="not found"):
                 await get_swarm_status(swarm_id="wrong-id")
+
+
+# ---------------------------------------------------------------------------
+# get_swarm_templates
+# ---------------------------------------------------------------------------
+
+
+class TestGetSwarmTemplates:
+    async def test_returns_available_templates(self, tmp_path: Path) -> None:
+        """Lists templates from template_loader."""
+        loader = MagicMock()
+        loader.list_available.return_value = [
+            {"key": "azure", "name": "Azure Solutions", "description": "Azure IaC"},
+            {"key": "research", "name": "Deep Research", "description": "Multi-source research"},
+        ]
+        deps = await _make_deps(tmp_path)
+        deps.template_loader = loader
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_templates
+
+            result = await get_swarm_templates()
+        assert len(result) == 2
+        assert result[0]["key"] == "azure"
+        assert result[1]["name"] == "Deep Research"
+
+    async def test_returns_empty_when_no_loader(self, tmp_path: Path) -> None:
+        """Returns empty list when template_loader is None."""
+        deps = await _make_deps(tmp_path)
+        deps.template_loader = None
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_templates
+
+            result = await get_swarm_templates()
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# create_swarm
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSwarm:
+    async def test_creates_swarm_with_goal(self, tmp_path: Path) -> None:
+        """Creates swarm and returns swarm_id."""
+        start_fn = AsyncMock()
+        deps = await _make_deps(tmp_path)
+        deps.start_swarm = start_fn
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import create_swarm
+
+            result = await create_swarm(goal="Build a web app")
+        assert "swarm_id" in result
+        assert result["status"] == "starting"
+        start_fn.assert_called_once()
+        call_args = start_fn.call_args
+        assert call_args[0][1] == "Build a web app"
+
+    async def test_creates_swarm_with_template(self, tmp_path: Path) -> None:
+        """Creates swarm with a valid template."""
+        start_fn = AsyncMock()
+        loader = MagicMock()
+        loader.list_available.return_value = [{"key": "azure", "name": "Azure", "description": ""}]
+        deps = await _make_deps(tmp_path)
+        deps.start_swarm = start_fn
+        deps.template_loader = loader
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import create_swarm
+
+            result = await create_swarm(goal="Deploy infra", template="azure")
+        assert result["status"] == "starting"
+        assert start_fn.call_args[0][2] == "azure"
+
+    async def test_rejects_empty_goal(self, tmp_path: Path) -> None:
+        """Raises ToolError for empty goal."""
+        deps = await _make_deps(tmp_path)
+        deps.start_swarm = AsyncMock()
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import create_swarm
+
+            with pytest.raises(ToolError, match="goal must not be empty"):
+                await create_swarm(goal="   ")
+
+    async def test_rejects_unknown_template(self, tmp_path: Path) -> None:
+        """Raises ToolError for invalid template key."""
+        loader = MagicMock()
+        loader.list_available.return_value = [{"key": "azure", "name": "Azure", "description": ""}]
+        deps = await _make_deps(tmp_path)
+        deps.start_swarm = AsyncMock()
+        deps.template_loader = loader
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import create_swarm
+
+            with pytest.raises(ToolError, match="Unknown template"):
+                await create_swarm(goal="Do stuff", template="nonexistent")
+
+    async def test_raises_when_no_start_fn(self, tmp_path: Path) -> None:
+        """Raises ToolError when start_swarm not configured."""
+        deps = await _make_deps(tmp_path)
+        deps.start_swarm = None
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import create_swarm
+
+            with pytest.raises(ToolError, match="not available"):
+                await create_swarm(goal="Build something")
+
+
+# ---------------------------------------------------------------------------
+# get_swarm_summary
+# ---------------------------------------------------------------------------
+
+
+class TestGetSwarmSummary:
+    async def test_complete_swarm_returns_report(self, tmp_path: Path) -> None:
+        """Completed swarm returns status, report text, and artifact_id."""
+        deps = await _make_deps(tmp_path, swarm_id="swarm-done", phase="complete")
+        deps.swarm_store["swarm-done"]["report"] = "# Final Report\nAll tasks done."
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_summary
+
+            result = await get_swarm_summary(swarm_id="swarm-done")
+        assert result["status"] == "complete"
+        assert "Final Report" in result["report"]
+        assert result["artifact_path"] == "synthesis_report.md"
+
+    async def test_running_swarm_returns_progress(self, tmp_path: Path) -> None:
+        """Running swarm returns status, phase, and task progress."""
+        tasks = [
+            {"id": "t1", "subject": "A", "description": "do A", "worker_role": "dev", "worker_name": "w1", "status": "completed", "result": "done"},
+            {"id": "t2", "subject": "B", "description": "do B", "worker_role": "dev", "worker_name": "w1", "status": "in_progress"},
+            {"id": "t3", "subject": "C", "description": "do C", "worker_role": "dev", "worker_name": "w2"},
+        ]
+        deps = await _make_deps(tmp_path, swarm_id="swarm-run", phase="executing", tasks=tasks)
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_summary
+
+            result = await get_swarm_summary(swarm_id="swarm-run")
+        assert result["status"] == "executing"
+        assert result["task_progress"] == "1/3 completed"
+        assert "report" not in result
+
+    async def test_failed_swarm_returns_error(self, tmp_path: Path) -> None:
+        """Failed swarm returns status and error message."""
+        deps = await _make_deps(tmp_path, swarm_id="swarm-fail", phase="failed")
+        deps.swarm_store["swarm-fail"]["error"] = "Circuit breaker tripped"
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_summary
+
+            result = await get_swarm_summary(swarm_id="swarm-fail")
+        assert result["status"] == "failed"
+        assert result["error"] == "Circuit breaker tripped"
+        assert "report" not in result
+
+    async def test_unknown_swarm_raises(self, tmp_path: Path) -> None:
+        """Unknown swarm_id raises ToolError."""
+        deps = await _make_deps(tmp_path, swarm_id="swarm-1")
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_summary
+
+            with pytest.raises(ToolError, match="not found"):
+                await get_swarm_summary(swarm_id="nonexistent")
+
+    async def test_suspended_swarm_returns_status(self, tmp_path: Path) -> None:
+        """Suspended swarm returns status with reason."""
+        deps = await _make_deps(tmp_path, swarm_id="swarm-pause", phase="suspended")
+        deps.swarm_store["swarm-pause"]["suspended"] = {
+            "remaining_tasks": 3, "max_rounds": 8, "reason": "rounds exhausted"
+        }
+
+        with patch("backend.mcp.server.get_deps", return_value=deps):
+            from backend.mcp.server import get_swarm_summary
+
+            result = await get_swarm_summary(swarm_id="swarm-pause")
+        assert result["status"] == "suspended"
+        assert "rounds exhausted" in result.get("error", "")

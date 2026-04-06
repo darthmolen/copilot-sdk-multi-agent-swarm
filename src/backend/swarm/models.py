@@ -9,6 +9,9 @@ from typing import Any, TypedDict
 from pydantic import BaseModel, Field
 
 
+SYNTHESIS_REPORT_FILENAME = "synthesis_report.md"
+
+
 class TaskStatus(str, Enum):
     BLOCKED = "blocked"
     PENDING = "pending"

@@ -7,6 +7,7 @@ live swarm state and restart stuck agents.
 from __future__ import annotations
 
 import contextlib
+import uuid
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
@@ -16,7 +17,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from backend.mcp.deps import get_deps
-from backend.swarm.models import SwarmState
+from backend.swarm.models import SYNTHESIS_REPORT_FILENAME, SwarmState
 
 mcp = FastMCP(
     "swarm-state",
@@ -256,3 +257,83 @@ async def resume_agent(swarm_id: str, agent_name: str, nudge: str = "") -> dict[
         raise ToolError(exc.args[0] if exc.args else str(exc)) from exc
 
     return {"ok": True, "agent_name": agent_name, "resumed": True}
+
+
+# ---------------------------------------------------------------------------
+# Template & swarm creation tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_swarm_templates() -> list[dict[str, str]]:
+    """List available swarm templates with key, name, and description.
+
+    Templates define agent roles, prompts, and coordination patterns
+    for specific domains (e.g., Azure IaC, deep research).
+    """
+    deps = get_deps()
+    if deps.template_loader is None:
+        return []
+    return deps.template_loader.list_available()
+
+
+@mcp.tool()
+async def create_swarm(goal: str, template: str | None = None) -> dict[str, str]:
+    """Start a new swarm with the given goal and optional template.
+
+    Returns the swarm_id which can be used with other tools
+    (get_swarm_status, list_tasks, etc.) to monitor progress.
+    """
+    deps = get_deps()
+    if not goal.strip():
+        raise ToolError("goal must not be empty")
+    if template and deps.template_loader is not None:
+        available = [t["key"] for t in deps.template_loader.list_available()]
+        if template not in available:
+            raise ToolError(f"Unknown template '{template}'. Available: {available}")
+    if deps.start_swarm is None:
+        raise ToolError("Swarm creation not available — copilot client not configured")
+    swarm_id = str(uuid.uuid4())
+    await deps.start_swarm(swarm_id, goal, template)
+    return {"swarm_id": swarm_id, "status": "starting"}
+
+
+@mcp.tool()
+async def get_swarm_summary(swarm_id: str) -> dict[str, str]:
+    """Get a token-efficient summary of a swarm's outcome.
+
+    Returns status, and depending on the state:
+    - complete: report text + artifact_id (swarm_id for downloads)
+    - running: phase + task_progress (e.g. "3/7 completed")
+    - failed/cancelled: error message
+    - suspended: reason for suspension
+    """
+    state = _resolve_swarm(swarm_id)
+    phase = state.get("phase", "unknown")
+
+    result: dict[str, str] = {"status": phase}
+
+    if phase == "complete":
+        report = state.get("report")
+        if report:
+            result["report"] = str(report)
+        result["artifact_path"] = SYNTHESIS_REPORT_FILENAME
+
+    elif phase in {"starting", "qa", "planning", "spawning", "executing", "synthesizing"}:
+        orch = state.get("orchestrator")
+        if orch is not None:
+            tasks = await orch.service.task_board.get_tasks()
+            completed = sum(1 for t in tasks if t.status.value == "completed")
+            result["task_progress"] = f"{completed}/{len(tasks)} completed"
+
+    elif phase == "failed" or phase == "cancelled":
+        error = state.get("error")
+        if error:
+            result["error"] = str(error)
+
+    if phase == "suspended":
+        suspended = state.get("suspended")
+        if suspended:
+            result["error"] = str(suspended.get("reason", "suspended"))
+
+    return result

@@ -235,22 +235,6 @@ The chat state uses a `ChatEntry[]` timeline — a union of `message | tool_grou
 
 Auto-transitions: When a swarm's phase becomes `complete`, `cancelled`, or `failed`, it moves from `activeSwarmIds` to `completedSwarmIds` (WS disconnects, data retained for report viewing). Suspended swarms remain in `activeSwarmIds` — the user hasn't decided yet. Hard cap of 10 swarms with oldest-completed auto-eviction.
 
-### MCP Server Events
-
-The in-process MCP server at `/mcp` gives agent sessions 9 tools to query and manage swarm state. Agents can call these during task execution to coordinate with peers or inspect the task board.
-
-| MCP Tool | Description |
-| --- | --- |
-| `get_active_swarms` | List all swarms (no swarm_id required) |
-| `get_swarm_status` | Phase, round, agent count, task counts |
-| `list_tasks` | All tasks with optional status/worker filter |
-| `get_task_detail` | Full task including result text |
-| `get_recent_events` | Event history from Postgres |
-| `list_agents` | Agent roster with status |
-| `list_artifacts` | Files in work directory |
-| `read_artifact` | Read a specific file (path traversal protected) |
-| `resume_agent` | Resume a failed agent's session with nudge message |
-
-All tools except `get_active_swarms` require `swarm_id` for multi-swarm isolation. Auth via `X-API-Key` header at ASGI layer.
+See [MCP-Swarm-Server.md](MCP-Swarm-Server.md) for the full MCP tool reference, agentic use cases, and configuration.
 
 See [Agents.md](Agents.md) for system prompt architecture, agent roles, coordination tools, and template configuration.

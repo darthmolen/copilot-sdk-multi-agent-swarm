@@ -197,6 +197,13 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         )
 
 
+async def start_swarm_background(swarm_id: str, goal: str, template_key: str | None = None) -> None:
+    """Create swarm state and launch execution in background. Used by REST and MCP."""
+    _create_swarm_state(swarm_id, goal, template_key)
+    if _copilot_client is not None:
+        asyncio.create_task(_run_swarm(swarm_id, goal, template_key))
+
+
 @router.post("/api/swarm/start")
 async def start_swarm(request: SwarmStartRequest, background_tasks: BackgroundTasks) -> SwarmStartResponse:
     """Start a new swarm with the given goal."""
@@ -529,12 +536,14 @@ async def ensure_report(swarm_id: str, request: EnsureReportRequest) -> dict:
     """Ensure the synthesis report file exists in the workdir, creating it from localStorage if needed."""
     work_dir = Path(_get_work_dir()) / swarm_id
     work_dir.mkdir(parents=True, exist_ok=True)
-    report_path = work_dir / "synthesis_report.md"
+    from backend.swarm.models import SYNTHESIS_REPORT_FILENAME
+
+    report_path = work_dir / SYNTHESIS_REPORT_FILENAME
     created = False
     if not report_path.exists():
         report_path.write_text(request.report, encoding="utf-8")
         created = True
-    return {"created": created, "path": "synthesis_report.md"}
+    return {"created": created, "path": SYNTHESIS_REPORT_FILENAME}
 
 
 def _safe_template_path(key: str) -> Path:

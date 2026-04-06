@@ -187,11 +187,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # --- MCP server dependencies ------------------------------------------
     from backend.mcp.deps import configure as configure_mcp
 
+    from backend.api.rest import start_swarm_background
+
     configure_mcp(
         swarm_store=swarm_store,
         work_dir=SWARM_WORK_DIR,
         event_bus=event_bus,
         repository=repository,
+        template_loader=template_loader,
+        start_swarm=start_swarm_background,
     )
 
     # Start MCP session manager (streamable HTTP transport requires run())

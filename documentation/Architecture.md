@@ -146,23 +146,11 @@ When a task fails (circuit breaker or exception), the orchestrator checks the ag
 - Retry uses `agent.resume_session()` to preserve full conversation history, then sends a nudge message with failure context
 - Post-execution status check — if `execute_task()` sets FAILED/TIMEOUT without raising, the retry loop detects it
 
-### MCP Server (Swarm State)
+### MCP Server (Swarm as Agentic Component)
 
-In-process FastMCP server mounted at `/mcp` on the FastAPI app. Provides 9 tools for agent self-awareness:
+In-process FastMCP server mounted at `/mcp` on the FastAPI app. Provides 12 tools that expose the full swarm lifecycle — from template discovery and swarm creation to monitoring, artifact retrieval, and agent management. This turns the swarm into a composable component any MCP client can orchestrate.
 
-| Tool | Description |
-|------|-------------|
-| `get_active_swarms` | List all swarms with IDs, phase, goal |
-| `get_swarm_status` | Phase, round, agent count, task counts |
-| `list_tasks` | All tasks with optional status/worker filter |
-| `get_task_detail` | Full task including result |
-| `get_recent_events` | Event history (requires DB) |
-| `list_agents` | Agent roster with status |
-| `list_artifacts` | Files in work directory |
-| `read_artifact` | Read a specific file (path traversal protected) |
-| `resume_agent` | Resume a failed agent's session |
-
-All tools require `swarm_id` (except `get_active_swarms`) for multi-swarm isolation. Auth via `X-API-Key` header at transport layer — invisible to agent context.
+See [MCP-Swarm-Server.md](MCP-Swarm-Server.md) for the full tool reference, agentic use cases, and typical agent flows.
 
 ### SwarmService (Write-Through Persistence)
 
