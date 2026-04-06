@@ -7,18 +7,19 @@ import { SwarmControls } from './components/SwarmControls';
 import { SwarmStatusWindow } from './components/SwarmStatusWindow';
 import { TaskBoard } from './components/TaskBoard';
 import { AgentRoster } from './components/AgentRoster';
-import { ChatPanel } from './components/ChatPanel';
 import { InboxFeed } from './components/InboxFeed';
 import { ResizableLayout } from './components/ResizableLayout';
 import { ToolCardList } from './components/ToolCard';
+import { ArtifactList } from './components/ArtifactList';
+import { ReportRightPanel } from './components/ReportRightPanel';
 import { useMermaid } from './hooks/useMermaid';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { SwarmEvent, FileInfo, ActiveTool } from './types/swarm';
-import { ArtifactList } from './components/ArtifactList';
 import { saveReport, getSavedReports, getReportById, truncateTitle } from './utils/savedReportStorage';
 import { parseSessionFromSearch } from './utils/urlSession';
 import { buildReportList, type SuspendedSwarm } from './utils/buildReportList';
+import { hydrateTasksIntoSwarm } from './utils/hydrateTasksIntoSwarm';
 import { ReportList } from './components/ReportList';
 import { InterventionView } from './components/InterventionView';
 import './App.css';
@@ -178,6 +179,10 @@ function SwarmDashboard() {
             report: data.report,
             phase: data.phase ?? 'complete',
           });
+          // Hydrate tasks into swarm state so report view can display them
+          for (const action of hydrateTasksIntoSwarm(sessionId, data.tasks)) {
+            swarmDispatch(action);
+          }
           setReportSwarmId(sessionId);
         }
       })
@@ -204,20 +209,31 @@ function SwarmDashboard() {
           content: (event.data.content as string) ?? '',
           messageId: (event.data.message_id as string) ?? '',
         });
-      } else if (event.type === 'leader.chat_tool_start') {
-        chatDispatch({
-          type: 'chat.tool_start',
-          swarmId,
-          toolName: (event.data.tool_name as string) ?? '',
-          toolCallId: (event.data.tool_call_id as string) ?? '',
-        });
-      } else if (event.type === 'leader.chat_tool_result') {
-        chatDispatch({
-          type: 'chat.tool_result',
-          swarmId,
-          toolCallId: (event.data.tool_call_id as string) ?? '',
-          success: event.data.success as boolean,
-        });
+      } else if (event.type === 'agent.tool_call') {
+        // Route to chat reducer if message_id present (chat context)
+        if (event.data.message_id) {
+          chatDispatch({
+            type: 'chat.tool_start',
+            swarmId,
+            toolName: (event.data.tool_name as string) ?? '',
+            toolCallId: (event.data.tool_call_id as string) ?? '',
+            input: event.data.input as string | undefined,
+          });
+        }
+        // Always route to swarm reducer (dashboard tool cards)
+        swarmDispatch({ type: 'swarm.event', swarmId, event });
+      } else if (event.type === 'agent.tool_result') {
+        if (event.data.message_id) {
+          chatDispatch({
+            type: 'chat.tool_result',
+            swarmId,
+            toolCallId: (event.data.tool_call_id as string) ?? '',
+            success: event.data.success as boolean,
+            output: event.data.output as string | undefined,
+            error: event.data.error as string | undefined,
+          });
+        }
+        swarmDispatch({ type: 'swarm.event', swarmId, event });
       } else {
         // All other events go to swarm reducer
         swarmDispatch({ type: 'swarm.event', swarmId, event });
@@ -307,6 +323,18 @@ function SwarmDashboard() {
 
     const apiKey = getApiKey();
     const headers: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
+
+    // Hydrate tasks if not already in memory (e.g. viewing a past report from localStorage)
+    if (!(store.swarms[reportSwarmId]?.tasks?.length)) {
+      fetch(`${API_BASE}/api/swarm/${reportSwarmId}/status`, { headers })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          for (const action of hydrateTasksIntoSwarm(reportSwarmId, data?.tasks)) {
+            swarmDispatch(action);
+          }
+        })
+        .catch(() => null);
+    }
 
     // Step 1: Ensure the synthesis report exists on disk
     const reportText = store.swarms[reportSwarmId]?.leaderReport || getReportById(reportSwarmId)?.report;
@@ -419,6 +447,9 @@ function SwarmDashboard() {
   const currentChatState = reportSwarmId ? chatStore.chats[reportSwarmId] : null;
   // Chat is always enabled — backend can resume_session for any past swarm
   const chatEnabled = !!reportSwarmId;
+
+  // Tasks for the report swarm (used by TaskPillBar in the report view)
+  const reportSwarmTasks = reportSwarmId ? (store.swarms[reportSwarmId]?.tasks ?? []) : [];
 
   // Compute failed/timeout tasks for intervention view
   const failedTasks = allTasks.filter(
@@ -551,6 +582,12 @@ function SwarmDashboard() {
         <ResizableLayout
           left={
             <div className="report-view">
+              <ArtifactList
+                files={swarmFiles}
+                activeFile={activeFilePath}
+                onSelect={handleSelectArtifact}
+                swarmId={reportSwarmId ?? undefined}
+              />
               <div
                 ref={reportContentRef}
                 className="report-content"
@@ -561,27 +598,15 @@ function SwarmDashboard() {
             </div>
           }
           right={
-            <div className="right-panel">
-              <ArtifactList
-                files={swarmFiles}
-                activeFile={activeFilePath}
-                onSelect={handleSelectArtifact}
-                swarmId={reportSwarmId ?? undefined}
-              />
-              {activeFilePath && (
-                <div className="active-file-indicator">
-                  Active: {activeFilePath}
-                </div>
-              )}
-              <ChatPanel
-                messages={currentChatState?.messages ?? []}
-                streamingMessage={currentChatState?.streamingMessage ?? null}
-                sessionStarting={currentChatState?.sessionStarting ?? false}
-                activeTools={currentChatState?.activeTools ?? []}
-                onSend={(msg) => handleSendChat(reportSwarmId!, msg, activeFilePath)}
-                chatEnabled={chatEnabled}
-              />
-            </div>
+            <ReportRightPanel
+              swarmId={reportSwarmId ?? undefined}
+              tasks={reportSwarmTasks}
+              entries={currentChatState?.entries ?? []}
+              streamingMessage={currentChatState?.streamingMessage ?? null}
+              sessionStarting={currentChatState?.sessionStarting ?? false}
+              onSend={(msg) => handleSendChat(reportSwarmId!, msg, activeFilePath)}
+              chatEnabled={chatEnabled}
+            />
           }
           defaultLeftPercent={55}
         />

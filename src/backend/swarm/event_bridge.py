@@ -135,3 +135,131 @@ def bridge_sdk_event(agent_name: str, event: SessionEvent) -> dict[str, Any] | N
         return {"type": "agent.error", "data": {"name": agent_name, "error": d.error}}
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Unified raw SDK event bridge (Step 1: Chat UX Parity)
+# ---------------------------------------------------------------------------
+
+# Tool names with dedicated argument summarization
+_PATH_TOOLS = frozenset({"Read", "Edit", "Write"})
+_PATTERN_TOOLS = frozenset({"Grep", "Glob"})
+
+
+def _truncate(value: str | None, max_len: int = 1000) -> str | None:
+    """Truncate a string to max_len, appending '...' if clipped. None passes through."""
+    if value is None:
+        return None
+    if len(value) <= max_len:
+        return value
+    return value[:max_len] + "..."
+
+
+def _summarize_args(tool_name: str, arguments: dict[str, Any] | None) -> str:
+    """Produce a human-readable one-liner from tool arguments.
+
+    Special-cases common tools (Bash, Read, Edit, Grep, etc.) and falls back
+    to key=value for anything else.
+    """
+    if not arguments:
+        return ""
+
+    if tool_name == "Bash":
+        cmd = arguments.get("command", "")
+        return str(cmd)[:200] if cmd else ""
+
+    if tool_name in _PATH_TOOLS:
+        path = arguments.get("file_path", "")
+        return str(path)
+
+    if tool_name in _PATTERN_TOOLS:
+        pattern = arguments.get("pattern", "")
+        return str(pattern)
+
+    # Generic: key=value pairs, truncated
+    parts: list[str] = []
+    for k, v in arguments.items():
+        parts.append(f"{k}={str(v)[:80]}")
+    return ", ".join(parts)[:200]
+
+
+def bridge_raw_sdk_event(
+    agent_name: str,
+    event: object,
+    *,
+    message_id: str | None = None,
+    swarm_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Map a raw SDK event object to a unified WebSocket event dict.
+
+    Unlike ``bridge_sdk_event`` (which works with our local SessionEvent
+    dataclass), this function works with the real SDK event objects via
+    ``getattr``, making it safe for both production and test fakes.
+
+    Returns ``{"type": str, "data": dict}`` or ``None`` if the event type
+    is not tool-related and should be ignored by this bridge.
+    """
+    raw_type = getattr(event, "type", "")
+    et = getattr(raw_type, "value", str(raw_type)).lower()
+    data = getattr(event, "data", None)
+
+    if "tool.execution_start" in et or "tool_execution_start" in et:
+        tool_name = getattr(data, "tool_name", "") or ""
+        tool_call_id = getattr(data, "tool_call_id", "") or ""
+        arguments = getattr(data, "arguments", None)
+        return {
+            "type": "agent.tool_call",
+            "data": {
+                "agent_name": agent_name,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "input": _summarize_args(tool_name, arguments),
+                "swarm_id": swarm_id,
+                "message_id": message_id,
+            },
+        }
+
+    if "tool.execution_complete" in et or "tool_execution_complete" in et:
+        tool_call_id = getattr(data, "tool_call_id", "") or ""
+        success = getattr(data, "success", None)
+        error = getattr(data, "error", None)
+
+        # Extract output from result object
+        result_obj = getattr(data, "result", None)
+        output: str | None = None
+        if result_obj is not None:
+            # Prefer detailed_content, fall back to content
+            detailed = getattr(result_obj, "detailed_content", None)
+            content = getattr(result_obj, "content", None)
+            raw_output = detailed if detailed else content
+            if raw_output is not None:
+                output = _truncate(str(raw_output))
+
+        return {
+            "type": "agent.tool_result",
+            "data": {
+                "agent_name": agent_name,
+                "tool_call_id": tool_call_id,
+                "success": success,
+                "output": output,
+                "error": str(error) if error else None,
+                "swarm_id": swarm_id,
+                "message_id": message_id,
+            },
+        }
+
+    if "tool.execution_partial_result" in et or "tool_execution_partial_result" in et:
+        tool_call_id = getattr(data, "tool_call_id", "") or ""
+        partial = getattr(data, "partial_output", "") or ""
+        return {
+            "type": "agent.tool_output",
+            "data": {
+                "agent_name": agent_name,
+                "tool_call_id": tool_call_id,
+                "output": str(partial),
+                "swarm_id": swarm_id,
+                "message_id": message_id,
+            },
+        }
+
+    return None

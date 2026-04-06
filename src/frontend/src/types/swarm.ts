@@ -36,6 +36,11 @@ export interface ActiveTool {
   toolName: string;
   agentName?: string;
   status: 'running' | 'complete' | 'failed';
+  input?: string;
+  output?: string;
+  error?: string;
+  startedAt?: number;
+  completedAt?: number;
 }
 
 export interface SwarmState {
@@ -58,11 +63,15 @@ export interface ChatMessage {
   content: string;
 }
 
+export type ChatEntry =
+  | { type: 'message'; message: ChatMessage }
+  | { type: 'tool_group'; tools: ActiveTool[] }
+  | { type: 'streaming'; content: string; id: string };
+
 export interface ChatState {
-  messages: ChatMessage[];
+  entries: ChatEntry[];
   streamingMessage: { id: string; content: string } | null;
   sessionStarting: boolean;
-  activeTools: ActiveTool[];
 }
 
 export interface ChatStore {

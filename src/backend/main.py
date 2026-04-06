@@ -161,20 +161,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             client_factory = _make_agent_client
             log.info("client_factory_configured", cli_path=cli_path)
 
-    # --- Database persistence (optional) ------------------------------------
+    # --- Database persistence (REQUIRED) ------------------------------------
     db_url = os.environ.get("DATABASE_URL", "")
-    repository = None
-    event_logger = None
-    db_engine = None
-    if db_url:
-        from backend.db.engine import create_async_engine
-        from backend.db.event_logger import EventLogger
-        from backend.db.repository import SwarmRepository
+    if not db_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
 
-        db_engine = create_async_engine(db_url)
-        repository = SwarmRepository(db_engine)
-        event_logger = EventLogger(db_engine)
-        log.info("database_configured", url=db_url[:30] + "...")
+    from backend.db.engine import create_async_engine
+    from backend.db.event_logger import EventLogger
+    from backend.db.repository import SwarmRepository
+
+    db_engine = create_async_engine(db_url)
+    repository = SwarmRepository(db_engine)
+    event_logger = EventLogger(db_engine)
+    log.info("database_configured", url=db_url[:30] + "...")
 
     # --- Wire dependencies ------------------------------------------------
     configure(
@@ -202,14 +201,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await _mcp_cm.__aenter__()
 
     # --- Recover orphaned swarms stuck in non-terminal phases -------------
-    if repository:
-        await recover_orphaned_swarms(repository)
+    await recover_orphaned_swarms(repository)
 
     # --- EventBus → WebSocket forwarder -----------------------------------
     def _make_ws_forwarder():
+        from backend.swarm.event_bridge import bridge_raw_sdk_event
+
         async def _forward(event_type: str, data: dict) -> None:
-            # Skip internal SDK events (contain non-serializable objects)
-            # Log them for backend observability, but don't forward to frontend
+            # Bridge raw SDK events into unified tool events for the frontend
             if event_type == "sdk_event":
                 agent = data.get("agent", "unknown")
                 event_obj = data.get("event")
@@ -240,11 +239,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         extra["tool_requests"] = str([getattr(tr, "name", tr) for tr in tool_requests[:5]])
 
                 log.debug("sdk_event", agent=agent, sdk_type=sdk_type, **extra)
+
+                # Bridge tool events into unified format and broadcast
+                sdk_swarm_id = data.get("swarm_id")
+                bridged = bridge_raw_sdk_event(
+                    str(agent),
+                    event_obj,
+                    swarm_id=str(sdk_swarm_id) if sdk_swarm_id else None,
+                )
+                if bridged is not None:
+                    bridged_type = bridged["type"]
+                    bridged_data = bridged["data"]
+                    log.info(
+                        "event_forwarded",
+                        event_type=bridged_type,
+                        swarm_id=sdk_swarm_id or "broadcast",
+                    )
+                    if sdk_swarm_id:
+                        await manager.broadcast(
+                            str(sdk_swarm_id),
+                            {"type": bridged_type, "data": bridged_data},
+                        )
+                    else:
+                        for sid in list(swarm_store.keys()):
+                            await manager.broadcast(sid, {"type": bridged_type, "data": bridged_data})
                 return
 
             swarm_id = data.get("swarm_id")
             extra_log: dict[str, str] = {}
-            if event_type == "leader.chat_tool_start":
+            if event_type == "agent.tool_call":
                 extra_log["tool_name"] = data.get("tool_name", "")
             log.info("event_forwarded", event_type=event_type, swarm_id=swarm_id or "broadcast", **extra_log)
 
@@ -257,9 +280,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         return _forward
 
     unsub = event_bus.subscribe(_make_ws_forwarder())
-    if event_logger:
-        event_bus.subscribe(event_logger.on_event)
-        log.info("event_logger_subscribed")
+    event_bus.subscribe(event_logger.on_event)
+    log.info("event_logger_subscribed")
     log.info("backend_started", address="http://0.0.0.0:8000")
 
     yield
@@ -267,9 +289,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # --- Shutdown ---------------------------------------------------------
     unsub()
     await _mcp_cm.__aexit__(None, None, None)
-    if db_engine:
-        await db_engine.dispose()
-        log.info("db_engine_disposed")
+    await db_engine.dispose()
+    log.info("db_engine_disposed")
     if copilot_client:
         await copilot_client.stop()
         log.info("copilot_cli_stopped")

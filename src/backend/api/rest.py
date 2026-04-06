@@ -8,7 +8,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 import yaml
@@ -32,6 +32,9 @@ from backend.swarm.template_validator import validate_template_file
 from backend.swarm.templates import format_goal
 from backend.swarm.templates import list_templates as _list_templates
 
+if TYPE_CHECKING:
+    from backend.db.repository import SwarmRepository
+
 log = structlog.get_logger()
 
 router = APIRouter()
@@ -47,7 +50,7 @@ _background_tasks: set[asyncio.Task[object]] = set()
 _event_bus: Any = None
 _copilot_client: Any = None
 _client_factory: Any = None
-_repository: Any = None
+_repository: SwarmRepository | None = None
 _template_loader: TemplateLoader | None = None
 
 
@@ -63,7 +66,7 @@ def configure(
     copilot_client: Any = None,
     template_loader: TemplateLoader | None = None,
     client_factory: Any = None,
-    repository: Any = None,
+    repository: SwarmRepository | None = None,
 ) -> None:
     """Inject dependencies. Called during app startup."""
     global _event_bus, _copilot_client, _template_loader, _client_factory, _repository
@@ -145,10 +148,10 @@ async def _run_swarm(swarm_id: str, goal: str, template_key: str | None = None) 
         "swarm_config", swarm_id=swarm_id, model=SWARM_MODEL, max_rounds=SWARM_MAX_ROUNDS, timeout=SWARM_TASK_TIMEOUT
     )
 
-    # Create SwarmService with optional repo for persistence
+    # Create SwarmService with repo for persistence
     from backend.services.swarm_service import SwarmService
 
-    service = SwarmService(repo=_repository) if _repository else SwarmService()
+    service = SwarmService(repo=_repository)
     await service.create_swarm(swarm_id, goal=goal, template_key=template_key)
 
     orch = SwarmOrchestrator(
@@ -209,10 +212,70 @@ async def start_swarm(request: SwarmStartRequest, background_tasks: BackgroundTa
 
 @router.get("/api/swarm/{swarm_id}/status")
 async def get_swarm_status(swarm_id: str) -> SwarmStatusResponse:
-    """Return current status of a swarm."""
-    if swarm_id not in swarm_store:
-        raise HTTPException(status_code=404, detail="Swarm not found")
+    """Return current status of a swarm.
 
+    If the swarm is not in the in-memory store (e.g. completed in a
+    previous process), fall back to loading from the database.
+    """
+    # --- Fallback: load from DB when not in memory --------------------------
+    if swarm_id not in swarm_store:
+        if _repository is None:
+            raise HTTPException(status_code=404, detail="Swarm not found")
+        try:
+            db_state = await _repository.load_swarm_state(uuid.UUID(swarm_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Swarm not found") from exc
+
+        swarm_data = db_state["swarm"]
+
+        # Backfill swarm_store so subsequent calls hit the cache
+        swarm_store[swarm_id] = {
+            "swarm_id": swarm_id,
+            "goal": swarm_data.get("goal", ""),
+            "template": swarm_data.get("template_key"),
+            "phase": swarm_data.get("phase", "complete"),
+            "round_number": swarm_data.get("current_round", 0),
+            "report": swarm_data.get("report"),
+        }
+
+        # Build response from DB data (no orchestrator available)
+        db_tasks = db_state.get("tasks", [])
+        tasks = [
+            TaskSummary(
+                id=t["id"],
+                subject=t.get("subject", ""),
+                description=t.get("description", ""),
+                worker_role=t.get("worker_role", ""),
+                worker_name=t.get("worker_name", ""),
+                status=t.get("status", "pending"),
+                blocked_by=t.get("blocked_by", []),
+                result=t.get("result", ""),
+            )
+            for t in db_tasks
+        ]
+        db_agents = db_state.get("agents", [])
+        agents = [
+            AgentSummary(
+                name=a.get("name", ""),
+                role=a.get("role", ""),
+                display_name=a.get("display_name", ""),
+                status=a.get("status", "idle"),
+                tasks_completed=a.get("tasks_completed", 0),
+            )
+            for a in db_agents
+        ]
+
+        return SwarmStatusResponse(
+            swarm_id=swarm_id,
+            phase=swarm_data.get("phase", "complete"),
+            tasks=tasks,
+            agents=agents,
+            inbox_recent=[],
+            round_number=swarm_data.get("current_round", 0),
+            report=swarm_data.get("report"),
+        )
+
+    # --- Live path: swarm is in memory --------------------------------------
     state = swarm_store[swarm_id]
     orch = state.get("orchestrator")
 
@@ -298,9 +361,6 @@ async def _run_resume(sid: str, orch: object, goal: str) -> None:
 @router.post("/api/swarm/{swarm_id}/resume")
 async def resume_swarm(swarm_id: str) -> dict[str, object]:
     """Resume a suspended swarm from persisted state."""
-    if not _repository:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
     try:
         swarm_uuid = uuid.UUID(swarm_id)
     except ValueError as exc:
@@ -755,9 +815,6 @@ async def deploy_template_zip(file: UploadFile) -> dict:
 @router.get("/api/swarm/{swarm_id}/task/{task_id}/logs")
 async def get_task_logs(swarm_id: str, task_id: str) -> dict[str, object]:
     """Get events for a specific task."""
-    if not _repository:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
     try:
         swarm_uuid = uuid.UUID(swarm_id)
     except ValueError as exc:
@@ -774,9 +831,7 @@ async def get_task_logs(swarm_id: str, task_id: str) -> dict[str, object]:
 
 @router.get("/api/swarm/{swarm_id}/events")
 async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
-    """Return event log for replay. Requires DATABASE_URL configured."""
-    if _repository is None:
-        raise HTTPException(status_code=404, detail="Persistence not configured")
+    """Return event log for replay."""
     from datetime import datetime
 
     since_dt = None
@@ -793,9 +848,7 @@ async def get_swarm_events(swarm_id: uuid.UUID, since: str | None = None):
 
 @router.get("/api/swarms")
 async def list_swarms():
-    """Return all swarms from DB. Requires DATABASE_URL configured."""
-    if _repository is None:
-        raise HTTPException(status_code=404, detail="Persistence not configured")
+    """Return all swarms from DB."""
     from fastapi.encoders import jsonable_encoder
 
     swarms = await _repository.list_swarms()

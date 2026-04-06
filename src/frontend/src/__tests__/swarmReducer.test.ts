@@ -358,12 +358,13 @@ describe('activeTools tracking', () => {
     };
     const result = swarmReducer(initialState, event);
     expect(result.activeTools).toHaveLength(1);
-    expect(result.activeTools[0]).toEqual({
+    expect(result.activeTools[0]).toMatchObject({
       toolCallId: 'tc-1',
       toolName: 'web_search',
       agentName: 'worker-1',
       status: 'running',
     });
+    expect(result.activeTools[0].startedAt).toEqual(expect.any(Number));
   });
 
   it('agent.tool_result marks tool as complete when success=true', () => {

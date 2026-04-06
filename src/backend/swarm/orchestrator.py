@@ -12,6 +12,7 @@ import structlog
 
 from backend.events import EventBus
 from backend.swarm.agent import SwarmAgent
+from backend.swarm.event_bridge import bridge_raw_sdk_event
 from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.models import Task, TaskStatus
 from backend.swarm.prompts import (
@@ -160,6 +161,21 @@ class SwarmOrchestrator:
             data = {**data, "swarm_id": self.swarm_id}
         await self.event_bus.emit(event_type, data)
 
+    def _forward_chat_sdk_event(self, event: object, message_id: str) -> None:
+        """Bridge a raw SDK tool event into a unified agent.tool_call / agent.tool_result.
+
+        Called from chat() and qa_chat() _on_event handlers. Emits via
+        emit_sync so it works inside synchronous SDK callbacks.
+        """
+        bridged = bridge_raw_sdk_event(
+            "leader",
+            event,
+            message_id=message_id,
+            swarm_id=self.swarm_id,
+        )
+        if bridged is not None:
+            self.event_bus.emit_sync(bridged["type"], bridged["data"])
+
     async def _cleanup_agents(self) -> None:
         """Stop per-agent clients after execution completes."""
         for agent in self.agents.values():
@@ -247,36 +263,17 @@ class SwarmOrchestrator:
                                 "swarm_id": self.swarm_id,
                             },
                         )
-                # Tool events
-                if "tool.execution_start" in et:
-                    data = getattr(event, "data", None)
-                    tool_name = getattr(data, "tool_name", "")
-                    tool_call_id = getattr(data, "tool_call_id", "")
+                # Unified tool events (agent.tool_call / agent.tool_result)
+                if "tool.execution_start" in et or "tool_execution_start" in et:
                     tool_call_count[0] += 1
-                    log.info("chat_tool_start", swarm_id=self.swarm_id, tool_name=tool_name, tool_call_id=tool_call_id)
-                    self.event_bus.emit_sync(
-                        "leader.chat_tool_start",
-                        {
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "message_id": message_id,
-                            "swarm_id": self.swarm_id,
-                        },
+                    tool_data = getattr(event, "data", None)
+                    log.info(
+                        "chat_tool_start",
+                        swarm_id=self.swarm_id,
+                        tool_name=getattr(tool_data, "tool_name", ""),
+                        tool_call_id=getattr(tool_data, "tool_call_id", ""),
                     )
-                if "tool.execution_complete" in et:
-                    data = getattr(event, "data", None)
-                    tool_call_id = getattr(data, "tool_call_id", "")
-                    success = str(getattr(data, "success", "")).lower() == "true"
-                    log.info("chat_tool_result", swarm_id=self.swarm_id, tool_call_id=tool_call_id, success=success)
-                    self.event_bus.emit_sync(
-                        "leader.chat_tool_result",
-                        {
-                            "tool_call_id": tool_call_id,
-                            "success": success,
-                            "message_id": message_id,
-                            "swarm_id": self.swarm_id,
-                        },
-                    )
+                self._forward_chat_sdk_event(event, message_id)
 
             unsubscribe = session.on(_on_event)
             timeout = self.config.get("timeout", 300)
@@ -363,6 +360,8 @@ class SwarmOrchestrator:
             et = getattr(raw, "value", str(raw)).lower()
             if "idle" in et or ("session" in et and "error" in et):
                 done.set()
+            # Forward tool events through unified bridge
+            self._forward_chat_sdk_event(event, message_id)
             if "assistant.message" in et and "delta" not in et:
                 data = getattr(event, "data", None)
                 content = getattr(data, "content", None)
@@ -473,6 +472,8 @@ class SwarmOrchestrator:
                                 "swarm_id": self.swarm_id,
                             },
                         )
+                # Unified tool events (agent.tool_call / agent.tool_result)
+                self._forward_chat_sdk_event(event, message_id)
 
             unsubscribe = self.qa_session.on(_on_event)
             timeout = self.config.get("timeout", 300)

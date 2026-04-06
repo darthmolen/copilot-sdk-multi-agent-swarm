@@ -171,7 +171,10 @@ class SwarmAgent:
 
     def _on_event(self, event: Any) -> None:
         """Forward SDK events to the EventBus."""
-        self.event_bus.emit_sync("sdk_event", {"agent": self.name, "event": event})
+        self.event_bus.emit_sync(
+            "sdk_event",
+            {"agent": self.name, "event": event, "swarm_id": self.swarm_id},
+        )
 
     MAX_TOOL_FAILURES = 5
 
