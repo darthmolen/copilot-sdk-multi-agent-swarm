@@ -93,7 +93,46 @@ sequenceDiagram
 
 All events carry `swarm_id`. The WebSocket forwarder in `main.py` uses `data.get("swarm_id")` (non-destructive) to route events to the correct WS connections via `ConnectionManager.broadcast(swarm_id, ...)`.
 
+### Unified SDK Event Bridge
+
+All SDK tool events — from leader sessions (QA, synthesis, chat) and worker sessions alike — flow through a single `bridge_raw_sdk_event()` function in `event_bridge.py`. This replaces the former split between `leader.chat_tool_*` and `agent.tool_*` event paths.
+
+```
+SDK Event (raw)                         WebSocket Event (unified)
+─────────────────                       ──────────────────────────
+tool.execution_start       ──►          agent.tool_call
+tool.execution_complete    ──►          agent.tool_result
+tool.execution_partial     ──►          agent.tool_output
+assistant.message_delta    ──►          agent.message_delta
+```
+
+**Two emission paths, one bridge:**
+
+| Path | Source | How it reaches the bridge |
+| --- | --- | --- |
+| **Leader sessions** | Orchestrator's `chat()`, `qa_chat()`, `start_qa()` | `_forward_chat_sdk_event()` calls `bridge_raw_sdk_event("leader", event, message_id=...)` and emits directly via `EventBus.emit_sync()` |
+| **Worker sessions** | `SwarmAgent._on_event()` | Emits raw `sdk_event` to EventBus → `_forward()` in `main.py` calls `bridge_raw_sdk_event(agent_name, event)` and broadcasts via WebSocket |
+
+**`message_id` discriminates context:** When present, the tool event belongs to a chat conversation (QA, after-action, troubleshoot). When absent, it's background agent work. The frontend uses this to route events:
+
+- `message_id` present → dispatched to **chat reducer** (appears in ChatPanel timeline)
+- Always dispatched to **swarm reducer** (appears in dashboard ToolCardList)
+
+### Frontend Event Routing
+
 The frontend's `SwarmConnection` component tags each incoming WS event with the `swarmId` from the connection URL, then dispatches to the `multiSwarmReducer` which routes to the correct per-swarm state.
+
+**Dual dispatch for tool events:**
+
+```typescript
+case 'agent.tool_call':
+  if (data.message_id) chatDispatch({ type: 'chat.tool_start', ... });
+  swarmDispatch({ type: 'swarm.event', ... });
+
+case 'agent.tool_result':
+  if (data.message_id) chatDispatch({ type: 'chat.tool_result', ... });
+  swarmDispatch({ type: 'swarm.event', ... });
+```
 
 ## WebSocket Event Taxonomy
 
@@ -128,9 +167,34 @@ Emitted by `SwarmOrchestrator._emit()` — all include `swarm_id`.
 | `leader.plan` | Orchestrator plan phase | Raw plan text | `{ content, swarm_id }` |
 | `leader.report` | Orchestrator synthesis phase | Final report | `{ content, swarm_id }` |
 
+### Unified Tool Events (via `bridge_raw_sdk_event`)
+
+These events are emitted by both leader and worker sessions through the unified bridge. `message_id` is present when the tool event belongs to a chat conversation, absent for background work.
+
+| Event Type | Description | Data Shape |
+| --- | --- | --- |
+| `agent.tool_call` | Tool execution started | `{ agent_name, tool_name, tool_call_id, input, message_id?, swarm_id }` |
+| `agent.tool_result` | Tool execution completed | `{ agent_name, tool_call_id, success, output?, error?, message_id?, swarm_id }` |
+| `agent.tool_output` | Partial tool result (streaming) | `{ agent_name, tool_call_id, output, message_id?, swarm_id }` |
+| `agent.message_delta` | Streaming assistant text chunk | `{ agent_name, delta, message_id?, swarm_id }` |
+
+The `input` field is a human-readable summary of tool arguments (e.g., `file_path=/src/foo.py` for read, `command=ls -la` for bash). The `output` field is truncated to 500 chars; `error` to 300 chars.
+
+### Chat Events
+
+Emitted by the orchestrator's leader sessions during QA, synthesis, and refinement chat. These drive the ChatPanel timeline.
+
+| Event Type | Description | Data Shape |
+| --- | --- | --- |
+| `leader.chat_delta` | Streaming chat text chunk | `{ delta, message_id, swarm_id }` |
+| `leader.chat_message` | Complete chat response | `{ content, message_id, swarm_id }` |
+| `leader.report_delta` | Streaming report text | `{ delta, swarm_id }` |
+
 ### Frontend Reducer Events
 
-The `multiSwarmReducer` handles routing; the inner `swarmReducer` handles these per-swarm:
+Two reducers handle events on the frontend:
+
+**Swarm reducer** (`multiSwarmReducer` → `swarmReducer`) — dashboard state:
 
 | Event Type | State Effect |
 | --- | --- |
@@ -139,12 +203,27 @@ The `multiSwarmReducer` handles routing; the inner `swarmReducer` handles these 
 | `task.updated` | Updates matching task by `id` |
 | `agent.spawned` | Appends to `agents` with `swarm_id` from event data |
 | `agent.status_changed` | Updates agent status and `tasks_completed` |
+| `agent.tool_call` | Appends to `activeTools` with `input`, `startedAt` |
+| `agent.tool_result` | Updates tool status, `output`, `error`, `completedAt` |
 | `inbox.message` | Appends to `messages` with `swarm_id` from event data |
 | `leader.report` | Sets `leaderReport` |
 | `round.started` / `swarm.round_start` | Sets `roundNumber` |
 | `swarm.complete` | Sets `phase` to `"complete"` |
 | `swarm.error` | Sets `error` |
 | `swarm.suspended` | Sets `phase` to `"suspended"`, stores pause metadata |
+
+**Chat reducer** (`chatReducer`) — chat timeline state per swarm:
+
+| Action Type | State Effect |
+| --- | --- |
+| `chat.delta` | Appends to `streamingMessage` content |
+| `chat.message` | Pushes `{ type: 'message' }` entry, clears `streamingMessage` |
+| `chat.user_send` | Pushes `{ type: 'message' }` entry, sets `sessionStarting` |
+| `chat.tool_start` | Appends tool to current `tool_group` entry (or creates new one) |
+| `chat.tool_result` | Updates tool in its `tool_group` with status, output, error |
+| `chat.clear` | Resets entries and streaming state |
+
+The chat state uses a `ChatEntry[]` timeline — a union of `message | tool_group | streaming` entries. Tool groups form naturally: consecutive tool events accumulate in the same group until a message entry closes it.
 
 ### Multi-Swarm Store Actions
 
@@ -166,7 +245,7 @@ The in-process MCP server at `/mcp` gives agent sessions 9 tools to query and ma
 | `get_swarm_status` | Phase, round, agent count, task counts |
 | `list_tasks` | All tasks with optional status/worker filter |
 | `get_task_detail` | Full task including result text |
-| `get_recent_events` | Event history (requires DB) |
+| `get_recent_events` | Event history from Postgres |
 | `list_agents` | Agent roster with status |
 | `list_artifacts` | Files in work directory |
 | `read_artifact` | Read a specific file (path traversal protected) |
@@ -174,12 +253,4 @@ The in-process MCP server at `/mcp` gives agent sessions 9 tools to query and ma
 
 All tools except `get_active_swarms` require `swarm_id` for multi-swarm isolation. Auth via `X-API-Key` header at ASGI layer.
 
-## System Prompt Architecture
-
-Worker prompts are assembled from three layers by `assemble_worker_prompt()`:
-
-1. **System preamble** (`src/templates/system-prompt.md`) — Mandatory coordination protocol with tool usage instructions. YAML frontmatter declares the 4 coordination tools. Includes anti-polling instruction for `inbox_receive`.
-2. **Work directory directive** — Injected when `work_dir` is set: "Your work directory is: `/path/`. Write ALL output files here."
-3. **Template prompt** — Domain expertise from the worker's `.md` file in the template directory. `{display_name}` and `{role}` placeholders are expanded.
-
-This separation ensures template authors cannot accidentally remove coordination tool mandates.
+See [Agents.md](Agents.md) for system prompt architecture, agent roles, coordination tools, and template configuration.

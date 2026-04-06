@@ -122,6 +122,7 @@ copilot-sdk-multi-agent-swarm/
     test_prompts.py
     test_cancellation.py
   documentation/
+    Agents.md
     Architecture.md
     Communication.md
     example_research_output/     # Sample outputs from deep research swarms
@@ -325,7 +326,8 @@ Each integration test gets its own isolated database with real migrations applie
 
 ## Documentation
 
-- [Architecture](documentation/Architecture.md) — system design, component interactions, design decisions
-- [Communication](documentation/Communication.md) — event taxonomy, WebSocket protocol, inter-agent messaging
+- [Architecture](documentation/Architecture.md) — system design, component interactions, data persistence, design decisions
+- [Agents](documentation/Agents.md) — agent roles, system prompt architecture, coordination tools, template configuration
+- [Communication](documentation/Communication.md) — unified event stream, WebSocket protocol, chat timeline, inter-agent messaging
 - [Template Creation Guide](documentation/template-creation-guide.md) — how to create custom templates, orchestrator workflow, artifact reference, relationship patterns
 - [Replacement Variables](documentation/replacement-variables.md) — built-in template variables and expansion behavior

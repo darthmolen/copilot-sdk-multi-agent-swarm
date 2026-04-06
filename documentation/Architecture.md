@@ -82,9 +82,9 @@ The orchestrator creates `workdir/<swarm_id>/` at the start of `run()` and passe
 
 ### SwarmAgent
 
-Each SwarmAgent wraps a single Copilot CLI session configured with `system_message: {mode: "replace", content: full_prompt}` and four closure-captured swarm tools. The full prompt is assembled from three layers: system preamble (coordination protocol from `system-prompt.md`), work directory directive, and template prompt (domain expertise).
+Each SwarmAgent wraps a single Copilot CLI session configured with `system_message: {mode: "replace", content: full_prompt}` and four closure-captured swarm tools. Task execution is event-driven — the agent subscribes via `session.on()` and waits for `session.idle`. Tool events are forwarded through the unified `bridge_raw_sdk_event()` bridge to the EventBus.
 
-Task execution is event-driven: the agent calls `session.send()` with the task ID and description, then subscribes to events via `session.on()`. A handler sets an `asyncio.Event` on `session.idle` (not `turn_end` — agents do multiple turns per task). The agent captures text from `assistant.message` and `assistant.reasoning` events as fallback results. Tool events are forwarded to the EventBus with `swarm_id` attached.
+See [Agents.md](Agents.md) for full details on agent roles, prompt assembly, coordination tools, template configuration, and the resume lifecycle.
 
 ### Tool Handlers
 
@@ -164,13 +164,42 @@ In-process FastMCP server mounted at `/mcp` on the FastAPI app. Provides 9 tools
 
 All tools require `swarm_id` (except `get_active_swarms`) for multi-swarm isolation. Auth via `X-API-Key` header at transport layer — invisible to agent context.
 
-### SwarmService (Cache-First Persistence)
+### SwarmService (Write-Through Persistence)
 
-`SwarmService` owns the in-memory cache (TaskBoard, InboxSystem, TeamRegistry) and optional write-through to `SwarmRepository`:
-- Reads from cache, writes to cache + repo (if configured)
+`SwarmService` owns the in-memory cache (TaskBoard, InboxSystem, TeamRegistry) with write-through to `SwarmRepository`:
+- Reads from cache, writes to cache + Postgres simultaneously
 - `load(swarm_id)` hydrates cache from Postgres for cold-start resume
 - `suspend(reason)` persists suspended state
 - `update_round(n)` persists round progress
+
+## Data Persistence
+
+**Postgres is required.** The server fails at startup if `DATABASE_URL` is not set.
+
+### Storage Layers
+
+| Layer | Scope | Lifetime | Purpose |
+| --- | --- | --- | --- |
+| `swarm_store` (in-memory dict) | Per-process | Process lifetime | **Cache** — fast access for live swarms, backfilled from DB on cache miss |
+| Postgres `swarms` table | Per-swarm | Permanent | Swarm metadata: goal, template, phase, report |
+| Postgres `tasks` table | Per-task | Permanent | Task lifecycle: subject, status, result, worker |
+| Postgres `events` table | Per-event | Permanent | Full event log (JSONB), queryable by swarm and type |
+| `EventLogger` | Subscriber | N/A | Writes all non-SDK events to `events` table in real-time |
+| `SwarmService` | Write-through | N/A | Writes to in-memory TaskBoard + DB simultaneously |
+
+### Cache-Miss Fallback
+
+`/api/swarm/{id}/status` uses `swarm_store` as a cache:
+
+1. **Cache hit** — swarm in `swarm_store` with live orchestrator → return live tasks/agents from TaskBoard
+2. **Cache miss** — swarm not in memory → load from DB via `repository.load_swarm_state(swarm_id)`, backfill `swarm_store`, return DB tasks/agents
+3. **Miss everywhere** — not in memory, not in DB → 404
+
+This ensures completed swarms remain accessible for the after-action report without keeping orchestrators in memory.
+
+### Frontend Hydration
+
+When entering the report view for a completed swarm, the frontend fetches `/api/swarm/{id}/status` and dispatches `task.created` events into the swarm reducer via `hydrateTasksIntoSwarm()`. This populates `store.swarms[id].tasks` so the TaskPillBar can render.
 
 ## Key Design Decisions
 
