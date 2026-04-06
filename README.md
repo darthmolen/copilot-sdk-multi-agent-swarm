@@ -333,3 +333,7 @@ Each integration test gets its own isolated database with real migrations applie
 - [Communication](documentation/Communication.md) — unified event stream, WebSocket protocol, chat timeline, inter-agent messaging
 - [Template Creation Guide](documentation/template-creation-guide.md) — how to create custom templates, orchestrator workflow, artifact reference, relationship patterns
 - [Replacement Variables](documentation/replacement-variables.md) — built-in template variables and expansion behavior
+
+## License
+
+[Elastic License 2.0 (ELv2)](LICENSE) — use it freely, including in production. The one restriction: don't offer it as a hosted/managed service.
