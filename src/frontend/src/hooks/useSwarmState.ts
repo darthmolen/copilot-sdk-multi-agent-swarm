@@ -114,6 +114,8 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
         toolName: event.data.tool_name as string,
         agentName: event.data.agent_name as string,
         status: 'running',
+        input: event.data.input as string | undefined,
+        startedAt: Date.now(),
       };
       return { ...state, activeTools: [...state.activeTools, tool] };
     }
@@ -125,7 +127,13 @@ export function swarmReducer(state: SwarmState, event: SwarmEvent): SwarmState {
         ...state,
         activeTools: state.activeTools.map((t) =>
           t.toolCallId === callId
-            ? { ...t, status: success ? 'complete' as const : 'failed' as const }
+            ? {
+                ...t,
+                status: success ? 'complete' as const : 'failed' as const,
+                output: event.data.output as string | undefined,
+                error: event.data.error as string | undefined,
+                completedAt: Date.now(),
+              }
             : t,
         ),
       };

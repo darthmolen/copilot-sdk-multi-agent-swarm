@@ -23,7 +23,7 @@ describe('chatReducer', () => {
     expect(state.chats['s1'].streamingMessage?.content).toBe('Hello World');
   });
 
-  it('chat.message finalizes to messages and clears streaming', () => {
+  it('chat.message finalizes to entries and clears streaming', () => {
     const withStreaming = chatReducer(initialChatStore, {
       type: 'chat.delta', swarmId: 's1', delta: 'partial', messageId: 'msg-1',
     });
@@ -31,20 +31,28 @@ describe('chatReducer', () => {
       type: 'chat.message', swarmId: 's1', content: 'Full response', messageId: 'msg-1',
     });
     expect(state.chats['s1'].streamingMessage).toBeNull();
-    expect(state.chats['s1'].messages).toHaveLength(1);
-    expect(state.chats['s1'].messages[0]).toEqual({
-      id: 'msg-1', role: 'assistant', content: 'Full response',
-    });
+    expect(state.chats['s1'].entries).toHaveLength(1);
+    const entry = state.chats['s1'].entries[0];
+    expect(entry.type).toBe('message');
+    if (entry.type === 'message') {
+      expect(entry.message).toEqual({
+        id: 'msg-1', role: 'assistant', content: 'Full response',
+      });
+    }
   });
 
-  it('chat.user_send appends user message', () => {
+  it('chat.user_send appends user message entry', () => {
     const msg: ChatMessage = { id: 'u1', role: 'user', content: 'Make it shorter' };
     const state = chatReducer(initialChatStore, {
       type: 'chat.user_send', swarmId: 's1', message: msg,
     });
-    expect(state.chats['s1'].messages).toHaveLength(1);
-    expect(state.chats['s1'].messages[0].role).toBe('user');
-    expect(state.chats['s1'].messages[0].content).toBe('Make it shorter');
+    expect(state.chats['s1'].entries).toHaveLength(1);
+    const entry = state.chats['s1'].entries[0];
+    expect(entry.type).toBe('message');
+    if (entry.type === 'message') {
+      expect(entry.message.role).toBe('user');
+      expect(entry.message.content).toBe('Make it shorter');
+    }
   });
 
   it('chat.select_swarm sets activeSwarmId', () => {
@@ -60,7 +68,7 @@ describe('chatReducer', () => {
       message: { id: 'u1', role: 'user', content: 'Hi' },
     });
     state = chatReducer(state, { type: 'chat.clear', swarmId: 's1' });
-    expect(state.chats['s1'].messages).toHaveLength(0);
+    expect(state.chats['s1'].entries).toHaveLength(0);
     expect(state.chats['s1'].streamingMessage).toBeNull();
   });
 
@@ -73,10 +81,16 @@ describe('chatReducer', () => {
       type: 'chat.user_send', swarmId: 's2',
       message: { id: 'u2', role: 'user', content: 'For swarm 2' },
     });
-    expect(state.chats['s1'].messages).toHaveLength(1);
-    expect(state.chats['s1'].messages[0].content).toBe('For swarm 1');
-    expect(state.chats['s2'].messages).toHaveLength(1);
-    expect(state.chats['s2'].messages[0].content).toBe('For swarm 2');
+    expect(state.chats['s1'].entries).toHaveLength(1);
+    const e1 = state.chats['s1'].entries[0];
+    if (e1.type === 'message') {
+      expect(e1.message.content).toBe('For swarm 1');
+    }
+    expect(state.chats['s2'].entries).toHaveLength(1);
+    const e2 = state.chats['s2'].entries[0];
+    if (e2.type === 'message') {
+      expect(e2.message.content).toBe('For swarm 2');
+    }
   });
 
   it('chat.user_send sets sessionStarting to true', () => {
@@ -109,18 +123,23 @@ describe('chatReducer', () => {
     expect(state.chats['s1'].sessionStarting).toBe(false);
   });
 
-  it('chat.tool_start adds tool to activeTools', () => {
+  it('chat.tool_start adds tool to a tool_group entry', () => {
     const state = chatReducer(initialChatStore, {
       type: 'chat.tool_start', swarmId: 's1',
       toolName: 'bash', toolCallId: 'tc-1',
     });
-    expect(state.chats['s1'].activeTools).toHaveLength(1);
-    expect(state.chats['s1'].activeTools[0]).toEqual({
-      toolCallId: 'tc-1', toolName: 'bash', status: 'running',
-    });
+    expect(state.chats['s1'].entries).toHaveLength(1);
+    const entry = state.chats['s1'].entries[0];
+    expect(entry.type).toBe('tool_group');
+    if (entry.type === 'tool_group') {
+      expect(entry.tools).toHaveLength(1);
+      expect(entry.tools[0]).toMatchObject({
+        toolCallId: 'tc-1', toolName: 'bash', status: 'running',
+      });
+    }
   });
 
-  it('chat.tool_result updates tool status', () => {
+  it('chat.tool_result updates tool status in its group', () => {
     let state = chatReducer(initialChatStore, {
       type: 'chat.tool_start', swarmId: 's1',
       toolName: 'bash', toolCallId: 'tc-1',
@@ -129,6 +148,9 @@ describe('chatReducer', () => {
       type: 'chat.tool_result', swarmId: 's1',
       toolCallId: 'tc-1', success: true,
     });
-    expect(state.chats['s1'].activeTools[0].status).toBe('complete');
+    const entry = state.chats['s1'].entries[0];
+    if (entry.type === 'tool_group') {
+      expect(entry.tools[0].status).toBe('complete');
+    }
   });
 });

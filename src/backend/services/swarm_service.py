@@ -5,7 +5,7 @@ Cache-first reads, write-through to optional repo.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
@@ -14,6 +14,9 @@ from backend.swarm.inbox_system import InboxSystem
 from backend.swarm.models import Task
 from backend.swarm.task_board import TaskBoard
 from backend.swarm.team_registry import TeamRegistry
+
+if TYPE_CHECKING:
+    from backend.db.repository import SwarmRepository
 
 log = structlog.get_logger()
 
@@ -26,7 +29,7 @@ class SwarmService:
     Writes go to cache + repo (if provided).
     """
 
-    def __init__(self, repo: Any | None = None) -> None:
+    def __init__(self, repo: SwarmRepository | None = None) -> None:
         self.task_board = TaskBoard()
         self.inbox = InboxSystem()
         self.registry = TeamRegistry()

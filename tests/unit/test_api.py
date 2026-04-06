@@ -637,19 +637,23 @@ class TestTaskLogsEndpoint:
         finally:
             rest_mod._repository = old_repo
 
-    def test_get_task_logs_500_no_db(self) -> None:
-        """GET /task/{id}/logs returns 500 without database."""
+    def test_get_task_logs_400_invalid_swarm_id(self) -> None:
+        """GET /task/{id}/logs returns 400 for invalid UUID format."""
+        from unittest.mock import AsyncMock, MagicMock
+
         import backend.api.rest as rest_mod
 
         _clear_swarm_store()
-        client = TestClient(app)
 
+        mock_repo = MagicMock()
+        mock_repo.get_task_events = AsyncMock(return_value=[])
         old_repo = rest_mod._repository
-        rest_mod._repository = None
+        rest_mod._repository = mock_repo
         try:
-            response = client.get("/api/swarm/some-id/task/t1/logs")
-            assert response.status_code == 500
-            assert "Database not configured" in response.json()["detail"]
+            client = TestClient(app)
+            response = client.get("/api/swarm/not-a-uuid/task/t1/logs")
+            assert response.status_code == 400
+            assert "Invalid swarm_id" in response.json()["detail"]
         finally:
             rest_mod._repository = old_repo
 
@@ -1273,20 +1277,46 @@ def test_deploy_template_zip_rejects_missing_template_yaml() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_events_endpoint_returns_404_without_repo():
-    """Events endpoint returns 404 when no repo configured."""
+def test_get_events_endpoint_returns_events_with_repo():
+    """Events endpoint returns events when repo is configured."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import backend.api.rest as rest_mod
+
     _clear_swarm_store()
-    client = TestClient(app)
-    resp = client.get("/api/swarm/00000000-0000-0000-0000-000000000001/events")
-    assert resp.status_code == 404
+
+    mock_repo = MagicMock()
+    mock_repo.get_events = AsyncMock(return_value=[])
+    old_repo = rest_mod._repository
+    rest_mod._repository = mock_repo
+    try:
+        client = TestClient(app)
+        resp = client.get("/api/swarm/00000000-0000-0000-0000-000000000001/events")
+        assert resp.status_code == 200
+        assert resp.json()["events"] == []
+    finally:
+        rest_mod._repository = old_repo
 
 
-def test_list_swarms_endpoint_returns_404_without_repo():
-    """Swarms list endpoint returns 404 when no repo configured."""
+def test_list_swarms_endpoint_returns_swarms_with_repo():
+    """Swarms list endpoint returns swarms when repo is configured."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import backend.api.rest as rest_mod
+
     _clear_swarm_store()
-    client = TestClient(app)
-    resp = client.get("/api/swarms")
-    assert resp.status_code == 404
+
+    mock_repo = MagicMock()
+    mock_repo.list_swarms = AsyncMock(return_value=[])
+    old_repo = rest_mod._repository
+    rest_mod._repository = mock_repo
+    try:
+        client = TestClient(app)
+        resp = client.get("/api/swarms")
+        assert resp.status_code == 200
+        assert resp.json()["swarms"] == []
+    finally:
+        rest_mod._repository = old_repo
 
 
 # ---------------------------------------------------------------------------
@@ -1498,22 +1528,24 @@ class TestResumeEndpoint:
             rest_mod._repository = old_repo
             rest_mod._copilot_client = old_client
 
-    def test_resume_500_no_database(self) -> None:
-        """POST /resume returns 500 when no database configured."""
+    def test_resume_400_invalid_swarm_id(self) -> None:
+        """POST /resume returns 400 for invalid UUID format."""
+        from unittest.mock import MagicMock
+
         _clear_swarm_store()
 
         import backend.api.rest as rest_mod
 
         old_repo = rest_mod._repository
-        rest_mod._repository = None
+        rest_mod._repository = MagicMock()
 
         try:
             client = TestClient(app)
             resp = client.post(
-                "/api/swarm/00000000-0000-0000-0000-000000000001/resume",
+                "/api/swarm/not-a-valid-uuid/resume",
             )
-            assert resp.status_code == 500
-            assert "database" in resp.json()["detail"].lower()
+            assert resp.status_code == 400
+            assert "invalid" in resp.json()["detail"].lower()
         finally:
             rest_mod._repository = old_repo
 
@@ -1767,3 +1799,278 @@ class TestResumeCallback:
             rest_mod._copilot_client = old_client
             rest_mod._event_bus = old_bus
             rest_mod._template_loader = old_loader
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Postgres required — main.py raises RuntimeError without DATABASE_URL
+# ---------------------------------------------------------------------------
+
+
+class TestPostgresRequired:
+    """DATABASE_URL must be set or main.py startup raises RuntimeError."""
+
+    @pytest.mark.asyncio
+    async def test_missing_database_url_raises_runtime_error(self) -> None:
+        """Lifespan raises RuntimeError when DATABASE_URL is empty."""
+        import os
+        from unittest.mock import patch
+
+        from fastapi import FastAPI
+
+        from backend.main import lifespan
+
+        with patch.dict(os.environ, {"DATABASE_URL": ""}, clear=False):
+            test_app = FastAPI()
+            with pytest.raises(RuntimeError, match="DATABASE_URL"):
+                async with lifespan(test_app):
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# Step 2: DB fallback in /status — completed swarms loaded from DB
+# ---------------------------------------------------------------------------
+
+
+class TestStatusDBFallback:
+    """GET /api/swarm/{id}/status falls back to DB when swarm not in memory."""
+
+    def test_get_status_returns_tasks_from_db_for_completed_swarm(self) -> None:
+        """When swarm not in swarm_store, load from DB and return tasks."""
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        swarm_id = "00000000-1111-2222-3333-444444444444"
+        mock_repo = MagicMock()
+        mock_repo.load_swarm_state = AsyncMock(return_value={
+            "swarm": {
+                "id": UUID(swarm_id),
+                "goal": "Analyze data",
+                "phase": "complete",
+                "template_key": "deep-research",
+                "current_round": 3,
+                "report": None,
+            },
+            "tasks": [
+                {
+                    "id": "t1",
+                    "subject": "Research phase",
+                    "description": "Do research",
+                    "worker_role": "researcher",
+                    "worker_name": "researcher-1",
+                    "status": "completed",
+                    "blocked_by": [],
+                    "result": "Found 5 papers",
+                },
+                {
+                    "id": "t2",
+                    "subject": "Write report",
+                    "description": "Write the report",
+                    "worker_role": "writer",
+                    "worker_name": "writer-1",
+                    "status": "completed",
+                    "blocked_by": ["t1"],
+                    "result": "Report written",
+                },
+            ],
+            "agents": [
+                {"name": "researcher-1", "role": "researcher", "display_name": "Researcher"},
+                {"name": "writer-1", "role": "writer", "display_name": "Writer"},
+            ],
+            "messages": [],
+            "files": [],
+        })
+        mock_repo.get_tasks = AsyncMock(return_value=[
+            {
+                "id": "t1",
+                "subject": "Research phase",
+                "description": "Do research",
+                "worker_role": "researcher",
+                "worker_name": "researcher-1",
+                "status": "completed",
+                "blocked_by": [],
+                "result": "Found 5 papers",
+            },
+            {
+                "id": "t2",
+                "subject": "Write report",
+                "description": "Write the report",
+                "worker_role": "writer",
+                "worker_name": "writer-1",
+                "status": "completed",
+                "blocked_by": ["t1"],
+                "result": "Report written",
+            },
+        ])
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            client = TestClient(app)
+            response = client.get(f"/api/swarm/{swarm_id}/status")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["swarm_id"] == swarm_id
+            assert body["phase"] == "complete"
+            assert len(body["tasks"]) == 2
+            assert body["tasks"][0]["id"] == "t1"
+            assert body["tasks"][0]["status"] == "completed"
+            assert body["tasks"][1]["id"] == "t2"
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_status_backfills_cache(self) -> None:
+        """Second call uses cache; load_swarm_state called only once."""
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        swarm_id = "00000000-1111-2222-3333-555555555555"
+        mock_repo = MagicMock()
+        mock_repo.load_swarm_state = AsyncMock(return_value={
+            "swarm": {
+                "id": UUID(swarm_id),
+                "goal": "Cache test",
+                "phase": "complete",
+                "template_key": None,
+                "current_round": 1,
+                "report": "Cached report",
+            },
+            "tasks": [],
+            "agents": [],
+            "messages": [],
+            "files": [],
+        })
+        mock_repo.get_tasks = AsyncMock(return_value=[])
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            client = TestClient(app)
+            # First call — loads from DB
+            resp1 = client.get(f"/api/swarm/{swarm_id}/status")
+            assert resp1.status_code == 200
+
+            # Second call — should use cache
+            resp2 = client.get(f"/api/swarm/{swarm_id}/status")
+            assert resp2.status_code == 200
+
+            # load_swarm_state should only be called once
+            assert mock_repo.load_swarm_state.call_count == 1
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_status_404_when_not_in_db_or_store(self) -> None:
+        """Returns 404 when swarm is in neither memory nor DB."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        mock_repo = MagicMock()
+        mock_repo.load_swarm_state = AsyncMock(
+            side_effect=ValueError("Swarm not-real not found")
+        )
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            client = TestClient(app)
+            response = client.get("/api/swarm/not-real/status")
+            assert response.status_code == 404
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_status_returns_report_from_db(self) -> None:
+        """Completed swarm from DB includes report text in response."""
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        swarm_id = "00000000-1111-2222-3333-666666666666"
+        mock_repo = MagicMock()
+        mock_repo.load_swarm_state = AsyncMock(return_value={
+            "swarm": {
+                "id": UUID(swarm_id),
+                "goal": "Report test",
+                "phase": "complete",
+                "template_key": None,
+                "current_round": 2,
+                "report": "# Synthesis Report\n\nAll tasks completed successfully.",
+            },
+            "tasks": [],
+            "agents": [],
+            "messages": [],
+            "files": [],
+        })
+        mock_repo.get_tasks = AsyncMock(return_value=[])
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            client = TestClient(app)
+            response = client.get(f"/api/swarm/{swarm_id}/status")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["report"] == "# Synthesis Report\n\nAll tasks completed successfully."
+        finally:
+            rest_mod._repository = old_repo
+
+    def test_get_status_returns_agents_from_db(self) -> None:
+        """DB fallback returns agent summaries from persisted state."""
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        import backend.api.rest as rest_mod
+
+        _clear_swarm_store()
+
+        swarm_id = "00000000-1111-2222-3333-777777777777"
+        mock_repo = MagicMock()
+        mock_repo.load_swarm_state = AsyncMock(return_value={
+            "swarm": {
+                "id": UUID(swarm_id),
+                "goal": "Agent test",
+                "phase": "complete",
+                "template_key": None,
+                "current_round": 1,
+                "report": None,
+            },
+            "tasks": [],
+            "agents": [
+                {
+                    "name": "analyst",
+                    "role": "Data Analyst",
+                    "display_name": "Analyst",
+                    "status": "idle",
+                    "tasks_completed": 3,
+                },
+            ],
+            "messages": [],
+            "files": [],
+        })
+        mock_repo.get_tasks = AsyncMock(return_value=[])
+
+        old_repo = rest_mod._repository
+        rest_mod._repository = mock_repo
+        try:
+            client = TestClient(app)
+            response = client.get(f"/api/swarm/{swarm_id}/status")
+            assert response.status_code == 200
+            body = response.json()
+            assert len(body["agents"]) == 1
+            assert body["agents"][0]["name"] == "analyst"
+            assert body["agents"][0]["role"] == "Data Analyst"
+            assert body["agents"][0]["tasks_completed"] == 3
+        finally:
+            rest_mod._repository = old_repo

@@ -5,14 +5,13 @@ import { useAutoScroll } from '../hooks/useAutoScroll';
 import { useMermaid } from '../hooks/useMermaid';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ChatInput } from './ChatInput';
-import { ToolCardList } from './ToolCard';
-import type { ChatMessage, ActiveTool } from '../types/swarm';
+import { ToolGroup } from './ToolGroup';
+import type { ChatMessage, ChatEntry } from '../types/swarm';
 
 interface ChatPanelProps {
-  messages: ChatMessage[];
+  entries: ChatEntry[];
   streamingMessage: { id: string; content: string } | null;
   sessionStarting: boolean;
-  activeTools: ActiveTool[];
   onSend: (message: string) => void;
   chatEnabled: boolean;
 }
@@ -42,20 +41,28 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
+/** Extract only message entries for computing "waiting for response" state. */
+function getLastMessageRole(entries: ChatEntry[]): string | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.type === 'message') return entry.message.role;
+  }
+  return null;
+}
+
 export function ChatPanel({
-  messages,
+  entries,
   streamingMessage,
   sessionStarting,
-  activeTools,
   onSend,
   chatEnabled,
 }: ChatPanelProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
-  useAutoScroll(messagesRef, [messages.length, streamingMessage?.content]);
-  useMermaid(messagesRef, [messages.length, streamingMessage?.content]);
+  useAutoScroll(messagesRef, [entries.length, streamingMessage?.content]);
+  useMermaid(messagesRef, [entries.length, streamingMessage?.content]);
 
-  const lastMsg = messages[messages.length - 1];
-  const waitingForResponse = lastMsg?.role === 'user' && !streamingMessage && !sessionStarting;
+  const lastRole = getLastMessageRole(entries);
+  const waitingForResponse = lastRole === 'user' && !streamingMessage && !sessionStarting;
 
   return (
     <div className="chat-panel-v2">
@@ -63,17 +70,22 @@ export function ChatPanel({
         <h3>Refinement Chat</h3>
       </div>
       <div ref={messagesRef} className="chat-panel-v2__messages">
-        {messages.length === 0 && !streamingMessage && (
+        {entries.length === 0 && !streamingMessage && (
           <p className="empty-text">
             {chatEnabled
               ? 'Ask questions or request changes to refine the report.'
               : 'Chat will be available once synthesis completes.'}
           </p>
         )}
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
-        ))}
-        <ToolCardList tools={activeTools} />
+        {entries.map((entry, i) => {
+          if (entry.type === 'message') {
+            return <MessageBubble key={entry.message.id} message={entry.message} />;
+          }
+          if (entry.type === 'tool_group') {
+            return <ToolGroup key={`tg-${i}`} tools={entry.tools} />;
+          }
+          return null;
+        })}
         {streamingMessage && (
           <div className="chat-bubble chat-bubble--assistant chat-bubble--streaming">
             <div className="chat-bubble__header">Synthesis Agent</div>

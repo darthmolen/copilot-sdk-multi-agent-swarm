@@ -1913,6 +1913,243 @@ class TestQAPhase:
         assert initial_response in streamed_content
 
 
+class TestUnifiedToolEvents:
+    """Step 1: chat() and qa_chat() emit unified agent.tool_call / agent.tool_result events."""
+
+    async def test_chat_emits_unified_tool_call(self, event_bus: EventBus) -> None:
+        """chat() emits agent.tool_call (NOT leader.chat_tool_start) when SDK fires tool.execution_start."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        # Session that fires tool events
+        class ToolFiringSession:
+            def __init__(self) -> None:
+                self._handlers: list[Any] = []
+                self._tools: list[Any] = []
+
+            def on(self, handler: Any) -> Any:
+                self._handlers.append(handler)
+                return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+            async def send(self, prompt: str, **kw: Any) -> str:
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_START,
+                            data=SessionEventData(tool_name="read_file", tool_call_id="tc-1"),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                            data=SessionEventData(tool_call_id="tc-1", success=True),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.ASSISTANT_MESSAGE,
+                            data=SessionEventData(content="Done reading"),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        )
+                    )
+                return "msg-1"
+
+        client = MockCopilotClient(synthesis_report="Report")
+        original_create = client.create_session
+
+        async def _create_with_tools(**kwargs: Any) -> Any:
+            tools = kwargs.get("tools", []) or []
+            tool_names = {t.name for t in tools}
+            if "create_plan" in tool_names or "task_update" in tool_names:
+                return await original_create(**kwargs)
+            return ToolFiringSession()
+
+        client.create_session = _create_with_tools  # type: ignore[assignment]
+        client.resume_session = lambda *a, **kw: _create_with_tools()  # type: ignore[attr-defined]
+
+        orch = SwarmOrchestrator(
+            client=client,
+            event_bus=event_bus,
+            swarm_id="swarm-unified",
+        )
+        orch.synthesis_session_id = "synth-swarm-unified"
+
+        await orch.chat("test message")
+
+        # Allow emit_sync scheduled tasks to execute
+        await asyncio.sleep(0.05)
+
+        # Should emit agent.tool_call (unified)
+        tool_calls = [(t, d) for t, d in events if t == "agent.tool_call"]
+        assert len(tool_calls) >= 1, f"Expected agent.tool_call, got events: {[t for t, _ in events]}"
+        assert tool_calls[0][1]["tool_name"] == "read_file"
+        assert tool_calls[0][1]["tool_call_id"] == "tc-1"
+        assert tool_calls[0][1]["agent_name"] == "leader"
+        # Must include message_id to mark as chat context
+        assert "message_id" in tool_calls[0][1]
+        assert tool_calls[0][1]["message_id"] is not None
+
+        # Should emit agent.tool_result (unified)
+        tool_results = [(t, d) for t, d in events if t == "agent.tool_result"]
+        assert len(tool_results) >= 1, f"Expected agent.tool_result, got events: {[t for t, _ in events]}"
+        assert tool_results[0][1]["tool_call_id"] == "tc-1"
+        assert tool_results[0][1]["success"] is True
+
+        # Should NOT emit old leader.chat_tool_start / leader.chat_tool_result
+        old_events = [(t, d) for t, d in events if t in ("leader.chat_tool_start", "leader.chat_tool_result")]
+        assert old_events == [], f"Old events should not be emitted: {old_events}"
+
+    async def test_qa_chat_forwards_tool_events(self, event_bus: EventBus) -> None:
+        """qa_chat() emits agent.tool_call / agent.tool_result (was missing entirely)."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        # QA session that fires tool events
+        class QAToolSession:
+            def __init__(self) -> None:
+                self._handlers: list[Any] = []
+                self._tools: list[Any] = []
+
+            def on(self, handler: Any) -> Any:
+                self._handlers.append(handler)
+                return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+            async def send(self, prompt: str, **kw: Any) -> str:
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_START,
+                            data=SessionEventData(tool_name="search_code", tool_call_id="tc-qa-1"),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                            data=SessionEventData(tool_call_id="tc-qa-1", success=True),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.ASSISTANT_MESSAGE,
+                            data=SessionEventData(content="Here is my question"),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        )
+                    )
+                return "msg-1"
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-qa-tools")
+        orch.qa_session = QAToolSession()
+
+        await orch.qa_chat("What frameworks are used?")
+
+        # Allow emit_sync scheduled tasks to execute
+        await asyncio.sleep(0.05)
+
+        # Should emit agent.tool_call
+        tool_calls = [(t, d) for t, d in events if t == "agent.tool_call"]
+        assert len(tool_calls) >= 1, f"Expected agent.tool_call from qa_chat, got: {[t for t, _ in events]}"
+        assert tool_calls[0][1]["tool_name"] == "search_code"
+        assert tool_calls[0][1]["agent_name"] == "leader"
+        assert "message_id" in tool_calls[0][1]
+
+        # Should emit agent.tool_result
+        tool_results = [(t, d) for t, d in events if t == "agent.tool_result"]
+        assert len(tool_results) >= 1, f"Expected agent.tool_result from qa_chat, got: {[t for t, _ in events]}"
+        assert tool_results[0][1]["success"] is True
+
+
+    async def test_start_qa_forwards_tool_events(self, event_bus: EventBus) -> None:
+        """start_qa() initial handler emits agent.tool_call/result for leader tools."""
+        events: list[tuple[str, dict]] = []
+        event_bus.subscribe(lambda t, d: events.append((t, d)))
+
+        class QAInitToolSession:
+            """Session that fires tool events + begin_swarm during initial QA."""
+
+            def __init__(self) -> None:
+                self._handlers: list[Any] = []
+                self._tools: list[Any] = []
+
+            def on(self, handler: Any) -> Any:
+                self._handlers.append(handler)
+                return lambda: self._handlers.remove(handler) if handler in self._handlers else None
+
+            async def send(self, prompt: str, **kw: Any) -> str:
+                # Fire tool events during initial QA response
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_START,
+                            data=SessionEventData(tool_name="read_file", tool_call_id="tc-init-1"),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.TOOL_EXECUTION_COMPLETE,
+                            data=SessionEventData(tool_call_id="tc-init-1", success=True),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.ASSISTANT_MESSAGE,
+                            data=SessionEventData(content="I read your project. What framework?"),
+                        )
+                    )
+                for h in list(self._handlers):
+                    h(
+                        SessionEvent(
+                            type=SessionEventType.SESSION_IDLE,
+                            data=SessionEventData(turn_id="turn-1"),
+                        )
+                    )
+                return "msg-1"
+
+        orch = make_orchestrator(event_bus, swarm_id="swarm-qa-init")
+
+        # Patch create_session to return our tool-firing session
+        async def _create_qa_session(**kwargs: Any) -> Any:
+            return QAInitToolSession()
+
+        orch.client.create_session = _create_qa_session  # type: ignore[attr-defined]
+
+        # Pre-set qa_complete so start_qa doesn't block waiting for begin_swarm
+        orch.qa_refined_goal = "refined goal"
+        orch.qa_complete.set()
+
+        result = await orch.start_qa("Build a web app")
+
+        await asyncio.sleep(0.05)
+
+        # Should emit agent.tool_call for tools used during initial QA
+        tool_calls = [(t, d) for t, d in events if t == "agent.tool_call"]
+        assert len(tool_calls) >= 1, f"Expected agent.tool_call from start_qa, got: {[t for t, _ in events]}"
+        assert tool_calls[0][1]["tool_name"] == "read_file"
+        assert tool_calls[0][1]["agent_name"] == "leader"
+        assert tool_calls[0][1].get("message_id") is not None
+
+        # Should emit agent.tool_result
+        tool_results = [(t, d) for t, d in events if t == "agent.tool_result"]
+        assert len(tool_results) >= 1, f"Expected agent.tool_result from start_qa, got: {[t for t, _ in events]}"
+
+
 class TestPerWorkerSkills:
     async def test_spawn_computes_disabled_skills_from_allowlist(self, event_bus: EventBus) -> None:
         """Worker with skills=[a, b] gets disabled_skills for everything NOT in [a, b]."""

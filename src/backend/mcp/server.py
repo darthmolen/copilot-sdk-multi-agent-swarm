@@ -150,9 +150,6 @@ async def get_recent_events(
     """Get recent swarm events. Requires database persistence."""
     deps = get_deps()
 
-    if deps.repository is None:
-        raise ToolError("Event history requires database persistence (DATABASE_URL).")
-
     state = _resolve_swarm(swarm_id)
 
     since_dt = None

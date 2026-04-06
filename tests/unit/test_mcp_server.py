@@ -292,13 +292,18 @@ class TestGetRecentEvents:
         assert len(result) == 2
         mock_repo.get_events.assert_awaited_once()
 
-    async def test_without_repository_raises(self, tmp_path: Path):
-        deps = await _make_deps(tmp_path, repository=None)
+    async def test_returns_limited_events(self, tmp_path: Path):
+        """get_recent_events respects the count parameter."""
+        mock_repo = AsyncMock()
+        mock_repo.get_events.return_value = [
+            {"event_type": f"event.{i}", "data": {}} for i in range(30)
+        ]
+        deps = await _make_deps(tmp_path, repository=mock_repo)
         with patch("backend.mcp.server.get_deps", return_value=deps):
             from backend.mcp.server import get_recent_events
 
-            with pytest.raises(ToolError, match="database persistence"):
-                await get_recent_events(swarm_id="swarm-1")
+            result = await get_recent_events(swarm_id="swarm-1", count=5)
+        assert len(result) == 5
 
 
 # ---------------------------------------------------------------------------
